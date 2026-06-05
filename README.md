@@ -38,6 +38,17 @@ Analytical:
 - `SAMOCCT.CreateAdjacencyClusterByShells`
 - `SAMOCCT.PanelsFromShells`
 
+Both adjacency components expose `tolerance_` and `fuzzyTolerance_` as the main
+OCCT controls. `SAMOCCT.CreateAdjacencyClusterByShells` also keeps advanced SAM
+rebuild inputs such as `maxDistance_`, `maxAngle_`, and `minArea_`; these are
+used after OCCT creates cells, when SAM rebuilds spaces, panels, and adjacency
+relations.
+
+The current analytical workflow uses OCCT to create closed cells, then decodes
+those cells back into SAM geometry for adjacency reconstruction. A future direct
+OCCT topology workflow can reduce this rebuild step by carrying cell-face
+ownership into SAM explicitly.
+
 ## Modeling Guide
 
 See `docs/Modeling-Guide.md` for the recommended Panels/Face3D vs Shell
