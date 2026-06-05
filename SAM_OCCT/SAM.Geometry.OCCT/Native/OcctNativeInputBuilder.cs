@@ -67,6 +67,89 @@ namespace SAM.Geometry.OCCT.Native
             return true;
         }
 
+        public static bool TryBuild(IEnumerable<Shell> shells, OcctBuildOptions options, OcctCellComplexResult result, string emptyCode, string emptyMessage, out OcctNativeInput input)
+        {
+            input = null;
+
+            if (shells == null)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, emptyCode, emptyMessage);
+                return false;
+            }
+
+            List<double> coordinates = new List<double>();
+            List<int> loopPointCounts = new List<int>();
+            List<int> faceLoopCounts = new List<int>();
+            List<int> shellFaceCounts = new List<int>();
+
+            int faceIndex = 0;
+            foreach (Shell shell in shells)
+            {
+                List<Face3D> face3Ds = shell?.Face3Ds;
+                if (face3Ds == null || face3Ds.Count == 0)
+                {
+                    continue;
+                }
+
+                int shellFaceCount = 0;
+                foreach (Face3D face3D in face3Ds)
+                {
+                    int loopCount = 0;
+                    if (TryAppendLoop(face3D?.GetExternalEdge3D(), options, result, faceIndex, coordinates, loopPointCounts))
+                    {
+                        loopCount++;
+                    }
+
+                    List<IClosedPlanar3D> internalEdges = face3D?.GetInternalEdge3Ds();
+                    if (internalEdges != null)
+                    {
+                        foreach (IClosedPlanar3D internalEdge in internalEdges)
+                        {
+                            if (TryAppendLoop(internalEdge, options, result, faceIndex, coordinates, loopPointCounts))
+                            {
+                                loopCount++;
+                            }
+                        }
+                    }
+
+                    if (loopCount == 0)
+                    {
+                        result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_FACE_NO_LOOPS", "Face3D has no serializable loops.", faceIndex);
+                    }
+                    else
+                    {
+                        faceLoopCounts.Add(loopCount);
+                        shellFaceCount++;
+                    }
+
+                    faceIndex++;
+                }
+
+                if (shellFaceCount != 0)
+                {
+                    shellFaceCounts.Add(shellFaceCount);
+                }
+            }
+
+            if (shellFaceCounts.Count == 0 || faceLoopCounts.Count == 0)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, emptyCode, emptyMessage);
+                return false;
+            }
+
+            input = new OcctNativeInput
+            {
+                Coordinates = coordinates.ToArray(),
+                LoopPointCounts = loopPointCounts.ToArray(),
+                FaceLoopCounts = faceLoopCounts.ToArray(),
+                FaceCount = faceLoopCounts.Count,
+                ShellFaceCounts = shellFaceCounts.ToArray(),
+                ShellCount = shellFaceCounts.Count
+            };
+
+            return true;
+        }
+
         private static bool TryAppendLoop(IClosedPlanar3D closedPlanar3D, OcctBuildOptions options, OcctCellComplexResult result, int sourceIndex, List<double> coordinates, List<int> loopPointCounts)
         {
             List<Point3D> points = null;

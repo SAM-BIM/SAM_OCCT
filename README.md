@@ -1,92 +1,113 @@
 # SAM_OCCT
 
-**SAM_OCCT** is the Open CASCADE Technology integration layer for the
-SAM (Sustainable Analytical Model) Toolkit.
+Open CASCADE Technology integration for the SAM Toolkit.
 
-The purpose of this repository is to replace the heavy/legacy `SAM_Topologic`
-cell-complex dependency for workflows that create closed analytical geometry
-from panels or `Face3D` surfaces.
+SAM_OCCT provides a small native OCCT bridge plus C# and Grasshopper wrappers
+for closed-shell, boolean, and analytical adjacency-cluster workflows. It is
+intended to replace the legacy Topologic dependency where SAM needs robust 3D
+cell and shell operations.
 
-## Current scope
+## Projects
 
-This repository currently provides the first migration foundation:
+- `SAM.Core.OCCT`: build options and diagnostics.
+- `SAM.Geometry.OCCT`: managed geometry API and native interop.
+- `SAM.Analytical.OCCT`: analytical adjacency-cluster creation from OCCT/SAM geometry.
+- `SAM.Geometry.Grasshopper.OCCT`: geometry Grasshopper components.
+- `SAM.Analytical.Grasshopper.OCCT`: analytical Grasshopper components.
+- `native/SAM.Occt.Native`: C ABI and CMake-based OCCT implementation.
 
-- `SAM.Core.OCCT`: shared options and diagnostics.
-- `SAM.Geometry.OCCT`: SAM `Face3D`/`Panel` input collection, native bridge boundary, and `Shell` result model.
-- `SAM.Analytical.OCCT`: analytical entry point for future `AdjacencyCluster` rebuild.
-- `SAM.Geometry.Grasshopper.OCCT`: `SAMOCCT.CreateShells`.
-- `SAM.Analytical.Grasshopper.OCCT`: `SAMOCCT.CreateAdjacencyCluster`.
-- `native/SAM.Occt.Native`: C ABI and CMake implementation for the first OCCT cell builder.
+The native bridge is intentionally narrow. C++ performs OCCT solid creation,
+boolean operations, repair, and result decoding. SAM model reconstruction stays
+in C#.
 
-The native bridge is intentionally small. SAM business logic stays in C#; C++
-only converts input loops into OCCT faces, runs OCCT volume/cell builders, and
-returns shell geometry plus diagnostics.
+## Grasshopper Components
 
-## Native implementation target
+Geometry:
 
-The planned native implementation should use OCCT algorithms in this order:
+- `SAMOCCT.CreateShells`
+- `SAMOCCT.ShellsUnion`
+- `SAMOCCT.ShellsDifference`
+- `SAMOCCT.ShellsIntersection`
+- `SAMOCCT.ShellsRepair`
+- `SAMOCCT.ShellsSplit`
+- `SAMOCCT.ShellsSectionByPlane`
 
-1. `BOPAlgo_MakerVolume` for panel/face sets that should form closed solids.
-2. `BOPAlgo_CellsBuilder` only when split-cell selection, internal-boundary
-   removal, or better source mapping is required.
+Analytical:
 
-The managed API should remain stable while the native implementation evolves.
+- `SAMOCCT.CreateAdjacencyCluster`
+- `SAMOCCT.CreateAdjacencyClusterByShells`
+- `SAMOCCT.PanelsFromShells`
 
-## License and third-party notes
+## Build
 
-SAM_OCCT is licensed as LGPL-3.0-or-later, matching the rest of SAM.
-
-OCCT is distributed under LGPL-2.1 with an additional exception. Distribute OCCT
-dynamically, include OCCT notices, and document how users can replace OCCT DLLs.
-Do not static-link OCCT into SAM assemblies or the native bridge unless legal
-review explicitly approves that distribution model.
-
-See:
-
-- `LICENSE`
-- `NOTICE`
-- `THIRD_PARTY.md`
-- `COPYRIGHT_HEADER.txt`
-
-## Development
-
-Build:
+Close Rhino/Grasshopper before rebuilding so files in `%APPDATA%\SAM` are not
+locked.
 
 ```powershell
 dotnet build SAM_OCCT.sln /p:RestorePackages=false
 ```
 
-Native build:
+`SAM.Geometry.Grasshopper.OCCT` runs `build-native.ps1` before build, so the
+native `SAM.Occt.Native.dll` is rebuilt and copied with the managed assemblies.
+Set `SAM_OCCT_SKIP_NATIVE_BUILD=true` to skip the native step for managed-only
+builds.
 
-```powershell
-.\build-native.ps1
-dotnet build SAM_OCCT.sln /p:RestorePackages=false
+The native build writes runtime files to:
+
+```text
+SAM_OCCT\build
+%APPDATA%\SAM
 ```
 
-The native build writes `SAM.Occt.Native.dll` to `build\`. The Grasshopper
-post-build event then copies `build\*.dll` to `%APPDATA%\SAM`, so Rhino can load
-the managed GH components and the native OCCT bridge from the same folder.
+## OCCT SDK
 
-If vcpkg fails while running downloaded tools from `%LOCALAPPDATA%\vcpkg`, use an
-approved Ninja 1.13.1+ executable and pass it explicitly:
+`build-native.ps1` auto-detects the default local SDK layout:
 
-```powershell
-.\build-native.ps1 -NinjaPath "C:\tools\ninja\ninja.exe"
+```text
+C:\OCCT\occt-8.0.0\opencascade-8.0.0-vc14-64\inc
+C:\OCCT\occt-8.0.0\opencascade-8.0.0-vc14-64\win64\vc14\lib
+C:\OCCT\occt-8.0.0\opencascade-8.0.0-vc14-64\win64\vc14\bin
+C:\OCCT\occt-8.0.0\3rdparty-vc14-64
 ```
 
-On the current workstation, Visual Studio's bundled Ninja is `1.12.1`, while the
-selected vcpkg baseline requires `1.13.1+`. If Windows policy blocks vcpkg's
-downloaded `ninja.exe`, install or approve Ninja separately, then rerun the
-native build.
+Manual native build:
 
-Alternative without vcpkg package install:
+```powershell
+.\build-native.ps1 -SkipVcpkgInstall
+```
+
+Explicit SDK paths can also be supplied:
 
 ```powershell
 .\build-native.ps1 `
   -SkipVcpkgInstall `
-  -OpenCascadeDir "C:\OpenCASCADE\cmake" `
-  -OpenCascadeRuntimeBin "C:\OpenCASCADE\bin"
+  -OpenCascadeIncludeDir "C:\OCCT\occt-8.0.0\opencascade-8.0.0-vc14-64\inc" `
+  -OpenCascadeLibraryDir "C:\OCCT\occt-8.0.0\opencascade-8.0.0-vc14-64\win64\vc14\lib" `
+  -OpenCascadeRuntimeBin "C:\OCCT\occt-8.0.0\opencascade-8.0.0-vc14-64\win64\vc14\bin" `
+  -ThirdPartyRuntimeRoot "C:\OCCT\occt-8.0.0\3rdparty-vc14-64"
 ```
 
-Use this when OCCT headers/libs/runtime DLLs come from an approved internal SDK
-instead of vcpkg.
+If using vcpkg, `build-native.ps1` can install the `opencascade` dependency
+from `vcpkg.json`. If Windows policy blocks vcpkg's downloaded tools, provide
+an approved Ninja executable with `-NinjaPath`.
+
+## Native Operations
+
+The native bridge currently uses:
+
+- `BOPAlgo_MakerVolume` for face/panel sets and shell repair.
+- `BRepAlgoAPI_Fuse` for shell union.
+- `BRepAlgoAPI_Cut` for shell difference.
+- `BRepAlgoAPI_Common` for shell intersection.
+- `ShapeFix_Shape` before result decoding.
+
+## Licensing
+
+SAM_OCCT is licensed as LGPL-3.0-or-later.
+
+OCCT is LGPL-2.1 with an additional exception. SAM_OCCT dynamically links OCCT
+through `SAM.Occt.Native`. Before distributing OCCT DLLs with any installer,
+include OCCT notices, license text, source-location information, and replacement
+instructions.
+
+See `LICENSE`, `NOTICE`, `THIRD_PARTY.md`, and `COPYRIGHT_HEADER.txt`.

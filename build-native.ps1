@@ -5,7 +5,10 @@ param(
     [string]$CMakePath = "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
     [string]$NinjaPath = "",
     [string]$OpenCascadeDir = "",
+    [string]$OpenCascadeIncludeDir = "",
+    [string]$OpenCascadeLibraryDir = "",
     [string]$OpenCascadeRuntimeBin = "",
+    [string]$ThirdPartyRuntimeRoot = "",
     [switch]$SkipVcpkgInstall
 )
 
@@ -36,6 +39,24 @@ function Get-NinjaVersion($path) {
     }
 
     return [version]($versionText.Trim())
+}
+
+$defaultOpenCascadeRoot = "C:\OCCT\occt-8.0.0"
+$defaultOpenCascadeSdkRoot = Join-Path $defaultOpenCascadeRoot "opencascade-8.0.0-vc14-64"
+if ([string]::IsNullOrWhiteSpace($OpenCascadeIncludeDir) -and (Test-Path -LiteralPath (Join-Path $defaultOpenCascadeSdkRoot "inc\gp_Pnt.hxx"))) {
+    $OpenCascadeIncludeDir = Join-Path $defaultOpenCascadeSdkRoot "inc"
+}
+
+if ([string]::IsNullOrWhiteSpace($OpenCascadeLibraryDir) -and (Test-Path -LiteralPath (Join-Path $defaultOpenCascadeSdkRoot "win64\vc14\lib\TKernel.lib"))) {
+    $OpenCascadeLibraryDir = Join-Path $defaultOpenCascadeSdkRoot "win64\vc14\lib"
+}
+
+if ([string]::IsNullOrWhiteSpace($OpenCascadeRuntimeBin) -and (Test-Path -LiteralPath (Join-Path $defaultOpenCascadeSdkRoot "win64\vc14\bin"))) {
+    $OpenCascadeRuntimeBin = Join-Path $defaultOpenCascadeSdkRoot "win64\vc14\bin"
+}
+
+if ([string]::IsNullOrWhiteSpace($ThirdPartyRuntimeRoot) -and (Test-Path -LiteralPath (Join-Path $defaultOpenCascadeRoot "3rdparty-vc14-64"))) {
+    $ThirdPartyRuntimeRoot = Join-Path $defaultOpenCascadeRoot "3rdparty-vc14-64"
 }
 
 Test-FileExists $vcpkgExe "vcpkg"
@@ -73,12 +94,23 @@ $configureArgs = @(
     "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
     "-DVCPKG_TARGET_TRIPLET=$Triplet",
     "-DCMAKE_INSTALL_PREFIX=$nativeOutput",
+    "-DCMAKE_SUPPRESS_REGENERATION=ON",
     "-DSAM_OCCT_OUTPUT_DIRECTORY=$nativeOutput"
 )
 
 if (-not [string]::IsNullOrWhiteSpace($OpenCascadeDir)) {
     Test-FileExists (Join-Path $OpenCascadeDir "OpenCASCADEConfig.cmake") "OpenCASCADEConfig.cmake"
     $configureArgs += "-DOpenCASCADE_DIR=$OpenCascadeDir"
+}
+
+if (-not [string]::IsNullOrWhiteSpace($OpenCascadeIncludeDir)) {
+    Test-FileExists (Join-Path $OpenCascadeIncludeDir "gp_Pnt.hxx") "OCCT include directory"
+    $configureArgs += "-DSAM_OCCT_OCCT_INCLUDE_DIR=$OpenCascadeIncludeDir"
+}
+
+if (-not [string]::IsNullOrWhiteSpace($OpenCascadeLibraryDir)) {
+    Test-FileExists (Join-Path $OpenCascadeLibraryDir "TKernel.lib") "OCCT library directory"
+    $configureArgs += "-DSAM_OCCT_OCCT_LIBRARY_DIR=$OpenCascadeLibraryDir"
 }
 
 & $CMakePath @configureArgs
@@ -101,4 +133,29 @@ if (-not [string]::IsNullOrWhiteSpace($OpenCascadeRuntimeBin)) {
     Get-ChildItem -LiteralPath $OpenCascadeRuntimeBin -Filter "*.dll" | Copy-Item -Destination $nativeOutput -Force
 }
 
+if (-not [string]::IsNullOrWhiteSpace($ThirdPartyRuntimeRoot)) {
+    Test-FileExists $ThirdPartyRuntimeRoot "ThirdPartyRuntimeRoot"
+    $thirdPartyRoot = $ThirdPartyRuntimeRoot
+    $nestedThirdPartyRoot = Join-Path $ThirdPartyRuntimeRoot "3rdparty-vc14-64"
+    if (Test-Path -LiteralPath $nestedThirdPartyRoot) {
+        $thirdPartyRoot = $nestedThirdPartyRoot
+    }
+
+    $thirdPartyRuntimePatterns = @(
+        "msvc-*\*.dll",
+        "tbb-*\bin\*.dll",
+        "jemalloc-*\bin\*.dll"
+    )
+
+    foreach ($pattern in $thirdPartyRuntimePatterns) {
+        Get-ChildItem -Path (Join-Path $thirdPartyRoot $pattern) -ErrorAction SilentlyContinue |
+            Copy-Item -Destination $nativeOutput -Force
+    }
+}
+
+$samDir = Join-Path $env:APPDATA "SAM"
+New-Item -ItemType Directory -Force -Path $samDir | Out-Null
+Get-ChildItem -LiteralPath $nativeOutput -Filter "*.dll" | Copy-Item -Destination $samDir -Force
+
 Write-Host "Native OCCT build copied to $nativeOutput"
+Write-Host "Native OCCT runtime copied to $samDir"

@@ -12,6 +12,215 @@ namespace SAM.Geometry.OCCT.Native
 {
     internal static class OcctCellComplexBuilder
     {
+        public static bool TryIntersection(IEnumerable<Shell> shells, IEnumerable<Shell> toolShells, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            if (!OcctNativeInputBuilder.TryBuild(shells, options, result, "SAM_OCCT_INTERSECTION_TARGET_EMPTY", "No serializable target shell geometry was found.", out OcctNativeInput targetInput))
+            {
+                return false;
+            }
+
+            if (!OcctNativeInputBuilder.TryBuild(toolShells, options, result, "SAM_OCCT_INTERSECTION_TOOL_EMPTY", "No serializable tool shell geometry was found.", out OcctNativeInput toolInput))
+            {
+                return false;
+            }
+
+            IntPtr resultHandle = IntPtr.Zero;
+            try
+            {
+                int status = NativeMethods.sam_occt_shells_intersection(
+                    targetInput.Coordinates,
+                    targetInput.Coordinates.Length / 3,
+                    targetInput.LoopPointCounts,
+                    targetInput.LoopPointCounts.Length,
+                    targetInput.FaceLoopCounts,
+                    targetInput.FaceCount,
+                    targetInput.ShellFaceCounts,
+                    targetInput.ShellCount,
+                    toolInput.Coordinates,
+                    toolInput.Coordinates.Length / 3,
+                    toolInput.LoopPointCounts,
+                    toolInput.LoopPointCounts.Length,
+                    toolInput.FaceLoopCounts,
+                    toolInput.FaceCount,
+                    toolInput.ShellFaceCounts,
+                    toolInput.ShellCount,
+                    options.Tolerance,
+                    options.FuzzyTolerance,
+                    options.RunParallel ? 1 : 0,
+                    out resultHandle);
+
+                result.NativeAvailable = true;
+
+                if (status != 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_INTERSECTION_NATIVE_FAILED", string.Format("Native OCCT intersection returned status {0}.", status));
+                    return false;
+                }
+
+                return DecodeResult(resultHandle, result);
+            }
+            catch (DllNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_MISSING", string.Format("Native OCCT library '{0}' was not found. {1}", global::SAM.Core.OCCT.Query.NativeLibraryName(), exception.Message));
+                return false;
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_ENTRYPOINT_MISSING", exception.Message);
+                return false;
+            }
+            finally
+            {
+                if (resultHandle != IntPtr.Zero)
+                {
+                    try
+                    {
+                        NativeMethods.sam_occt_free_result(resultHandle);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+
+        public static bool TryUnion(IEnumerable<Shell> shells, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            if (!OcctNativeInputBuilder.TryBuild(shells, options, result, "SAM_OCCT_UNION_INPUT_EMPTY", "No serializable shell geometry was found.", out OcctNativeInput input))
+            {
+                return false;
+            }
+
+            IntPtr resultHandle = IntPtr.Zero;
+            try
+            {
+                int status = NativeMethods.sam_occt_shells_union(
+                    input.Coordinates,
+                    input.Coordinates.Length / 3,
+                    input.LoopPointCounts,
+                    input.LoopPointCounts.Length,
+                    input.FaceLoopCounts,
+                    input.FaceCount,
+                    input.ShellFaceCounts,
+                    input.ShellCount,
+                    options.Tolerance,
+                    options.FuzzyTolerance,
+                    options.RunParallel ? 1 : 0,
+                    out resultHandle);
+
+                result.NativeAvailable = true;
+
+                if (status != 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_UNION_NATIVE_FAILED", string.Format("Native OCCT union returned status {0}.", status));
+                    return false;
+                }
+
+                return DecodeResult(resultHandle, result);
+            }
+            catch (DllNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_MISSING", string.Format("Native OCCT library '{0}' was not found. {1}", global::SAM.Core.OCCT.Query.NativeLibraryName(), exception.Message));
+                return false;
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_ENTRYPOINT_MISSING", exception.Message);
+                return false;
+            }
+            finally
+            {
+                if (resultHandle != IntPtr.Zero)
+                {
+                    try
+                    {
+                        NativeMethods.sam_occt_free_result(resultHandle);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+
+        public static bool TryDifference(IEnumerable<Shell> shells, IEnumerable<Shell> cutterShells, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            if (!OcctNativeInputBuilder.TryBuild(shells, options, result, "SAM_OCCT_DIFFERENCE_TARGET_EMPTY", "No serializable target shell geometry was found.", out OcctNativeInput targetInput))
+            {
+                return false;
+            }
+
+            if (!OcctNativeInputBuilder.TryBuild(cutterShells, options, result, "SAM_OCCT_DIFFERENCE_CUTTER_EMPTY", "No serializable cutter shell geometry was found.", out OcctNativeInput cutterInput))
+            {
+                return false;
+            }
+
+            IntPtr resultHandle = IntPtr.Zero;
+            try
+            {
+                int status = NativeMethods.sam_occt_shells_difference(
+                    targetInput.Coordinates,
+                    targetInput.Coordinates.Length / 3,
+                    targetInput.LoopPointCounts,
+                    targetInput.LoopPointCounts.Length,
+                    targetInput.FaceLoopCounts,
+                    targetInput.FaceCount,
+                    targetInput.ShellFaceCounts,
+                    targetInput.ShellCount,
+                    cutterInput.Coordinates,
+                    cutterInput.Coordinates.Length / 3,
+                    cutterInput.LoopPointCounts,
+                    cutterInput.LoopPointCounts.Length,
+                    cutterInput.FaceLoopCounts,
+                    cutterInput.FaceCount,
+                    cutterInput.ShellFaceCounts,
+                    cutterInput.ShellCount,
+                    options.Tolerance,
+                    options.FuzzyTolerance,
+                    options.RunParallel ? 1 : 0,
+                    out resultHandle);
+
+                result.NativeAvailable = true;
+
+                if (status != 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_DIFFERENCE_NATIVE_FAILED", string.Format("Native OCCT difference returned status {0}.", status));
+                    return false;
+                }
+
+                return DecodeResult(resultHandle, result);
+            }
+            catch (DllNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_MISSING", string.Format("Native OCCT library '{0}' was not found. {1}", global::SAM.Core.OCCT.Query.NativeLibraryName(), exception.Message));
+                return false;
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_ENTRYPOINT_MISSING", exception.Message);
+                return false;
+            }
+            finally
+            {
+                if (resultHandle != IntPtr.Zero)
+                {
+                    try
+                    {
+                        NativeMethods.sam_occt_free_result(resultHandle);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+
         public static bool TryBuild(IEnumerable<Face3D> face3Ds, OcctBuildOptions options, OcctCellComplexResult result)
         {
             if (!OcctNativeInputBuilder.TryBuild(face3Ds, options, result, out OcctNativeInput input))
@@ -86,6 +295,67 @@ namespace SAM.Geometry.OCCT.Native
                 double fuzzyTolerance,
                 int runParallel,
                 int avoidInternalShapes,
+                out IntPtr resultHandle);
+
+            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+            public static extern int sam_occt_shells_difference(
+                [In] double[] targetCoordinates,
+                int targetPointCount,
+                [In] int[] targetLoopPointCounts,
+                int targetLoopCount,
+                [In] int[] targetFaceLoopCounts,
+                int targetFaceCount,
+                [In] int[] targetShellFaceCounts,
+                int targetShellCount,
+                [In] double[] cutterCoordinates,
+                int cutterPointCount,
+                [In] int[] cutterLoopPointCounts,
+                int cutterLoopCount,
+                [In] int[] cutterFaceLoopCounts,
+                int cutterFaceCount,
+                [In] int[] cutterShellFaceCounts,
+                int cutterShellCount,
+                double tolerance,
+                double fuzzyTolerance,
+                int runParallel,
+                out IntPtr resultHandle);
+
+            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+            public static extern int sam_occt_shells_intersection(
+                [In] double[] targetCoordinates,
+                int targetPointCount,
+                [In] int[] targetLoopPointCounts,
+                int targetLoopCount,
+                [In] int[] targetFaceLoopCounts,
+                int targetFaceCount,
+                [In] int[] targetShellFaceCounts,
+                int targetShellCount,
+                [In] double[] toolCoordinates,
+                int toolPointCount,
+                [In] int[] toolLoopPointCounts,
+                int toolLoopCount,
+                [In] int[] toolFaceLoopCounts,
+                int toolFaceCount,
+                [In] int[] toolShellFaceCounts,
+                int toolShellCount,
+                double tolerance,
+                double fuzzyTolerance,
+                int runParallel,
+                out IntPtr resultHandle);
+
+            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+            public static extern int sam_occt_shells_union(
+                [In] double[] coordinates,
+                int pointCount,
+                [In] int[] loopPointCounts,
+                int loopCount,
+                [In] int[] faceLoopCounts,
+                int faceCount,
+                [In] int[] shellFaceCounts,
+                int shellCount,
+                double tolerance,
+                double fuzzyTolerance,
+                int runParallel,
                 out IntPtr resultHandle);
 
             [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]

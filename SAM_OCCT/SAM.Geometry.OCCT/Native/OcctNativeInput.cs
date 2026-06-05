@@ -12,5 +12,9 @@ namespace SAM.Geometry.OCCT.Native
         public int[] FaceLoopCounts { get; set; }
 
         public int FaceCount { get; set; }
+
+        public int[] ShellFaceCounts { get; set; }
+
+        public int ShellCount { get; set; }
     }
 }
