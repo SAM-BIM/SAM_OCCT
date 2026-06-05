@@ -2,7 +2,7 @@
 using System;
 using System.Drawing;
 
-namespace SAM.Core.Grasshopper.TMP
+namespace SAM.Core.Grasshopper.OCCT
 {
     public class AssemblyInfo : GH_AssemblyInfo
     {
@@ -10,7 +10,7 @@ namespace SAM.Core.Grasshopper.TMP
         {
             get
             {
-                return "SAM";
+                return "SAM Core OCCT";
             }
         }
 
@@ -19,7 +19,7 @@ namespace SAM.Core.Grasshopper.TMP
             get
             {
                 //Return a 24x24 pixel bitmap to represent this GHA library.
-                return Properties.Resources.HL_Logo24; ;
+                return SAM.Core.Grasshopper.TMP.Properties.Resources.HL_Logo24; ;
             }
         }
 
@@ -28,7 +28,7 @@ namespace SAM.Core.Grasshopper.TMP
             get
             {
                 //Return a 24x24 pixel bitmap to represent this GHA library.
-                return Properties.Resources.HL_Logo24; ;
+                return SAM.Core.Grasshopper.TMP.Properties.Resources.HL_Logo24; ;
             }
         }
 
@@ -37,7 +37,7 @@ namespace SAM.Core.Grasshopper.TMP
             get
             {
                 //Return a short string describing the purpose of this GHA library.
-                return "SAM Grashopper Toolkit, please explore";
+                return "SAM Grasshopper OCCT Toolkit";
             }
         }
 

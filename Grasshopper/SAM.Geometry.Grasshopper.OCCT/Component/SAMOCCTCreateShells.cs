@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
+
+using Grasshopper.Kernel;
+using Grasshopper.Kernel.Types;
+using SAM.Core;
+using SAM.Core.Grasshopper;
+using SAM.Core.OCCT;
+using SAM.Geometry.OCCT;
+using SAM.Geometry.Spatial;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace SAM.Geometry.Grasshopper.OCCT
+{
+    public class SAMOCCTCreateShells : GH_SAMComponent
+    {
+        public override Guid ComponentGuid => new Guid("89f9c336-e4dc-4908-bb87-b7b10ee84245");
+
+        public override string LatestComponentVersion => "0.1.0";
+
+        public SAMOCCTCreateShells()
+          : base("SAMOCCT.CreateShells", "SAMOCCT.CreateShells", "Create closed SAM Shell volumes from Face3D/surface boundary geometry using OCCT", "SAM", "OCCT")
+        {
+        }
+
+        protected override void RegisterInputParams(GH_InputParamManager inputParamManager)
+        {
+            inputParamManager.AddGenericParameter("_face3Ds", "_face3Ds", "Boundary faces/surfaces used to form closed volumes. Accepts SAM Face3Ds and geometry that converts to Face3Ds; use this before shell booleans when you only have surfaces.", GH_ParamAccess.list);
+            inputParamManager.AddNumberParameter("tolerance_", "tolerance_", "OCCT build tolerance", GH_ParamAccess.item, Tolerance.Distance);
+            inputParamManager.AddNumberParameter("fuzzyTolerance_", "fuzzyTolerance_", "OCCT fuzzy tolerance", GH_ParamAccess.item, Tolerance.MacroDistance);
+            inputParamManager.AddBooleanParameter("_run", "_run", "Run", GH_ParamAccess.item, false);
+        }
+
+        protected override void RegisterOutputParams(GH_OutputParamManager outputParamManager)
+        {
+            outputParamManager.AddGenericParameter("Shells", "Shells", "Closed SAM Shell volumes found by OCCT.", GH_ParamAccess.list);
+            outputParamManager.AddTextParameter("Diagnostics", "Diagnostics", "OCCT diagnostics", GH_ParamAccess.list);
+            outputParamManager.AddBooleanParameter("Successful", "Successful", "Run successfully?", GH_ParamAccess.item);
+        }
+
+        protected override void SolveInstance(IGH_DataAccess dataAccess)
+        {
+            dataAccess.SetData(2, false);
+
+            bool run = false;
+            if (!dataAccess.GetData(3, ref run) || !run)
+            {
+                return;
+            }
+
+            List<GH_ObjectWrapper> objectWrappers = new List<GH_ObjectWrapper>();
+            if (!dataAccess.GetDataList(0, objectWrappers) || objectWrappers == null)
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Invalid data");
+                return;
+            }
+
+            double tolerance = Tolerance.Distance;
+            dataAccess.GetData(1, ref tolerance);
+
+            double fuzzyTolerance = Tolerance.MacroDistance;
+            dataAccess.GetData(2, ref fuzzyTolerance);
+
+            List<Face3D> face3Ds = new List<Face3D>();
+            foreach (GH_ObjectWrapper objectWrapper in objectWrappers)
+            {
+                if (Query.TryGetSAMGeometries(objectWrapper, out List<Face3D> face3Ds_Temp) && face3Ds_Temp != null)
+                {
+                    face3Ds.AddRange(face3Ds_Temp);
+                }
+            }
+
+            List<Shell> shells = Geometry.OCCT.Create.Shells(face3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance });
+            List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList();
+
+            dataAccess.SetDataList(0, shells);
+            dataAccess.SetDataList(1, diagnostics);
+            dataAccess.SetData(2, result != null && result.Success);
+
+            if (diagnostics != null)
+            {
+                foreach (string diagnostic in diagnostics)
+                {
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, diagnostic);
+                }
+            }
+        }
+    }
+}
