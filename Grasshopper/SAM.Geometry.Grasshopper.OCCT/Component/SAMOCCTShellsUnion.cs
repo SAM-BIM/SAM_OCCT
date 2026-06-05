@@ -21,13 +21,13 @@ namespace SAM.Geometry.Grasshopper.OCCT
         public override string LatestComponentVersion => "0.1.0";
 
         public SAMOCCTShellsUnion()
-          : base("SAMOCCT.ShellsUnion", "SAMOCCT.ShellsUnion", "Union SAM Shells using OCCT", "SAM", "OCCT")
+          : base("SAMOCCT.ShellsUnion", "SAMOCCT.ShellsUnion", "Merge touching or overlapping closed shell volumes using OCCT", "SAM", "OCCT")
         {
         }
 
         protected override void RegisterInputParams(GH_InputParamManager inputParamManager)
         {
-            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "SAM Geometry Shells", GH_ParamAccess.list);
+            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "Closed volumes to merge. Accepts SAM Shells or closed Rhino Breps/polysurfaces that convert to SAM Shells.", GH_ParamAccess.list);
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
             inputParamManager.AddNumberParameter("tolerance_", "tolerance_", "OCCT build tolerance", GH_ParamAccess.item, Tolerance.Distance);
@@ -37,7 +37,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         protected override void RegisterOutputParams(GH_OutputParamManager outputParamManager)
         {
-            outputParamManager.AddGenericParameter("Shells", "Shells", "Result SAM Geometry Shells", GH_ParamAccess.list);
+            outputParamManager.AddGenericParameter("Shells", "Shells", "Merged result shells. Separate volumes remain separate if they do not touch or overlap.", GH_ParamAccess.list);
             outputParamManager.AddTextParameter("Diagnostics", "Diagnostics", "OCCT diagnostics", GH_ParamAccess.list);
             outputParamManager.AddBooleanParameter("Successful", "Successful", "Run successfully?", GH_ParamAccess.item);
         }

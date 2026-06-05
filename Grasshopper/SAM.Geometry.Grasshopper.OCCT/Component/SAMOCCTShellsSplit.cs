@@ -18,13 +18,13 @@ namespace SAM.Geometry.Grasshopper.OCCT
         public override string LatestComponentVersion => "0.1.0";
 
         public SAMOCCTShellsSplit()
-          : base("SAMOCCT.ShellsSplit", "SAMOCCT.ShellsSplit", "Split SAM Shells by mutual faces", "SAM", "OCCT")
+          : base("SAMOCCT.ShellsSplit", "SAMOCCT.ShellsSplit", "Split overlapping or touching shell volumes into cleaner adjacent pieces", "SAM", "OCCT")
         {
         }
 
         protected override void RegisterInputParams(GH_InputParamManager inputParamManager)
         {
-            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "SAM Geometry Shells", GH_ParamAccess.list);
+            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "Closed volumes to split against each other. Accepts SAM Shells or closed Rhino Breps/polysurfaces that convert to SAM Shells.", GH_ParamAccess.list);
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
             inputParamManager.AddNumberParameter("silverSpacing_", "silverSpacing_", "Snap tolerance", GH_ParamAccess.item, Tolerance.MacroDistance);
@@ -34,7 +34,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         protected override void RegisterOutputParams(GH_OutputParamManager outputParamManager)
         {
-            outputParamManager.AddGenericParameter("Shells", "Shells", "Split SAM Geometry Shells", GH_ParamAccess.list);
+            outputParamManager.AddGenericParameter("Shells", "Shells", "Shells split at mutual intersections/shared faces.", GH_ParamAccess.list);
             outputParamManager.AddTextParameter("Diagnostics", "Diagnostics", "Diagnostics", GH_ParamAccess.list);
             outputParamManager.AddBooleanParameter("Successful", "Successful", "Run successfully?", GH_ParamAccess.item);
         }

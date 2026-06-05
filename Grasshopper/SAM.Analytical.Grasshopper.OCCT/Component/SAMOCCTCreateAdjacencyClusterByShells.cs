@@ -19,13 +19,13 @@ namespace SAM.Analytical.Grasshopper.OCCT
         public override string LatestComponentVersion => "0.1.0";
 
         public SAMOCCTCreateAdjacencyClusterByShells()
-          : base("SAMOCCT.CreateAdjacencyClusterByShells", "SAMOCCT.CreateAdjacencyClusterByShells", "Create SAM AdjacencyCluster from SAM Shells", "SAM", "OCCT")
+          : base("SAMOCCT.CreateAdjacencyClusterByShells", "SAMOCCT.CreateAdjacencyClusterByShells", "Create a SAM AdjacencyCluster where each closed shell represents a space volume", "SAM", "OCCT")
         {
         }
 
         protected override void RegisterInputParams(GH_InputParamManager inputParamManager)
         {
-            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "SAM Geometry Shells representing spaces", GH_ParamAccess.list);
+            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "Closed space volumes. Accepts SAM Shells or closed Rhino Breps/polysurfaces that convert to SAM Shells. One shell should represent one intended space/cell.", GH_ParamAccess.list);
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
             inputParamManager.AddNumberParameter("elevationGround_", "elevationGround_", "Ground elevation", GH_ParamAccess.item, 0);

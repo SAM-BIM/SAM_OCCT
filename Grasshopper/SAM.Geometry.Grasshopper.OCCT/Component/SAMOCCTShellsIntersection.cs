@@ -21,16 +21,16 @@ namespace SAM.Geometry.Grasshopper.OCCT
         public override string LatestComponentVersion => "0.1.0";
 
         public SAMOCCTShellsIntersection()
-          : base("SAMOCCT.ShellsIntersection", "SAMOCCT.ShellsIntersection", "Intersect target SAM Shells with tool SAM Shells using OCCT", "SAM", "OCCT")
+          : base("SAMOCCT.ShellsIntersection", "SAMOCCT.ShellsIntersection", "Keep only the volume where target shells overlap tool shells using OCCT", "SAM", "OCCT")
         {
         }
 
         protected override void RegisterInputParams(GH_InputParamManager inputParamManager)
         {
-            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "Target SAM Geometry Shells", GH_ParamAccess.list);
+            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "Closed target volumes to crop. Accepts SAM Shells or closed Rhino Breps/polysurfaces that convert to SAM Shells.", GH_ParamAccess.list);
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
-            index = inputParamManager.AddGenericParameter("_toolShells", "_toolShells", "Tool SAM Geometry Shells", GH_ParamAccess.list);
+            index = inputParamManager.AddGenericParameter("_toolShells", "_toolShells", "Closed mask volumes that define what to keep from _shells. Accepts SAM Shells or closed Rhino Breps/polysurfaces. Surfaces/Face3Ds are not valid here unless first made into closed Shells.", GH_ParamAccess.list);
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
             inputParamManager.AddNumberParameter("tolerance_", "tolerance_", "OCCT build tolerance", GH_ParamAccess.item, Tolerance.Distance);
@@ -40,7 +40,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         protected override void RegisterOutputParams(GH_OutputParamManager outputParamManager)
         {
-            outputParamManager.AddGenericParameter("Shells", "Shells", "Result SAM Geometry Shells", GH_ParamAccess.list);
+            outputParamManager.AddGenericParameter("Shells", "Shells", "Portions of _shells that overlap _toolShells. Tool shells are used as masks and are not returned directly.", GH_ParamAccess.list);
             outputParamManager.AddTextParameter("Diagnostics", "Diagnostics", "OCCT diagnostics", GH_ParamAccess.list);
             outputParamManager.AddBooleanParameter("Successful", "Successful", "Run successfully?", GH_ParamAccess.item);
         }

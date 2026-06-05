@@ -21,18 +21,18 @@ namespace SAM.Analytical.Grasshopper.OCCT
         public override string LatestComponentVersion => "0.1.0";
 
         public SAMOCCTCreateAdjacencyCluster()
-          : base("SAMOCCT.CreateAdjacencyCluster", "SAMOCCT.CreateAdjacencyCluster", "Create SAM AdjacencyCluster from panels using OCCT", "SAM", "OCCT")
+          : base("SAMOCCT.CreateAdjacencyCluster", "SAMOCCT.CreateAdjacencyCluster", "Create a SAM AdjacencyCluster from analytical Panels using OCCT cell building", "SAM", "OCCT")
         {
         }
 
         protected override void RegisterInputParams(GH_InputParamManager inputParamManager)
         {
-            int index = inputParamManager.AddParameter(new GooPanelParam(), "_panels", "_panels", "SAM Analytical Panels", GH_ParamAccess.list);
+            int index = inputParamManager.AddParameter(new GooPanelParam(), "_panels", "_panels", "Analytical Panels that define closed cell boundaries. Use this when your model starts from panels rather than closed Shells.", GH_ParamAccess.list);
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
             GooSpaceParam gooSpaceParam = new GooSpaceParam();
             gooSpaceParam.Optional = true;
-            index = inputParamManager.AddParameter(gooSpaceParam, "spaces_", "spaces_", "SAM Analytical Spaces", GH_ParamAccess.list);
+            index = inputParamManager.AddParameter(gooSpaceParam, "spaces_", "spaces_", "Optional existing Spaces to match into the OCCT-created cells.", GH_ParamAccess.list);
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
             inputParamManager.AddNumberParameter("tolerance_", "tolerance_", "OCCT build tolerance", GH_ParamAccess.item, Tolerance.Distance);

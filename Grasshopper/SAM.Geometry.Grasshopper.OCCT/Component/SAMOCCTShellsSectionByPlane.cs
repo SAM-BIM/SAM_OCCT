@@ -15,16 +15,16 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("67f00e15-259c-4080-8b34-efb4cd59cb8c");
 
-        public override string LatestComponentVersion => "0.1.0";
+        public override string LatestComponentVersion => "0.1.1";
 
         public SAMOCCTShellsSectionByPlane()
-          : base("SAMOCCT.ShellsSectionByPlane", "SAMOCCT.ShellsSectionByPlane", "Create section Face3Ds from SAM Shells", "SAM", "OCCT")
+          : base("SAMOCCT.ShellsSectionByPlane", "SAMOCCT.ShellsSectionByPlane", "Create section Face3Ds and split SAM Shells by plane", "SAM", "OCCT")
         {
         }
 
         protected override void RegisterInputParams(GH_InputParamManager inputParamManager)
         {
-            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "SAM Geometry Shells", GH_ParamAccess.list);
+            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "Closed volumes to section and split. Accepts SAM Shells or closed Rhino Breps/polysurfaces that convert to SAM Shells.", GH_ParamAccess.list);
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
             inputParamManager.AddGenericParameter("plane_", "plane_", "SAM/Rhino plane. Uses shell centroid XY plane if omitted.", GH_ParamAccess.item);
@@ -35,14 +35,15 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         protected override void RegisterOutputParams(GH_OutputParamManager outputParamManager)
         {
-            outputParamManager.AddGenericParameter("Face3Ds", "Face3Ds", "Section SAM Face3Ds", GH_ParamAccess.list);
+            outputParamManager.AddGenericParameter("Face3Ds", "Face3Ds", "Section Face3Ds created where each shell crosses the plane.", GH_ParamAccess.list);
+            outputParamManager.AddGenericParameter("Shells", "Shells", "Input shells split by the section plane. Use these directly for atrium/level division workflows.", GH_ParamAccess.list);
             outputParamManager.AddTextParameter("Diagnostics", "Diagnostics", "Diagnostics", GH_ParamAccess.list);
             outputParamManager.AddBooleanParameter("Successful", "Successful", "Run successfully?", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess dataAccess)
         {
-            dataAccess.SetData(2, false);
+            dataAccess.SetData(3, false);
 
             bool run = false;
             if (!dataAccess.GetData(3, ref run) || !run)
@@ -80,24 +81,41 @@ namespace SAM.Geometry.Grasshopper.OCCT
             }
 
             List<Face3D> face3Ds = new List<Face3D>();
+            List<Shell> shells_Split = new List<Shell>();
             foreach (Shell shell in shells)
             {
-                Plane plane_Temp = plane ?? new Plane(shell.GetBoundingBox().GetCentroid(), Vector3D.WorldZ);
+                BoundingBox3D boundingBox3D = shell?.GetBoundingBox();
+                if (boundingBox3D == null)
+                {
+                    continue;
+                }
+
+                Plane plane_Temp = plane ?? new Plane(boundingBox3D.GetCentroid(), Vector3D.WorldZ);
                 List<Face3D> face3Ds_Temp = shell.Section(plane_Temp, true, Tolerance.Angle, tolerance, Tolerance.MacroDistance);
                 if (face3Ds_Temp != null)
                 {
                     face3Ds.AddRange(face3Ds_Temp);
+
+                    List<Shell> shells_Split_Temp = shell.Split(face3Ds_Temp, Tolerance.MacroDistance, Tolerance.Angle, tolerance);
+                    if (shells_Split_Temp != null && shells_Split_Temp.Count != 0)
+                    {
+                        shells_Split.AddRange(shells_Split_Temp);
+                        continue;
+                    }
                 }
+
+                shells_Split.Add(new Shell(shell));
             }
 
             List<string> diagnostics = new List<string>
             {
-                string.Format("SAM_OCCT_SECTION_SUCCESS: Created {0} section Face3D(s).", face3Ds.Count)
+                string.Format("SAM_OCCT_SECTION_SUCCESS: Created {0} section Face3D(s) and {1} split shell(s).", face3Ds.Count, shells_Split.Count)
             };
 
             dataAccess.SetDataList(0, face3Ds);
-            dataAccess.SetDataList(1, diagnostics);
-            dataAccess.SetData(2, face3Ds.Count != 0);
+            dataAccess.SetDataList(1, shells_Split);
+            dataAccess.SetDataList(2, diagnostics);
+            dataAccess.SetData(3, face3Ds.Count != 0 || shells_Split.Count != 0);
         }
     }
 }

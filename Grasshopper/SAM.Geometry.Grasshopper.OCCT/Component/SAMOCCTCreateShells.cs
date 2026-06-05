@@ -21,13 +21,13 @@ namespace SAM.Geometry.Grasshopper.OCCT
         public override string LatestComponentVersion => "0.1.0";
 
         public SAMOCCTCreateShells()
-          : base("SAMOCCT.CreateShells", "SAMOCCT.CreateShells", "Create closed SAM shells from SAM Face3D geometry using OCCT", "SAM", "OCCT")
+          : base("SAMOCCT.CreateShells", "SAMOCCT.CreateShells", "Create closed SAM Shell volumes from Face3D/surface boundary geometry using OCCT", "SAM", "OCCT")
         {
         }
 
         protected override void RegisterInputParams(GH_InputParamManager inputParamManager)
         {
-            inputParamManager.AddGenericParameter("_face3Ds", "_face3Ds", "SAM Geometry Face3Ds", GH_ParamAccess.list);
+            inputParamManager.AddGenericParameter("_face3Ds", "_face3Ds", "Boundary faces/surfaces used to form closed volumes. Accepts SAM Face3Ds and geometry that converts to Face3Ds; use this before shell booleans when you only have surfaces.", GH_ParamAccess.list);
             inputParamManager.AddNumberParameter("tolerance_", "tolerance_", "OCCT build tolerance", GH_ParamAccess.item, Tolerance.Distance);
             inputParamManager.AddNumberParameter("fuzzyTolerance_", "fuzzyTolerance_", "OCCT fuzzy tolerance", GH_ParamAccess.item, Tolerance.MacroDistance);
             inputParamManager.AddBooleanParameter("_run", "_run", "Run", GH_ParamAccess.item, false);
@@ -35,7 +35,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         protected override void RegisterOutputParams(GH_OutputParamManager outputParamManager)
         {
-            outputParamManager.AddGenericParameter("Shells", "Shells", "SAM Geometry Shells", GH_ParamAccess.list);
+            outputParamManager.AddGenericParameter("Shells", "Shells", "Closed SAM Shell volumes found by OCCT.", GH_ParamAccess.list);
             outputParamManager.AddTextParameter("Diagnostics", "Diagnostics", "OCCT diagnostics", GH_ParamAccess.list);
             outputParamManager.AddBooleanParameter("Successful", "Successful", "Run successfully?", GH_ParamAccess.item);
         }

@@ -20,13 +20,13 @@ namespace SAM.Analytical.Grasshopper.OCCT
         public override string LatestComponentVersion => "0.1.0";
 
         public SAMOCCTPanelsFromShells()
-          : base("SAMOCCT.PanelsFromShells", "SAMOCCT.PanelsFromShells", "Create SAM Panels from SAM Shells", "SAM", "OCCT")
+          : base("SAMOCCT.PanelsFromShells", "SAMOCCT.PanelsFromShells", "Create analytical SAM Panels from closed shell faces", "SAM", "OCCT")
         {
         }
 
         protected override void RegisterInputParams(GH_InputParamManager inputParamManager)
         {
-            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "SAM Geometry Shells", GH_ParamAccess.list);
+            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "Closed volumes whose faces should become analytical Panels. Accepts SAM Shells or closed Rhino Breps/polysurfaces that convert to SAM Shells.", GH_ParamAccess.list);
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
             inputParamManager.AddNumberParameter("silverSpacing_", "silverSpacing_", "Silver spacing", GH_ParamAccess.item, Tolerance.MacroDistance);

@@ -21,16 +21,16 @@ namespace SAM.Geometry.Grasshopper.OCCT
         public override string LatestComponentVersion => "0.1.0";
 
         public SAMOCCTShellsDifference()
-          : base("SAMOCCT.ShellsDifference", "SAMOCCT.ShellsDifference", "Subtract cutter SAM Shells from target SAM Shells using OCCT", "SAM", "OCCT")
+          : base("SAMOCCT.ShellsDifference", "SAMOCCT.ShellsDifference", "Subtract closed cutter volumes from target shells using OCCT", "SAM", "OCCT")
         {
         }
 
         protected override void RegisterInputParams(GH_InputParamManager inputParamManager)
         {
-            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "Target SAM Geometry Shells", GH_ParamAccess.list);
+            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "Closed target volumes to keep and cut. Accepts SAM Shells or closed Rhino Breps/polysurfaces that convert to SAM Shells.", GH_ParamAccess.list);
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
-            index = inputParamManager.AddGenericParameter("_cutterShells", "_cutterShells", "Cutter SAM Geometry Shells", GH_ParamAccess.list);
+            index = inputParamManager.AddGenericParameter("_cutterShells", "_cutterShells", "Closed cutting volumes to remove from _shells. Accepts SAM Shells or closed Rhino Breps/polysurfaces. Surfaces/Face3Ds must first become closed Shells.", GH_ParamAccess.list);
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
             inputParamManager.AddNumberParameter("tolerance_", "tolerance_", "OCCT build tolerance", GH_ParamAccess.item, Tolerance.Distance);
@@ -40,7 +40,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         protected override void RegisterOutputParams(GH_OutputParamManager outputParamManager)
         {
-            outputParamManager.AddGenericParameter("Shells", "Shells", "Result SAM Geometry Shells", GH_ParamAccess.list);
+            outputParamManager.AddGenericParameter("Shells", "Shells", "Target shells after cutter volumes have been removed.", GH_ParamAccess.list);
             outputParamManager.AddTextParameter("Diagnostics", "Diagnostics", "OCCT diagnostics", GH_ParamAccess.list);
             outputParamManager.AddBooleanParameter("Successful", "Successful", "Run successfully?", GH_ParamAccess.item);
         }
