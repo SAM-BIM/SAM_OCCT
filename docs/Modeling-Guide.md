@@ -73,9 +73,15 @@ creates names like `Cell 1`, `Cell 2`, and so on.
 
 Useful diagnostics:
 
-- `SAM_OCCT_ANALYTICAL_SHELL_METADATA`: reports supplied spaces/names and how
-  many existing spaces were matched.
+- `SAM_OCCT_ANALYTICAL_SHELL_METADATA`: reports supplied spaces/names, matched
+  existing spaces, supplied names used, and auto-named spaces.
 - `SAM_OCCT_ANALYTICAL_SHELL_PANELS`: reports extracted panels and seed spaces.
+- `SAM_OCCT_ANALYTICAL_INPUT`: reports the panel and seed-space count sent into
+  the OCCT adjacency builder.
+- `SAM_OCCT_ANALYTICAL_CELL_SPACE_DELTA`: warns when seed-space count differs
+  from OCCT cell count.
+- `SAM_OCCT_ANALYTICAL_REBUILD_SPACE_DELTA`: warns when final SAM space count
+  differs from OCCT shell count.
 - `SAM_OCCT_TIMING_PANEL_EXTRACTION`: time spent converting shells into panels
   and seed spaces.
 - `SAM_OCCT_TIMING_OCCT_AND_ADJACENCY`: time spent in the OCCT cell build and
@@ -141,6 +147,22 @@ Interpretation:
 
 Use the smallest fuzzy tolerance that closes the model reliably. Very large
 fuzzy tolerances can merge geometry that should remain separate.
+
+In `SAMOCCT.CreateAdjacencyClusterByShells`, the main geometry tolerances are:
+
+- `tolerance_`: base OCCT/SAM model tolerance.
+- `fuzzyTolerance_`: OCCT fuzzy tolerance, also used as SAM silver spacing when
+  finding shell internal points and matching existing space locations.
+
+The other numeric inputs are advanced SAM rebuild controls, not OCCT build
+tolerances:
+
+- `maxDistance_`: how far SAM may search when matching rebuilt panels.
+- `maxAngle_`: angular tolerance for panel matching.
+- `minArea_`: filters tiny faces before and during analytical rebuild.
+
+Leave these at defaults unless diagnostics show missing panels/spaces or noisy
+tiny geometry.
 
 ## Geometry Rules
 

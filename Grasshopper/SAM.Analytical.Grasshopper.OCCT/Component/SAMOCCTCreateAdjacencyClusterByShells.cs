@@ -20,7 +20,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("d6950fec-cea4-4b48-9099-8943a7765e81");
 
-        public override string LatestComponentVersion => "0.3.0";
+        public override string LatestComponentVersion => "0.3.1";
 
         public SAMOCCTCreateAdjacencyClusterByShells()
           : base("SAMOCCT.CreateAdjacencyClusterByShells", "SAMOCCT.CreateAdjacencyClusterByShells", "Create a SAM AdjacencyCluster from closed shell space volumes using OCCT cell building", "SAM", "OCCT")
@@ -33,11 +33,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
             inputParamManager.AddNumberParameter("elevationGround_", "elevationGround_", "Ground elevation", GH_ParamAccess.item, 0);
-            inputParamManager.AddNumberParameter("maxDistance_", "maxDistance_", "Max panel matching distance", GH_ParamAccess.item, 0.01);
-            inputParamManager.AddNumberParameter("maxAngle_", "maxAngle_", "Max panel matching angle", GH_ParamAccess.item, 0.0872664626);
-            inputParamManager.AddNumberParameter("silverSpacing_", "silverSpacing_", "OCCT fuzzy tolerance and silver spacing for space computation", GH_ParamAccess.item, Tolerance.MacroDistance);
-            inputParamManager.AddNumberParameter("minArea_", "minArea_", "Minimal face area", GH_ParamAccess.item, 0.01);
-            inputParamManager.AddNumberParameter("tolerance_", "tolerance_", "Tolerance", GH_ParamAccess.item, Tolerance.Distance);
+            inputParamManager.AddNumberParameter("maxDistance_", "maxDistance_", "Advanced SAM rebuild panel matching distance", GH_ParamAccess.item, 0.01);
+            inputParamManager.AddNumberParameter("maxAngle_", "maxAngle_", "Advanced SAM rebuild panel matching angle", GH_ParamAccess.item, 0.0872664626);
+            inputParamManager.AddNumberParameter("fuzzyTolerance_", "fuzzyTolerance_", "OCCT fuzzy tolerance. Also used as SAM silver spacing for seed space and shell checks.", GH_ParamAccess.item, Tolerance.MacroDistance);
+            inputParamManager.AddNumberParameter("minArea_", "minArea_", "Advanced minimum face area for shell panel extraction and SAM rebuild", GH_ParamAccess.item, 0.01);
+            inputParamManager.AddNumberParameter("tolerance_", "tolerance_", "OCCT and SAM model tolerance", GH_ParamAccess.item, Tolerance.Distance);
             GooSpaceParam gooSpaceParam = new GooSpaceParam();
             gooSpaceParam.Optional = true;
             index = inputParamManager.AddParameter(gooSpaceParam, "spaces_", "spaces_", "Optional existing Spaces to match into shell cells. If supplied, matching spaces preserve metadata and names.", GH_ParamAccess.list);
@@ -99,8 +99,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
             double maxAngle = 0.0872664626;
             dataAccess.GetData(3, ref maxAngle);
 
-            double silverSpacing = Tolerance.MacroDistance;
-            dataAccess.GetData(4, ref silverSpacing);
+            double fuzzyTolerance = Tolerance.MacroDistance;
+            dataAccess.GetData(4, ref fuzzyTolerance);
 
             double minArea = 0.01;
             dataAccess.GetData(5, ref minArea);
@@ -122,6 +122,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
             int count = 1;
             int matchedSpaceCount = 0;
             int namedSpaceCount = 0;
+            int autoNamedSpaceCount = 0;
             HashSet<Guid> usedSpaceGuids = new HashSet<Guid>();
             HashSet<string> usedNames = new HashSet<string>();
 
@@ -129,14 +130,14 @@ namespace SAM.Analytical.Grasshopper.OCCT
             {
                 Shell shell = shells[i];
 
-                List<Panel> panels_Temp = global::SAM.Analytical.Create.Panels(shell, silverSpacing, tolerance);
+                List<Panel> panels_Temp = global::SAM.Analytical.Create.Panels(shell, fuzzyTolerance, tolerance);
                 if (panels_Temp != null)
                 {
                     panels_Temp.RemoveAll(x => x?.GetFace3D() == null || x.GetFace3D().GetArea() < minArea);
                     panels.AddRange(panels_Temp);
                 }
 
-                Point3D point3D = shell.InternalPoint3D(silverSpacing, tolerance);
+                Point3D point3D = shell.InternalPoint3D(fuzzyTolerance, tolerance);
                 if (point3D != null)
                 {
                     Space space = null;
@@ -150,7 +151,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                                 continue;
                             }
 
-                            List<Shell> spaceShells = global::SAM.Analytical.Query.SpaceShells(shells_Temp, inputSpace.Location, silverSpacing, tolerance);
+                            List<Shell> spaceShells = global::SAM.Analytical.Query.SpaceShells(shells_Temp, inputSpace.Location, fuzzyTolerance, tolerance);
                             if (spaceShells != null && spaceShells.Count != 0)
                             {
                                 space = new Space(inputSpace, inputSpace.Name, point3D);
@@ -178,6 +179,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
                                 count++;
                             }
                             while (usedNames.Contains(name));
+
+                            autoNamedSpaceCount++;
                         }
 
                         space = new Space(name, point3D);
@@ -188,7 +191,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 }
             }
 
-            diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_METADATA: Supplied {0} existing space(s) and {1} name(s); matched {2} space(s), named {3} shell-derived space(s).", inputSpaces?.Count ?? 0, names?.Count ?? 0, matchedSpaceCount, namedSpaceCount));
+            diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_METADATA: Supplied {0} existing space(s) and {1} name(s); matched {2} existing space(s), used {3} supplied name(s), auto-named {4} space(s).", inputSpaces?.Count ?? 0, names?.Count ?? 0, matchedSpaceCount, namedSpaceCount, autoNamedSpaceCount));
             diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_PANELS: Extracted {0} panel(s) and {1} seed space(s) from {2} shell(s).", panels.Count, spaces.Count, shells.Count));
             diagnostics.Add(string.Format("SAM_OCCT_TIMING_PANEL_EXTRACTION: {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
 
@@ -199,7 +202,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 panels,
                 out OcctCellComplexResult cellComplexResult,
                 log,
-                new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = silverSpacing },
+                new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance },
                 thinnessRatio: 0.001,
                 minArea: minArea,
                 maxDistance: maxDistance,
