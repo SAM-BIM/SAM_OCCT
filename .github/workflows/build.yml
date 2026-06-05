@@ -9,24 +9,20 @@ on:
 
 jobs:
   build:
-    # Guard: if this workflow ever gets merged upstream (e.g. HoareLea),
-    # it will show as "skipped" there and won't break their CI.
+    # Guard: if this ever gets merged upstream, it will "skip" there.
     if: github.repository_owner == 'SAM-BIM'
     runs-on: windows-2022
 
     env:
       MSBUILDDISABLENODEREUSE: "1"
-      ORG_NAME: "SAM-BIM"
-      # >>> CHANGE THIS PER REPO <<<
-      # Examples: SAM, SAM_gbXML, SAM_GEM, SAM_Tas, ...
-      REPO_NAME: "SAM_Template"
 
     steps:
-      - name: Checkout this repo
+      # Checkout THIS repo into a folder so we can clone sibling repos next to it.
+      - name: Checkout SAM_OCCT
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          path: ${{ env.REPO_NAME }}
+          path: SAM_OCCT
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -41,25 +37,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $org  = '${{ env.ORG_NAME }}'
-          $repo = '${{ env.REPO_NAME }}'
-
-          # >>> ADJUST BUILD ORDER HERE IF NEEDED <<<
-          # Keep the current repo LAST.
-          $buildOrder = @(
-            #'SAM'<- add other repo
-            $repo
+          $deps = @(
+            'SAM'
           )
 
-          # Clone everything except the last one (already checked out by Actions)
-          $deps = $buildOrder[0..($buildOrder.Count-2)]
           foreach ($r in $deps) {
             if (Test-Path $r) { continue }
-            Write-Host "Cloning https://github.com/$org/$r.git"
-            git clone --depth 1 "https://github.com/$org/$r.git" $r
+            git clone --depth 1 "https://github.com/SAM-BIM/$r.git" $r
           }
 
-          # Ensure ReferencePath exists even before SAM_Windows builds
+          # Ensure the reference path folder exists even before SAM_Windows builds
           New-Item -ItemType Directory -Force -Path "SAM_Windows\build" | Out-Null
 
       - name: Restore + Rebuild in order (CI props like SAM_Deploy)
@@ -67,8 +54,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $repo = '${{ env.REPO_NAME }}'
-          $windowsRef = (Resolve-Path 'SAM_Windows\build').Path
+          $windowsRef = Join-Path (Get-Location) 'SAM_Windows\build'
 
           # IMPORTANT: keep these as an ARRAY of args (do NOT join into one string)
           $common = @(
@@ -81,23 +67,17 @@ jobs:
             "/p:ReferencePath=$windowsRef"
           )
 
-          # If you really want Platform, use QUOTED Any CPU:
+          # If you really want Platform, use this (quoted) line:
           # $common += '/p:Platform="Any CPU"'
 
-          # Same build order as above (keep repo LAST)
-          $buildOrder = @(
-            #'SAM'<- add other repo
-            $repo
+          # Keep this repo LAST so its dependencies are built first.
+          $solutions = @(
+            'SAM\SAM.sln'
+            'SAM_OCCT\SAM_OCCT.sln'
           )
 
-          # Convert build order -> solution paths (robust: first .sln in each folder)
-          $solutions = foreach ($r in $buildOrder) {
-            $sln = Get-ChildItem -Path $r -Filter *.sln -File | Select-Object -First 1
-            if (-not $sln) { throw "No .sln found under: $r" }
-            $sln.FullName
-          }
-
           foreach ($sln in $solutions) {
+            if (-not (Test-Path $sln)) { throw "Missing solution: $sln" }
             Write-Host "==> Restore: $sln"
             & msbuild $sln /t:Restore @common
           }
@@ -110,7 +90,7 @@ jobs:
       - name: Upload build folders (optional)
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.REPO_NAME }}-build-folders
+          name: SAM_OCCT-build-folders
           path: |
             **\build\*
           if-no-files-found: warn
