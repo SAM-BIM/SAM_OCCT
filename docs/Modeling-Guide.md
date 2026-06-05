@@ -48,6 +48,42 @@ Do not union adjacent room shells before creating an adjacency cluster if each
 room should remain a separate space. Union is for merging volumes into a larger
 solid, not for preserving individual rooms.
 
+### Space Names And Metadata
+
+`SAMOCCT.CreateAdjacencyClusterByShells` can create spaces directly from shells,
+or it can reuse metadata from existing SAM `Space` objects.
+
+Use `spaces_` when:
+
+- You already have SAM `Space` objects with names, internal conditions, or other
+  metadata.
+- Each existing space has a valid location point inside its matching shell.
+- You want the OCCT shell workflow to preserve those space properties while
+  rebuilding the analytical cluster.
+
+Use `names_` when:
+
+- You only have shells but want predictable space names.
+- You do not need to preserve full existing `Space` metadata.
+- The name list follows the same order as the shell list.
+
+If both are supplied, `spaces_` matching is used first. `names_` is used only for
+shells that do not match an existing space. If neither is supplied, the component
+creates names like `Cell 1`, `Cell 2`, and so on.
+
+Useful diagnostics:
+
+- `SAM_OCCT_ANALYTICAL_SHELL_METADATA`: reports supplied spaces/names and how
+  many existing spaces were matched.
+- `SAM_OCCT_ANALYTICAL_SHELL_PANELS`: reports extracted panels and seed spaces.
+- `SAM_OCCT_TIMING_PANEL_EXTRACTION`: time spent converting shells into panels
+  and seed spaces.
+- `SAM_OCCT_TIMING_OCCT_AND_ADJACENCY`: time spent in the OCCT cell build and
+  SAM adjacency creation.
+- `SAM_OCCT_TIMING_POST_PROCESS`: time spent cutting at ground elevation,
+  updating panel types, and assigning default constructions.
+- `SAM_OCCT_TIMING_TOTAL`: total component time.
+
 ## Panels/Faces vs Shells
 
 Use `Panel`/`Face3D` when:

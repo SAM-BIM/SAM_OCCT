@@ -120,6 +120,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
             List<Panel> panels = new List<Panel>();
             List<Space> spaces = new List<Space>();
             int count = 1;
+            int matchedSpaceCount = 0;
+            int namedSpaceCount = 0;
             HashSet<Guid> usedSpaceGuids = new HashSet<Guid>();
             HashSet<string> usedNames = new HashSet<string>();
 
@@ -153,6 +155,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                             {
                                 space = new Space(inputSpace, inputSpace.Name, point3D);
                                 usedSpaceGuids.Add(inputSpace.Guid);
+                                matchedSpaceCount++;
                                 break;
                             }
                         }
@@ -164,6 +167,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                         if (names != null && i < names.Count && !string.IsNullOrWhiteSpace(names[i]))
                         {
                             name = names[i];
+                            namedSpaceCount++;
                         }
 
                         if (string.IsNullOrWhiteSpace(name))
@@ -184,6 +188,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 }
             }
 
+            diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_METADATA: Supplied {0} existing space(s) and {1} name(s); matched {2} space(s), named {3} shell-derived space(s).", inputSpaces?.Count ?? 0, names?.Count ?? 0, matchedSpaceCount, namedSpaceCount));
             diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_PANELS: Extracted {0} panel(s) and {1} seed space(s) from {2} shell(s).", panels.Count, spaces.Count, shells.Count));
             diagnostics.Add(string.Format("SAM_OCCT_TIMING_PANEL_EXTRACTION: {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
 
