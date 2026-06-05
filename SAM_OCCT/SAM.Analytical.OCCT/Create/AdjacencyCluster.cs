@@ -12,7 +12,7 @@ namespace SAM.Analytical.OCCT
 {
     public static partial class Create
     {
-        public static AdjacencyCluster AdjacencyCluster(IEnumerable<Space> spaces, IEnumerable<Panel> panels, out OcctCellComplexResult cellComplexResult, Log log = null, OcctBuildOptions options = null)
+        public static AdjacencyCluster AdjacencyCluster(IEnumerable<Space> spaces, IEnumerable<Panel> panels, out OcctCellComplexResult cellComplexResult, Log log = null, OcctBuildOptions options = null, double thinnessRatio = 0.01, double minArea = Tolerance.MacroDistance, double maxDistance = 0.1, double maxAngle = 0.0872664626)
         {
             cellComplexResult = null;
 
@@ -53,6 +53,10 @@ namespace SAM.Analytical.OCCT
                 panels_Temp,
                 addMissingSpaces: true,
                 addMissingPanels: true,
+                thinnessRatio: thinnessRatio,
+                minArea: minArea,
+                maxDistance: maxDistance,
+                maxAngle: maxAngle,
                 silverSpacing: options.FuzzyTolerance,
                 tolerance_Distance: options.Tolerance);
 

@@ -145,6 +145,46 @@ For roof or atrium-heavy volume workflows:
 6. Use SAMOCCT.PanelsFromShells when panel objects are needed.
 ```
 
+## Large Building Strategy
+
+Avoid sending very large whole-building shell sets through one interactive
+adjacency operation. Even with OCCT creating the cells, the analytical model
+still needs panel matching, space assignment, relation creation, normal updates,
+and cleanup.
+
+Practical guidance:
+
+- Prefer `Panels` / `Face3Ds -> SAMOCCT.CreateAdjacencyCluster` for full
+  building analytical models.
+- Use `Shells -> SAMOCCT.CreateAdjacencyClusterByShells` for volume-first
+  workflows, roof-cut rooms, atriums, shafts, and model chunks.
+- Split very large models by block, level, wing, fire zone, or construction
+  package before creating adjacency clusters.
+- Avoid unioning adjacent room shells if each room should remain a separate
+  space.
+- Run `SAMOCCT.ShellsRepair` only on problematic chunks, not blindly on every
+  shell in a large model.
+- Keep shell face counts low. Many simple boxes are easier than fewer messy
+  shells with many trimmed faces.
+
+Suggested interactive scale:
+
+```text
+100-500 simple shells      comfortable
+500-2,000 simple shells    possible, test by chunk
+2,000-5,000 shells         chunk strongly recommended
+10,000 shells              avoid as one operation
+```
+
+For large buildings, the preferred robust workflow is:
+
+```text
+1. Generate clean panels/faces per level or building zone.
+2. Run SAMOCCT.CreateAdjacencyCluster per chunk.
+3. Validate diagnostics and shell/cell counts.
+4. Merge or join analytical results later if needed.
+```
+
 ## Rule Of Thumb
 
 If the goal is an analytical building model, start with `Panel` or `Face3D`.
