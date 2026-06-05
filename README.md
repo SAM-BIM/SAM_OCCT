@@ -38,6 +38,12 @@ Analytical:
 - `SAMOCCT.CreateAdjacencyClusterByShells`
 - `SAMOCCT.PanelsFromShells`
 
+## Modeling Guide
+
+See `docs/Modeling-Guide.md` for the recommended Panels/Face3D vs Shell
+workflow, tolerance guidance, and volume-modeling rules for reliable OCCT cell
+creation.
+
 ## Build
 
 Close Rhino/Grasshopper before rebuilding so files in `%APPDATA%\SAM` are not
