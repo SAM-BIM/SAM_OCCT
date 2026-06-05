@@ -33,7 +33,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
             inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
 
             inputParamManager.AddNumberParameter("elevationGround_", "elevationGround_", "Ground elevation", GH_ParamAccess.item, 0);
-            inputParamManager.AddNumberParameter("maxDistance_", "maxDistance_", "Advanced SAM rebuild panel matching distance", GH_ParamAccess.item, 0.01);
+            inputParamManager.AddNumberParameter("maxDistance_", "maxDistance_", "Compatibility input for legacy SAM rebuild panel matching. The shell-native direct OCCT topology path normally does not use this value.", GH_ParamAccess.item, 0.01);
             inputParamManager.AddNumberParameter("maxAngle_", "maxAngle_", "Advanced SAM rebuild panel matching angle", GH_ParamAccess.item, 0.0872664626);
             inputParamManager.AddNumberParameter("fuzzyTolerance_", "fuzzyTolerance_", "OCCT fuzzy tolerance. Also used as SAM silver spacing for seed space and shell checks.", GH_ParamAccess.item, Tolerance.MacroDistance);
             inputParamManager.AddNumberParameter("minArea_", "minArea_", "Advanced minimum face area for shell panel extraction and SAM rebuild", GH_ParamAccess.item, 0.01);
@@ -116,96 +116,16 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
             Stopwatch stopwatch_Total = Stopwatch.StartNew();
             Stopwatch stopwatch = Stopwatch.StartNew();
-
-            List<Panel> panels = new List<Panel>();
-            List<Space> spaces = new List<Space>();
-            int count = 1;
-            int matchedSpaceCount = 0;
-            int namedSpaceCount = 0;
-            int autoNamedSpaceCount = 0;
-            HashSet<Guid> usedSpaceGuids = new HashSet<Guid>();
-            HashSet<string> usedNames = new HashSet<string>();
-
-            for (int i = 0; i < shells.Count; i++)
-            {
-                Shell shell = shells[i];
-
-                List<Panel> panels_Temp = global::SAM.Analytical.Create.Panels(shell, fuzzyTolerance, tolerance);
-                if (panels_Temp != null)
-                {
-                    panels_Temp.RemoveAll(x => x?.GetFace3D() == null || x.GetFace3D().GetArea() < minArea);
-                    panels.AddRange(panels_Temp);
-                }
-
-                Point3D point3D = shell.InternalPoint3D(fuzzyTolerance, tolerance);
-                if (point3D != null)
-                {
-                    Space space = null;
-                    if (inputSpaces != null && inputSpaces.Count != 0)
-                    {
-                        List<Shell> shells_Temp = new List<Shell>() { shell };
-                        foreach (Space inputSpace in inputSpaces)
-                        {
-                            if (inputSpace == null || usedSpaceGuids.Contains(inputSpace.Guid) || inputSpace.Location == null)
-                            {
-                                continue;
-                            }
-
-                            List<Shell> spaceShells = global::SAM.Analytical.Query.SpaceShells(shells_Temp, inputSpace.Location, fuzzyTolerance, tolerance);
-                            if (spaceShells != null && spaceShells.Count != 0)
-                            {
-                                space = new Space(inputSpace, inputSpace.Name, point3D);
-                                usedSpaceGuids.Add(inputSpace.Guid);
-                                matchedSpaceCount++;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (space == null)
-                    {
-                        string name = null;
-                        if (names != null && i < names.Count && !string.IsNullOrWhiteSpace(names[i]))
-                        {
-                            name = names[i];
-                            namedSpaceCount++;
-                        }
-
-                        if (string.IsNullOrWhiteSpace(name))
-                        {
-                            do
-                            {
-                                name = string.Format("Cell {0}", count);
-                                count++;
-                            }
-                            while (usedNames.Contains(name));
-
-                            autoNamedSpaceCount++;
-                        }
-
-                        space = new Space(name, point3D);
-                    }
-
-                    usedNames.Add(space.Name);
-                    spaces.Add(space);
-                }
-            }
-
-            diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_METADATA: Supplied {0} existing space(s) and {1} name(s); matched {2} existing space(s), used {3} supplied name(s), auto-named {4} space(s).", inputSpaces?.Count ?? 0, names?.Count ?? 0, matchedSpaceCount, namedSpaceCount, autoNamedSpaceCount));
-            diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_PANELS: Extracted {0} panel(s) and {1} seed space(s) from {2} shell(s).", panels.Count, spaces.Count, shells.Count));
-            diagnostics.Add(string.Format("SAM_OCCT_TIMING_PANEL_EXTRACTION: {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
-
             Log log = new Log();
-            stopwatch.Restart();
+            diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_METADATA: Supplied {0} existing space(s) and {1} name(s). Shell-native OCCT path will match supplied spaces after OCCT cell creation and otherwise use names or auto-generated names.", inputSpaces?.Count ?? 0, names?.Count ?? 0));
             AdjacencyCluster adjacencyCluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(
-                spaces,
-                panels,
+                shells,
+                inputSpaces,
                 out OcctCellComplexResult cellComplexResult,
                 log,
                 new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance },
-                thinnessRatio: 0.001,
+                names,
                 minArea: minArea,
-                maxDistance: maxDistance,
                 maxAngle: maxAngle);
             diagnostics.Add(string.Format("SAM_OCCT_TIMING_OCCT_AND_ADJACENCY: {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
 

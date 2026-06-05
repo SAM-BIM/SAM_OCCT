@@ -10,6 +10,7 @@ using SAM.Core.OCCT;
 using SAM.Geometry.OCCT;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace SAM.Analytical.Grasshopper.OCCT
@@ -73,20 +74,36 @@ namespace SAM.Analytical.Grasshopper.OCCT
             double fuzzyTolerance = Tolerance.MacroDistance;
             dataAccess.GetData(3, ref fuzzyTolerance);
 
+            List<string> diagnostics = new List<string>();
+            Stopwatch stopwatch_Total = Stopwatch.StartNew();
+            Stopwatch stopwatch = Stopwatch.StartNew();
             Log log = new Log();
+            diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_PANEL_METADATA: Supplied {0} panel(s) and {1} existing space(s). Panel OCCT path will match supplied spaces after OCCT cell creation and otherwise use auto-generated names.", panels?.Count ?? 0, spaces?.Count ?? 0));
             AdjacencyCluster adjacencyCluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(spaces, panels, out OcctCellComplexResult result, log, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance });
-            List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList();
+            diagnostics.Add(string.Format("SAM_OCCT_TIMING_OCCT_AND_ADJACENCY: {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
+
+            if (result?.Diagnostics != null)
+            {
+                diagnostics.AddRange(result.Diagnostics.Select(x => x.ToString()));
+            }
+
+            if (adjacencyCluster == null)
+            {
+                diagnostics.Add("SAM_OCCT_ANALYTICAL_PANEL_REBUILD_FAILED: OCCT could not create a valid adjacency cluster from the supplied panels.");
+            }
+            else
+            {
+                diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_PANEL_SUCCESS: Created adjacency cluster with {0} space(s) and {1} panel(s).", adjacencyCluster.GetSpaces()?.Count ?? 0, adjacencyCluster.GetPanels()?.Count ?? 0));
+            }
+            diagnostics.Add(string.Format("SAM_OCCT_TIMING_TOTAL: {0:0.000}s.", stopwatch_Total.Elapsed.TotalSeconds));
 
             dataAccess.SetData(0, adjacencyCluster == null ? null : new GooAdjacencyCluster(adjacencyCluster));
             dataAccess.SetDataList(1, diagnostics);
             dataAccess.SetData(2, adjacencyCluster != null);
 
-            if (diagnostics != null)
+            foreach (string diagnostic in diagnostics)
             {
-                foreach (string diagnostic in diagnostics)
-                {
-                    AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, diagnostic);
-                }
+                AddRuntimeMessage(adjacencyCluster == null ? GH_RuntimeMessageLevel.Warning : GH_RuntimeMessageLevel.Remark, diagnostic);
             }
         }
     }

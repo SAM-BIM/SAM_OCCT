@@ -39,15 +39,24 @@ Analytical:
 - `SAMOCCT.PanelsFromShells`
 
 Both adjacency components expose `tolerance_` and `fuzzyTolerance_` as the main
-OCCT controls. `SAMOCCT.CreateAdjacencyClusterByShells` also keeps advanced SAM
-rebuild inputs such as `maxDistance_`, `maxAngle_`, and `minArea_`; these are
-used after OCCT creates cells, when SAM rebuilds spaces, panels, and adjacency
-relations.
+OCCT controls. `SAMOCCT.CreateAdjacencyClusterByShells` also retains advanced
+SAM rebuild inputs such as `maxDistance_`, `maxAngle_`, and `minArea_` for
+compatibility with older Grasshopper definitions and fallback rebuilds.
+The shell-native direct topology path normally uses `maxAngle_` and `minArea_`,
+but not `maxDistance_`.
 
-The current analytical workflow uses OCCT to create closed cells, then decodes
-those cells back into SAM geometry for adjacency reconstruction. A future direct
-OCCT topology workflow can reduce this rebuild step by carrying cell-face
-ownership into SAM explicitly.
+The current analytical workflow uses OCCT to create closed cells, decodes
+cell-face ownership into SAM geometry, and builds the analytical
+`AdjacencyCluster` directly from that OCCT topology when possible.
+Decoded `OcctCell`s contain keyed `OcctCellFace`s, and matching face keys are
+reported as `FaceAdjacencies`. The current Grasshopper diagnostics include
+`SAM_OCCT_TOPOLOGY` so large models can show how many shared OCCT face
+relations were decoded before SAM creates spaces, panels, and relations.
+
+`SAM.Analytical.OCCT` now tries to build the analytical `AdjacencyCluster`
+directly from this OCCT topology first. If successful, diagnostics include
+`SAM_OCCT_ANALYTICAL_DIRECT_SUCCESS`; if not, the component falls back to the
+older SAM geometric rebuild and reports `SAM_OCCT_ANALYTICAL_DIRECT_FALLBACK`.
 
 ## Modeling Guide
 

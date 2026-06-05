@@ -6,6 +6,7 @@ using SAM.Core.OCCT;
 using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace SAM.Analytical.OCCT
@@ -27,7 +28,9 @@ namespace SAM.Analytical.OCCT
             options = options == null ? new OcctBuildOptions() : new OcctBuildOptions(options);
             List<Space> spaces_Temp = spaces?.Where(x => x != null).ToList();
 
+            Stopwatch stopwatch = Stopwatch.StartNew();
             List<Shell> shells = Geometry.OCCT.Create.CellComplexByPanels(panels_Temp, out cellComplexResult, options);
+            cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_NATIVE_CELL_BUILD", string.Format("OCCT cell build and decode took {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
             if (shells == null || shells.Count == 0)
             {
                 if (log != null && cellComplexResult?.Diagnostics != null)
@@ -45,16 +48,31 @@ namespace SAM.Analytical.OCCT
 
             if (log != null)
             {
-                Core.Modify.Add(log, "OCCT created {0} closed shell(s). Rebuilding SAM adjacency cluster.", shells.Count);
+                Core.Modify.Add(log, "OCCT created {0} closed shell(s). Building SAM adjacency cluster.", shells.Count);
             }
 
-            cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_REBUILD", string.Format("Rebuilding SAM adjacency cluster from {0} OCCT shell(s).", shells.Count));
+            cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_BUILD", string.Format("Building SAM adjacency cluster from {0} OCCT shell(s).", shells.Count));
             if (spaces_Temp != null && spaces_Temp.Count != 0 && spaces_Temp.Count != shells.Count)
             {
                 cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_CELL_SPACE_DELTA", string.Format("Seed space count ({0}) differs from OCCT cell count ({1}). This usually means OCCT merged, rejected, or could not close at least one intended cell.", spaces_Temp.Count, shells.Count));
             }
 
-            AdjacencyCluster adjacencyCluster = global::SAM.Analytical.Create.AdjacencyCluster(
+            stopwatch.Restart();
+            AdjacencyCluster adjacencyCluster = DirectAdjacencyCluster(cellComplexResult, spaces_Temp, options, minArea, maxAngle);
+            if (adjacencyCluster != null)
+            {
+                cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_REBUILD", string.Format("Direct SAM topology rebuild took {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
+                int directSpaceCount = adjacencyCluster.GetSpaces()?.Count ?? 0;
+                int directPanelCount = adjacencyCluster.GetPanels()?.Count ?? 0;
+                cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_DIRECT_SUCCESS", string.Format("Created SAM adjacency cluster directly from OCCT topology with {0} space(s), {1} panel(s), and {2} shared face relation(s).", directSpaceCount, directPanelCount, cellComplexResult.FaceAdjacencies?.Count ?? 0));
+                return adjacencyCluster;
+            }
+
+            cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_REBUILD", string.Format("Direct SAM topology rebuild attempt took {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
+            cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_DIRECT_FALLBACK", "Direct OCCT topology rebuild failed or had no usable cell-face topology. Falling back to SAM geometric rebuild.");
+
+            stopwatch.Restart();
+            adjacencyCluster = global::SAM.Analytical.Create.AdjacencyCluster(
                 shells,
                 spaces_Temp,
                 panels_Temp,
@@ -66,6 +84,7 @@ namespace SAM.Analytical.OCCT
                 maxAngle: maxAngle,
                 silverSpacing: options.FuzzyTolerance,
                 tolerance_Distance: options.Tolerance);
+            cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_GEOMETRIC_REBUILD", string.Format("Fallback SAM geometric rebuild took {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
 
             if (log != null)
             {
@@ -96,6 +115,364 @@ namespace SAM.Analytical.OCCT
             }
 
             return adjacencyCluster;
+        }
+
+        public static AdjacencyCluster AdjacencyCluster(IEnumerable<Shell> shells, IEnumerable<Space> spaces, out OcctCellComplexResult cellComplexResult, Log log = null, OcctBuildOptions options = null, IEnumerable<string> names = null, double minArea = Tolerance.MacroDistance, double maxAngle = 0.0872664626)
+        {
+            cellComplexResult = null;
+
+            List<Shell> shells_Temp = shells?.Where(x => x != null).ToList();
+            if (shells_Temp == null || shells_Temp.Count == 0)
+            {
+                cellComplexResult = new OcctCellComplexResult();
+                cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_ANALYTICAL_SHELL_INPUT_EMPTY", "No shells were supplied for adjacency cluster creation.");
+                return null;
+            }
+
+            options = options == null ? new OcctBuildOptions() : new OcctBuildOptions(options);
+            List<Space> spaces_Temp = spaces?.Where(x => x != null).ToList();
+            List<string> names_Temp = names?.ToList();
+
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            List<Face3D> face3Ds = new List<Face3D>();
+            foreach (Shell shell in shells_Temp)
+            {
+                List<Face3D> face3Ds_Temp = shell.Face3Ds;
+                if (face3Ds_Temp == null)
+                {
+                    continue;
+                }
+
+                foreach (Face3D face3D in face3Ds_Temp)
+                {
+                    if (face3D == null)
+                    {
+                        continue;
+                    }
+
+                    double area = face3D.GetArea();
+                    if (!double.IsNaN(area) && area < minArea)
+                    {
+                        continue;
+                    }
+
+                    face3Ds.Add(face3D);
+                }
+            }
+            cellComplexResult = new OcctCellComplexResult();
+            cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_SHELL_FACES", string.Format("Extracted {0} face(s) directly from {1} shell(s).", face3Ds.Count, shells_Temp.Count));
+            cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_SHELL_FACE_EXTRACTION", string.Format("Shell face extraction took {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
+
+            if (face3Ds.Count == 0)
+            {
+                cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_ANALYTICAL_SHELL_NO_FACES", "No usable shell Face3D geometry could be extracted.");
+                return null;
+            }
+
+            stopwatch.Restart();
+            List<Shell> occtShells = Geometry.OCCT.Create.Shells(face3Ds, out cellComplexResult, options);
+            cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_NATIVE_CELL_BUILD", string.Format("OCCT cell build and decode took {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
+            if (occtShells == null || occtShells.Count == 0)
+            {
+                if (log != null && cellComplexResult?.Diagnostics != null)
+                {
+                    foreach (OcctDiagnostic diagnostic in cellComplexResult.Diagnostics)
+                    {
+                        Core.Modify.Add(log, diagnostic.ToString());
+                    }
+                }
+
+                return null;
+            }
+
+            cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_INPUT", string.Format("Received {0} shell face(s), {1} seed space(s), and {2} name(s) for OCCT adjacency creation.", face3Ds.Count, spaces_Temp?.Count ?? 0, names_Temp?.Count ?? 0));
+            cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_BUILD", string.Format("Building SAM adjacency cluster from {0} OCCT shell(s).", occtShells.Count));
+            if (spaces_Temp != null && spaces_Temp.Count != 0 && spaces_Temp.Count != occtShells.Count)
+            {
+                cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_CELL_SPACE_DELTA", string.Format("Seed space count ({0}) differs from OCCT cell count ({1}). This usually means OCCT merged, rejected, or could not close at least one intended cell.", spaces_Temp.Count, occtShells.Count));
+            }
+            else if ((spaces_Temp == null || spaces_Temp.Count == 0) && shells_Temp.Count != occtShells.Count)
+            {
+                cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_CELL_SPACE_DELTA", string.Format("Input shell count ({0}) differs from OCCT cell count ({1}). This usually means OCCT merged, rejected, or could not close at least one intended cell.", shells_Temp.Count, occtShells.Count));
+            }
+
+            stopwatch.Restart();
+            AdjacencyCluster adjacencyCluster = DirectAdjacencyCluster(cellComplexResult, spaces_Temp, options, minArea, maxAngle, names_Temp);
+            if (adjacencyCluster == null)
+            {
+                cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_ANALYTICAL_DIRECT_FAILED", "OCCT produced closed shells, but the direct SAM topology rebuild failed.");
+                return null;
+            }
+
+            cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_REBUILD", string.Format("Direct SAM topology rebuild took {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
+            int directSpaceCount = adjacencyCluster.GetSpaces()?.Count ?? 0;
+            int directPanelCount = adjacencyCluster.GetPanels()?.Count ?? 0;
+            cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_DIRECT_SUCCESS", string.Format("Created SAM adjacency cluster directly from OCCT topology with {0} space(s), {1} panel(s), and {2} shared face relation(s).", directSpaceCount, directPanelCount, cellComplexResult.FaceAdjacencies?.Count ?? 0));
+            return adjacencyCluster;
+        }
+
+        private static AdjacencyCluster DirectAdjacencyCluster(OcctCellComplexResult cellComplexResult, List<Space> seedSpaces, OcctBuildOptions options, double minArea, double toleranceAngle, List<string> names = null)
+        {
+            if (cellComplexResult?.Cells == null || cellComplexResult.Cells.Count == 0)
+            {
+                return null;
+            }
+
+            AdjacencyCluster result = new AdjacencyCluster();
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            List<Space> spaces = CreateSpaces(cellComplexResult, seedSpaces, options, names);
+            if (spaces == null || spaces.Count != cellComplexResult.Cells.Count)
+            {
+                return null;
+            }
+
+            cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_CREATE_SPACES", string.Format("Direct rebuild created {0} space object(s) in {1:0.000}s.", spaces.Count, stopwatch.Elapsed.TotalSeconds));
+
+            stopwatch.Restart();
+            for (int i = 0; i < spaces.Count; i++)
+            {
+                result.AddObject(spaces[i]);
+            }
+            cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_ADD_SPACES", string.Format("Direct rebuild added {0} space object(s) to the adjacency cluster in {1:0.000}s.", spaces.Count, stopwatch.Elapsed.TotalSeconds));
+
+            stopwatch.Restart();
+            Dictionary<int, Panel> panels = CreatePanels(cellComplexResult, minArea, toleranceAngle);
+            if (panels == null || panels.Count == 0)
+            {
+                return null;
+            }
+
+            foreach (Panel panel in panels.Values)
+            {
+                result.AddObject(panel);
+            }
+            cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_PANELS", string.Format("Direct rebuild created and added {0} panel(s) in {1:0.000}s.", panels.Count, stopwatch.Elapsed.TotalSeconds));
+
+            stopwatch.Restart();
+            int relationCount = 0;
+            for (int cellIndex = 0; cellIndex < cellComplexResult.Cells.Count; cellIndex++)
+            {
+                IReadOnlyList<OcctCellFace> faces = cellComplexResult.Cells[cellIndex].Faces;
+                if (faces == null)
+                {
+                    continue;
+                }
+
+                foreach (OcctCellFace face in faces)
+                {
+                    if (face == null || face.TopologyKey == 0)
+                    {
+                        continue;
+                    }
+
+                    if (!panels.TryGetValue(face.TopologyKey, out Panel panel))
+                    {
+                        continue;
+                    }
+
+                    if (result.AddRelation(spaces[cellIndex], panel))
+                    {
+                        relationCount++;
+                    }
+                }
+            }
+
+            if (relationCount == 0)
+            {
+                return null;
+            }
+            cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_RELATIONS", string.Format("Direct rebuild added {0} space-panel relation(s) in {1:0.000}s.", relationCount, stopwatch.Elapsed.TotalSeconds));
+
+            stopwatch.Restart();
+            result = result.UpdateNormals(false, true, false, options.FuzzyTolerance, options.Tolerance);
+            result.Normalize(false);
+            result.UpdatePanelTypes(0);
+            result.SetDefaultConstructionByPanelType();
+            cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_FINALIZE", string.Format("Direct rebuild finalized normals, panel types, and constructions in {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
+
+            return result;
+        }
+
+        private static List<Space> CreateSpaces(OcctCellComplexResult cellComplexResult, List<Space> seedSpaces, OcctBuildOptions options, List<string> names = null)
+        {
+            List<Space> result = new List<Space>();
+            HashSet<System.Guid> usedSeedSpaceGuids = new HashSet<System.Guid>();
+            HashSet<string> usedNames = new HashSet<string>();
+            int count = 1;
+            int centerLocationCount = 0;
+            int boundingBoxLocationCount = 0;
+            int fallbackLocationCount = 0;
+            Stopwatch fallbackStopwatch = new Stopwatch();
+
+            for (int i = 0; i < cellComplexResult.Cells.Count; i++)
+            {
+                OcctCell cell = cellComplexResult.Cells[i];
+                Shell shell = cell?.Shell;
+                if (shell == null)
+                {
+                    return null;
+                }
+
+                Point3D location = cell.Center == null ? null : new Point3D(cell.Center);
+                if (location != null)
+                {
+                    centerLocationCount++;
+                }
+
+                if (location == null)
+                {
+                    location = BoundingBoxCenter(cell);
+                    if (location != null)
+                    {
+                        boundingBoxLocationCount++;
+                    }
+                }
+
+                if (location == null)
+                {
+                    fallbackStopwatch.Start();
+                    location = shell.InternalPoint3D(options.FuzzyTolerance, options.Tolerance);
+                    fallbackStopwatch.Stop();
+                    fallbackLocationCount++;
+                }
+
+                if (location == null)
+                {
+                    return null;
+                }
+
+                Space space = FindSeedSpace(shell, seedSpaces, usedSeedSpaceGuids, options);
+                if (space != null)
+                {
+                    System.Guid seedSpaceGuid = space.Guid;
+                    space = new Space(space, space.Name, location);
+                    usedSeedSpaceGuids.Add(seedSpaceGuid);
+                }
+                else
+                {
+                    string name = null;
+                    if (names != null && i < names.Count && !string.IsNullOrWhiteSpace(names[i]))
+                    {
+                        name = names[i];
+                    }
+
+                    if (string.IsNullOrWhiteSpace(name) || usedNames.Contains(name))
+                    {
+                        do
+                        {
+                            name = string.Format("Cell {0}", count);
+                            count++;
+                        }
+                        while (usedNames.Contains(name));
+                    }
+
+                    space = new Space(name, location);
+                }
+
+                usedNames.Add(space.Name);
+
+                if (!double.IsNaN(cell.Volume))
+                {
+                    space.SetValue(SpaceParameter.Volume, System.Math.Abs(cell.Volume));
+                }
+
+                result.Add(space);
+            }
+
+            cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_SPACE_LOCATIONS", string.Format("Used {0} OCCT cell center location(s), {1} decoded shell bounding-box center location(s), and {2} SAM fallback internal point location(s). Fallback location search took {3:0.000}s.", centerLocationCount, boundingBoxLocationCount, fallbackLocationCount, fallbackStopwatch.Elapsed.TotalSeconds));
+
+            return result;
+        }
+
+        private static Point3D BoundingBoxCenter(OcctCell cell)
+        {
+            List<BoundingBox3D> boundingBox3Ds = new List<BoundingBox3D>();
+            IReadOnlyList<OcctCellFace> faces = cell?.Faces;
+            if (faces == null || faces.Count == 0)
+            {
+                return cell?.Shell?.GetBoundingBox()?.GetCentroid();
+            }
+
+            foreach (OcctCellFace face in faces)
+            {
+                BoundingBox3D boundingBox3D = face?.Face3D?.GetBoundingBox();
+                if (boundingBox3D != null && boundingBox3D.IsValid())
+                {
+                    boundingBox3Ds.Add(boundingBox3D);
+                }
+            }
+
+            if (boundingBox3Ds.Count == 0)
+            {
+                return cell?.Shell?.GetBoundingBox()?.GetCentroid();
+            }
+
+            return new BoundingBox3D(boundingBox3Ds).GetCentroid();
+        }
+
+        private static Space FindSeedSpace(Shell shell, List<Space> seedSpaces, HashSet<System.Guid> usedSeedSpaceGuids, OcctBuildOptions options)
+        {
+            if (shell == null || seedSpaces == null || seedSpaces.Count == 0)
+            {
+                return null;
+            }
+
+            foreach (Space seedSpace in seedSpaces)
+            {
+                if (seedSpace == null || seedSpace.Location == null || usedSeedSpaceGuids.Contains(seedSpace.Guid))
+                {
+                    continue;
+                }
+
+                if (shell.Inside(seedSpace.Location, options.FuzzyTolerance, options.Tolerance) || shell.On(seedSpace.Location, options.Tolerance))
+                {
+                    return seedSpace;
+                }
+            }
+
+            return null;
+        }
+
+        private static Dictionary<int, Panel> CreatePanels(OcctCellComplexResult cellComplexResult, double minArea, double toleranceAngle)
+        {
+            Dictionary<int, Panel> result = new Dictionary<int, Panel>();
+            foreach (OcctCell cell in cellComplexResult.Cells)
+            {
+                IReadOnlyList<OcctCellFace> faces = cell?.Faces;
+                if (faces == null)
+                {
+                    continue;
+                }
+
+                foreach (OcctCellFace cellFace in faces)
+                {
+                    if (cellFace == null || cellFace.TopologyKey == 0 || cellFace.Face3D == null || result.ContainsKey(cellFace.TopologyKey))
+                    {
+                        continue;
+                    }
+
+                    double area = cellFace.Face3D.GetArea();
+                    if (!double.IsNaN(area) && area < minArea)
+                    {
+                        continue;
+                    }
+
+                    PanelType panelType = Query.PanelType(cellFace.Face3D.GetPlane()?.Normal, toleranceAngle);
+                    if (panelType == PanelType.Undefined)
+                    {
+                        panelType = PanelType.Air;
+                    }
+
+                    Construction construction = Query.DefaultConstruction(panelType);
+                    Panel panel = global::SAM.Analytical.Create.Panel(construction, panelType, cellFace.Face3D);
+                    if (panel != null)
+                    {
+                        result[cellFace.TopologyKey] = panel;
+                    }
+                }
+            }
+
+            return result;
         }
     }
 }

@@ -96,7 +96,16 @@ SAM_OCCT_API int sam_occt_result_cell_face_count(void* result_handle, int cell_i
 
 SAM_OCCT_API double sam_occt_result_cell_volume(void* result_handle, int cell_index);
 
+SAM_OCCT_API int sam_occt_result_cell_center(
+    void* result_handle,
+    int cell_index,
+    double* x,
+    double* y,
+    double* z);
+
 SAM_OCCT_API int sam_occt_result_face_loop_count(void* result_handle, int cell_index, int face_index);
+
+SAM_OCCT_API int sam_occt_result_face_key(void* result_handle, int cell_index, int face_index);
 
 SAM_OCCT_API int sam_occt_result_loop_point_count(void* result_handle, int cell_index, int face_index, int loop_index);
 

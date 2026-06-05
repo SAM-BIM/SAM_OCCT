@@ -27,7 +27,13 @@
 #include <gp_Pnt.hxx>
 
 #include <cmath>
+#include <algorithm>
+#include <cstdint>
+#include <limits>
+#include <map>
 #include <memory>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace
@@ -47,6 +53,7 @@ namespace
     struct Face
     {
         std::vector<Loop> loops;
+        int key = 0;
     };
 
     struct Cell
@@ -58,6 +65,8 @@ namespace
     struct Result
     {
         std::vector<Cell> cells;
+        std::map<std::string, int> face_keys;
+        int next_face_key = 1;
     };
 
     bool is_valid_index(int index, int count)
@@ -140,7 +149,59 @@ namespace
         return loop;
     }
 
-    Face extract_face(const TopoDS_Face& topods_face)
+    long long quantize(double value, double tolerance)
+    {
+        const double safe_tolerance = tolerance > 0 ? tolerance : 1e-9;
+        return static_cast<long long>(std::llround(value / safe_tolerance));
+    }
+
+    std::string face_signature(const Face& face, double tolerance)
+    {
+        std::vector<std::string> points;
+        for (const Loop& loop : face.loops)
+        {
+            for (const Point& point : loop.points)
+            {
+                std::ostringstream stream;
+                stream << quantize(point.x, tolerance) << ','
+                       << quantize(point.y, tolerance) << ','
+                       << quantize(point.z, tolerance);
+                points.push_back(stream.str());
+            }
+        }
+
+        std::sort(points.begin(), points.end());
+        points.erase(std::unique(points.begin(), points.end()), points.end());
+
+        std::ostringstream stream;
+        for (const std::string& point : points)
+        {
+            stream << point << ';';
+        }
+
+        return stream.str();
+    }
+
+    int get_face_key(Result& result, const Face& face, double tolerance)
+    {
+        std::string signature = face_signature(face, tolerance);
+        if (signature.empty())
+        {
+            return 0;
+        }
+
+        std::map<std::string, int>::const_iterator iterator = result.face_keys.find(signature);
+        if (iterator != result.face_keys.end())
+        {
+            return iterator->second;
+        }
+
+        const int key = result.next_face_key++;
+        result.face_keys[signature] = key;
+        return key;
+    }
+
+    Face extract_face(const TopoDS_Face& topods_face, Result& result, double tolerance)
     {
         Face face;
         for (TopExp_Explorer explorer(topods_face, TopAbs_WIRE); explorer.More(); explorer.Next())
@@ -152,6 +213,7 @@ namespace
             }
         }
 
+        face.key = get_face_key(result, face, tolerance);
         return face;
     }
 
@@ -162,10 +224,9 @@ namespace
         GProp_GProps properties;
         BRepGProp::VolumeProperties(solid, properties);
         cell.volume = properties.Mass();
-
         for (TopExp_Explorer face_explorer(solid, TopAbs_FACE); face_explorer.More(); face_explorer.Next())
         {
-            Face face = extract_face(TopoDS::Face(face_explorer.Current()));
+            Face face = extract_face(TopoDS::Face(face_explorer.Current()), result, tolerance);
             if (!face.loops.empty())
             {
                 cell.faces.push_back(face);
@@ -332,7 +393,7 @@ int sam_occt_build_cell_complex(
 
             for (TopExp_Explorer face_explorer(solid, TopAbs_FACE); face_explorer.More(); face_explorer.Next())
             {
-                Face face = extract_face(TopoDS::Face(face_explorer.Current()));
+                Face face = extract_face(TopoDS::Face(face_explorer.Current()), *result, tolerance);
                 if (!face.loops.empty())
                 {
                     cell.faces.push_back(face);
@@ -718,6 +779,64 @@ double sam_occt_result_cell_volume(void* result_handle, int cell_index)
     return result->cells[cell_index].volume;
 }
 
+int sam_occt_result_cell_center(
+    void* result_handle,
+    int cell_index,
+    double* x,
+    double* y,
+    double* z)
+{
+    const Result* result = static_cast<const Result*>(result_handle);
+    if (result == nullptr || x == nullptr || y == nullptr || z == nullptr || !is_valid_index(cell_index, static_cast<int>(result->cells.size())))
+    {
+        return 0;
+    }
+
+    const Cell& cell = result->cells[cell_index];
+    bool has_point = false;
+    double xmin = 0;
+    double ymin = 0;
+    double zmin = 0;
+    double xmax = 0;
+    double ymax = 0;
+    double zmax = 0;
+    for (const Face& face : cell.faces)
+    {
+        for (const Loop& loop : face.loops)
+        {
+            for (const Point& point : loop.points)
+            {
+                if (!has_point)
+                {
+                    xmin = xmax = point.x;
+                    ymin = ymax = point.y;
+                    zmin = zmax = point.z;
+                    has_point = true;
+                }
+                else
+                {
+                    xmin = std::min(xmin, point.x);
+                    ymin = std::min(ymin, point.y);
+                    zmin = std::min(zmin, point.z);
+                    xmax = std::max(xmax, point.x);
+                    ymax = std::max(ymax, point.y);
+                    zmax = std::max(zmax, point.z);
+                }
+            }
+        }
+    }
+
+    if (!has_point)
+    {
+        return 0;
+    }
+
+    *x = (xmin + xmax) * 0.5;
+    *y = (ymin + ymax) * 0.5;
+    *z = (zmin + zmax) * 0.5;
+    return 1;
+}
+
 int sam_occt_result_face_loop_count(void* result_handle, int cell_index, int face_index)
 {
     const Result* result = static_cast<const Result*>(result_handle);
@@ -733,6 +852,23 @@ int sam_occt_result_face_loop_count(void* result_handle, int cell_index, int fac
     }
 
     return static_cast<int>(cell.faces[face_index].loops.size());
+}
+
+int sam_occt_result_face_key(void* result_handle, int cell_index, int face_index)
+{
+    const Result* result = static_cast<const Result*>(result_handle);
+    if (result == nullptr || !is_valid_index(cell_index, static_cast<int>(result->cells.size())))
+    {
+        return 0;
+    }
+
+    const Cell& cell = result->cells[cell_index];
+    if (!is_valid_index(face_index, static_cast<int>(cell.faces.size())))
+    {
+        return 0;
+    }
+
+    return cell.faces[face_index].key;
 }
 
 int sam_occt_result_loop_point_count(void* result_handle, int cell_index, int face_index, int loop_index)

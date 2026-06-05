@@ -73,19 +73,41 @@ creates names like `Cell 1`, `Cell 2`, and so on.
 
 Useful diagnostics:
 
-- `SAM_OCCT_ANALYTICAL_SHELL_METADATA`: reports supplied spaces/names, matched
-  existing spaces, supplied names used, and auto-named spaces.
-- `SAM_OCCT_ANALYTICAL_SHELL_PANELS`: reports extracted panels and seed spaces.
-- `SAM_OCCT_ANALYTICAL_INPUT`: reports the panel and seed-space count sent into
-  the OCCT adjacency builder.
+- `SAM_OCCT_ANALYTICAL_SHELL_METADATA`: reports supplied spaces/names and the
+  shell-native matching/naming strategy.
+- `SAM_OCCT_ANALYTICAL_PANEL_METADATA`: reports supplied panels/spaces and the
+  panel-based matching/naming strategy.
+- `SAM_OCCT_ANALYTICAL_INPUT`: reports the shell-face or panel count, seed
+  space count, and optional name count sent into the OCCT adjacency builder.
+- `SAM_OCCT_ANALYTICAL_BUILD`: reports that SAM adjacency creation is starting
+  from decoded OCCT cells.
 - `SAM_OCCT_ANALYTICAL_CELL_SPACE_DELTA`: warns when seed-space count differs
   from OCCT cell count.
 - `SAM_OCCT_ANALYTICAL_REBUILD_SPACE_DELTA`: warns when final SAM space count
   differs from OCCT shell count.
-- `SAM_OCCT_TIMING_PANEL_EXTRACTION`: time spent converting shells into panels
-  and seed spaces.
+- `SAM_OCCT_TOPOLOGY`: reports how many shared OCCT face adjacency relations
+  were decoded from the native cell result.
+- `SAM_OCCT_CELL_CENTERS`: reports how many decoded OCCT cells exported a
+  native center candidate.
+- `SAM_OCCT_ANALYTICAL_SPACE_LOCATIONS`: reports whether spaces used native
+  OCCT centers, decoded-shell bounding-box centers, or the slower SAM internal
+  point fallback.
+- `SAM_OCCT_ANALYTICAL_DIRECT_SUCCESS`: reports that the SAM adjacency cluster
+  was built directly from OCCT cell-face topology.
+- `SAM_OCCT_ANALYTICAL_DIRECT_FALLBACK`: reports that direct topology rebuild
+  could not be used and SAM fell back to geometric adjacency rebuild.
+- `SAM_OCCT_ANALYTICAL_PANEL_SUCCESS`: reports final space/panel counts from
+  `SAMOCCT.CreateAdjacencyCluster`.
+- `SAM_OCCT_ANALYTICAL_PANEL_REBUILD_FAILED`: reports that
+  `SAMOCCT.CreateAdjacencyCluster` could not produce a valid adjacency cluster.
 - `SAM_OCCT_TIMING_OCCT_AND_ADJACENCY`: time spent in the OCCT cell build and
   SAM adjacency creation.
+- `SAM_OCCT_TIMING_NATIVE_CELL_BUILD`: time spent in native OCCT cell creation
+  and managed cell decode.
+- `SAM_OCCT_TIMING_DIRECT_REBUILD`: time spent building SAM spaces, panels, and
+  relations directly from OCCT topology.
+- `SAM_OCCT_TIMING_GEOMETRIC_REBUILD`: time spent in fallback SAM geometric
+  rebuild, only reported when direct topology rebuild cannot be used.
 - `SAM_OCCT_TIMING_POST_PROCESS`: time spent cutting at ground elevation,
   updating panel types, and assigning default constructions.
 - `SAM_OCCT_TIMING_TOTAL`: total component time.
@@ -152,12 +174,14 @@ In `SAMOCCT.CreateAdjacencyClusterByShells`, the main geometry tolerances are:
 
 - `tolerance_`: base OCCT/SAM model tolerance.
 - `fuzzyTolerance_`: OCCT fuzzy tolerance, also used as SAM silver spacing when
-  finding shell internal points and matching existing space locations.
+  matching existing space locations and as a final fallback for shell internal
+  point searches.
 
 The other numeric inputs are advanced SAM rebuild controls, not OCCT build
 tolerances:
 
-- `maxDistance_`: how far SAM may search when matching rebuilt panels.
+- `maxDistance_`: compatibility input for legacy geometric rebuilds. The
+  shell-native direct topology path normally does not use this value.
 - `maxAngle_`: angular tolerance for panel matching.
 - `minArea_`: filters tiny faces before and during analytical rebuild.
 

@@ -371,7 +371,13 @@ namespace SAM.Geometry.OCCT.Native
             public static extern double sam_occt_result_cell_volume(IntPtr resultHandle, int cellIndex);
 
             [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+            public static extern int sam_occt_result_cell_center(IntPtr resultHandle, int cellIndex, out double x, out double y, out double z);
+
+            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
             public static extern int sam_occt_result_face_loop_count(IntPtr resultHandle, int cellIndex, int faceIndex);
+
+            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+            public static extern int sam_occt_result_face_key(IntPtr resultHandle, int cellIndex, int faceIndex);
 
             [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
             public static extern int sam_occt_result_loop_point_count(IntPtr resultHandle, int cellIndex, int faceIndex, int loopIndex);
@@ -391,16 +397,18 @@ namespace SAM.Geometry.OCCT.Native
 
             for (int cellIndex = 0; cellIndex < cellCount; cellIndex++)
             {
-                List<Face3D> face3Ds = DecodeFaces(resultHandle, cellIndex, result);
-                if (face3Ds == null || face3Ds.Count == 0)
+                List<OcctCellFace> faces = DecodeFaces(resultHandle, cellIndex, result);
+                if (faces == null || faces.Count == 0)
                 {
                     result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_CELL_NO_FACES", "Native OCCT cell did not contain any decodable faces.", cellIndex);
                     continue;
                 }
 
+                List<Face3D> face3Ds = faces.ConvertAll(x => x.Face3D);
                 Shell shell = new Shell(face3Ds);
                 double volume = NativeMethods.sam_occt_result_cell_volume(resultHandle, cellIndex);
-                result.AddCell(new OcctCell(shell, volume));
+                Point3D center = DecodeCellCenter(resultHandle, cellIndex);
+                result.AddCell(new OcctCell(shell, volume, null, faces, center));
             }
 
             if (result.Cells.Count == 0)
@@ -409,14 +417,28 @@ namespace SAM.Geometry.OCCT.Native
                 return false;
             }
 
+            result.BuildFaceAdjacencies();
             result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SUCCESS", string.Format("Decoded {0} OCCT cell(s).", result.Cells.Count));
+            result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TOPOLOGY", string.Format("Decoded {0} shared OCCT face adjacency relation(s).", result.FaceAdjacencies.Count));
+            result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_CELL_CENTERS", string.Format("Decoded {0} OCCT cell center candidate(s).", result.Cells.Count(x => x.Center != null)));
             return true;
         }
 
-        private static List<Face3D> DecodeFaces(IntPtr resultHandle, int cellIndex, OcctCellComplexResult result)
+        private static Point3D DecodeCellCenter(IntPtr resultHandle, int cellIndex)
+        {
+            int success = NativeMethods.sam_occt_result_cell_center(resultHandle, cellIndex, out double x, out double y, out double z);
+            if (success == 0 || double.IsNaN(x) || double.IsNaN(y) || double.IsNaN(z))
+            {
+                return null;
+            }
+
+            return new Point3D(x, y, z);
+        }
+
+        private static List<OcctCellFace> DecodeFaces(IntPtr resultHandle, int cellIndex, OcctCellComplexResult result)
         {
             int faceCount = NativeMethods.sam_occt_result_cell_face_count(resultHandle, cellIndex);
-            List<Face3D> face3Ds = new List<Face3D>();
+            List<OcctCellFace> faces = new List<OcctCellFace>();
 
             for (int faceIndex = 0; faceIndex < faceCount; faceIndex++)
             {
@@ -433,10 +455,11 @@ namespace SAM.Geometry.OCCT.Native
                     continue;
                 }
 
-                face3Ds.Add(face3D);
+                int topologyKey = NativeMethods.sam_occt_result_face_key(resultHandle, cellIndex, faceIndex);
+                faces.Add(new OcctCellFace(face3D, topologyKey));
             }
 
-            return face3Ds;
+            return faces;
         }
 
         private static List<IClosedPlanar3D> DecodeLoops(IntPtr resultHandle, int cellIndex, int faceIndex)
