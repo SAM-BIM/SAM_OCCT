@@ -1,7 +1,7 @@
 {
   "name": "sam-occt",
   "version-string": "0.1.0",
-  "builtin-baseline": "da1f056dc0775ac651bea7e3fbbf4066146a55f3",
+  "builtin-baseline": "eb35a05cc21c69ec1399f7532b7dd61d271ac0d1",
   "dependencies": [
     "opencascade"
   ]

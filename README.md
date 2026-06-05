@@ -16,11 +16,11 @@ This repository currently provides the first migration foundation:
 - `SAM.Analytical.OCCT`: analytical entry point for future `AdjacencyCluster` rebuild.
 - `SAM.Geometry.Grasshopper.OCCT`: `SAMOCCT.CreateShells`.
 - `SAM.Analytical.Grasshopper.OCCT`: `SAMOCCT.CreateAdjacencyCluster`.
-- `native/SAM.Occt.Native`: C ABI and CMake stub for the future OCCT implementation.
+- `native/SAM.Occt.Native`: C ABI and CMake implementation for the first OCCT cell builder.
 
 The native bridge is intentionally small. SAM business logic stays in C#; C++
-should only convert input loops into OCCT faces, run OCCT volume/cell builders,
-and return shell geometry plus diagnostics.
+only converts input loops into OCCT faces, runs OCCT volume/cell builders, and
+returns shell geometry plus diagnostics.
 
 ## Native implementation target
 
@@ -56,6 +56,37 @@ Build:
 dotnet build SAM_OCCT.sln /p:RestorePackages=false
 ```
 
-The current C# solution builds without the native OCCT DLL. Runtime calls to the
-OCCT builder return diagnostics until `SAM.Occt.Native` is implemented and
-deployed beside the managed assemblies.
+Native build:
+
+```powershell
+.\build-native.ps1
+dotnet build SAM_OCCT.sln /p:RestorePackages=false
+```
+
+The native build writes `SAM.Occt.Native.dll` to `build\`. The Grasshopper
+post-build event then copies `build\*.dll` to `%APPDATA%\SAM`, so Rhino can load
+the managed GH components and the native OCCT bridge from the same folder.
+
+If vcpkg fails while running downloaded tools from `%LOCALAPPDATA%\vcpkg`, use an
+approved Ninja 1.13.1+ executable and pass it explicitly:
+
+```powershell
+.\build-native.ps1 -NinjaPath "C:\tools\ninja\ninja.exe"
+```
+
+On the current workstation, Visual Studio's bundled Ninja is `1.12.1`, while the
+selected vcpkg baseline requires `1.13.1+`. If Windows policy blocks vcpkg's
+downloaded `ninja.exe`, install or approve Ninja separately, then rerun the
+native build.
+
+Alternative without vcpkg package install:
+
+```powershell
+.\build-native.ps1 `
+  -SkipVcpkgInstall `
+  -OpenCascadeDir "C:\OpenCASCADE\cmake" `
+  -OpenCascadeRuntimeBin "C:\OpenCASCADE\bin"
+```
+
+Use this when OCCT headers/libs/runtime DLLs come from an approved internal SDK
+instead of vcpkg.
