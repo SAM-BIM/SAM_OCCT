@@ -73,6 +73,26 @@ namespace SAM.Core.Grasshopper.TMP.Properties {
         /// <summary>
         ///   Looks up a localized resource of type System.Drawing.Bitmap.
         /// </summary>
+        internal static System.Drawing.Bitmap SAM_OCCT {
+            get {
+                object obj = ResourceManager.GetObject("SAM_OCCT", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
+        internal static System.Drawing.Bitmap SAM_OCCT24 {
+            get {
+                object obj = ResourceManager.GetObject("SAM_OCCT24", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
         internal static System.Drawing.Bitmap SAM_Explode {
             get {
                 object obj = ResourceManager.GetObject("SAM_Explode", resourceCulture);

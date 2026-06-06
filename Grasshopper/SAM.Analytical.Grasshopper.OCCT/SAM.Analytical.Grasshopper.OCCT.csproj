@@ -48,6 +48,9 @@
     <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
     <PackageReference Include="System.Drawing.Common" Version="7.0.0" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\SAM_OCCT24.png" />
+  </ItemGroup>
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
     <Exec Command="copy &quot;$(TargetPath)&quot; &quot;$(TargetDir)\$(ProjectName).gha&quot;&#xD;&#xA;&#xD;&#xA;set SAM_DIR=%25APPDATA%25\SAM&#xD;&#xA;if not exist &quot;%25SAM_DIR%25&quot; mkdir &quot;%25SAM_DIR%25&quot;&#xD;&#xA;if not exist &quot;%25APPDATA%25\Grasshopper\Libraries&quot; mkdir &quot;%25APPDATA%25\Grasshopper\Libraries&quot;&#xD;&#xA;&#xD;&#xA;copy &quot;$(TargetDir)*.dll&quot; &quot;%25SAM_DIR%25&quot;&#xD;&#xA;copy &quot;%25SAM_DIR%25\$(ProjectName).dll&quot; &quot;%25SAM_DIR%25\$(ProjectName).gha&quot;&#xD;&#xA;echo %25SAM_DIR%25 &gt; &quot;%25APPDATA%25\Grasshopper\Libraries\SAM.ghlink&quot;&#xD;&#xA;&#xD;&#xA;::erase &quot;%25SAM_DIR%25\$(ProjectName).dll&quot;&#xD;&#xA;::erase &quot;$(TargetPath)&quot;" />
   </Target>

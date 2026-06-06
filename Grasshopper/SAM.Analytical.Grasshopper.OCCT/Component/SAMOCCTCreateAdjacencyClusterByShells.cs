@@ -22,6 +22,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.3.1";
 
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+
         public SAMOCCTCreateAdjacencyClusterByShells()
           : base("SAMOCCT.CreateAdjacencyClusterByShells", "SAMOCCT.CreateAdjacencyClusterByShells", "Create a SAM AdjacencyCluster from closed shell space volumes using OCCT cell building", "SAM", "OCCT")
         {

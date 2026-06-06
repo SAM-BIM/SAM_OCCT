@@ -19,7 +19,7 @@ namespace SAM.Core.Grasshopper.OCCT
             get
             {
                 //Return a 24x24 pixel bitmap to represent this GHA library.
-                return SAM.Core.Grasshopper.TMP.Properties.Resources.HL_Logo24; ;
+                return SAM.Core.Grasshopper.TMP.Properties.Resources.SAM_OCCT24;
             }
         }
 
@@ -28,7 +28,7 @@ namespace SAM.Core.Grasshopper.OCCT
             get
             {
                 //Return a 24x24 pixel bitmap to represent this GHA library.
-                return SAM.Core.Grasshopper.TMP.Properties.Resources.HL_Logo24; ;
+                return SAM.Core.Grasshopper.TMP.Properties.Resources.SAM_OCCT24;
             }
         }
 

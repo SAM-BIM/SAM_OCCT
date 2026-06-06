@@ -17,6 +17,8 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.1";
 
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+
         public SAMOCCTShellsSectionByPlane()
           : base("SAMOCCT.ShellsSectionByPlane", "SAMOCCT.ShellsSectionByPlane", "Create section Face3Ds and split SAM Shells by plane", "SAM", "OCCT")
         {

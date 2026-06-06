@@ -1,11 +1,29 @@
+[![Build (Windows)](https://github.com/SAM-BIM/SAM_OCCT/actions/workflows/build.yml/badge.svg?branch=sow/2026-Q2)](https://github.com/SAM-BIM/SAM_OCCT/actions/workflows/build.yml)
+[![Installer (latest)](https://img.shields.io/github/v/release/SAM-BIM/SAM_Deploy?label=installer)](https://github.com/SAM-BIM/SAM_Deploy/releases/latest)
+
 # SAM_OCCT
 
-Open CASCADE Technology integration for the SAM Toolkit.
+<a href="https://github.com/SAM-BIM/SAM">
+  <img src="Grasshopper/SAM.Core.Grasshopper.OCCT/Resources/SAM_OCCT.png"
+       align="left" hspace="10" vspace="6">
+</a>
 
-SAM_OCCT provides a small native OCCT bridge plus C# and Grasshopper wrappers
-for closed-shell, boolean, and analytical adjacency-cluster workflows. It is
-intended to replace the legacy Topologic dependency where SAM needs robust 3D
-cell and shell operations.
+**SAM_OCCT** is part of the **SAM (Sustainable Analytical Model) Toolkit** -
+an open-source collection of tools designed to help engineers create, manage,
+and process analytical building models for energy and environmental analysis.
+
+This repository provides **integration between SAM analytical/geometry workflows
+and Open CASCADE Technology (OCCT)**, enabling robust closed-shell, boolean,
+cell-complex, and adjacency-cluster operations to be executed through SAM and
+Grasshopper components.
+
+The integration supports native OCCT solid creation, shell operations, result
+decoding, and direct SAM analytical topology reconstruction, and is intended to
+be used alongside the SAM core libraries and related SAM-BIM modules.
+
+Welcome - and let's keep the open-source journey going.
+
+---
 
 ## Projects
 

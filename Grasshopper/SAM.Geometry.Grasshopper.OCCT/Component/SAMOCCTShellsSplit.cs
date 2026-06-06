@@ -17,6 +17,8 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+
         public SAMOCCTShellsSplit()
           : base("SAMOCCT.ShellsSplit", "SAMOCCT.ShellsSplit", "Split overlapping or touching shell volumes into cleaner adjacent pieces", "SAM", "OCCT")
         {

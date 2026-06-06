@@ -11,9 +11,9 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override string Name => "SAM Geometry OCCT";
 
-        public override Bitmap Icon => null;
+        public override Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
-        public override Bitmap AssemblyIcon => null;
+        public override Bitmap AssemblyIcon => SAMOCCTIcon.SAM_OCCT24;
 
         public override string Description => "SAM Geometry tools backed by Open CASCADE Technology.";
 
