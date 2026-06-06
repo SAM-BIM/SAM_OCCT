@@ -87,6 +87,36 @@ jobs:
             & msbuild $sln /t:Rebuild @common
           }
 
+      - name: Run tests (unit always; integration auto-skips without native)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $unit        = 'SAM_OCCT/Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj'
+          $integration = 'SAM_OCCT/Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj'
+
+          # Unit tests must pass. Coverage is collected for reporting (soft gate).
+          dotnet test $unit `
+            -c Release `
+            --logger "trx;LogFileName=unit.trx" `
+            --collect:"XPlat Code Coverage" `
+            --results-directory TestResults
+
+          # Integration tests run real OCCT; they SkippableFact-skip when the
+          # native library is absent, so this step stays green without it.
+          dotnet test $integration `
+            -c Release `
+            --logger "trx;LogFileName=integration.trx" `
+            --results-directory TestResults
+
+      - name: Upload test results & coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SAM_OCCT-test-results
+          path: TestResults/**
+          if-no-files-found: warn
+
       - name: Upload build folders (optional)
         uses: actions/upload-artifact@v4
         with:

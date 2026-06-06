@@ -85,6 +85,26 @@ SAM_OCCT\build
 %APPDATA%\SAM
 ```
 
+## Testing
+
+SAM_OCCT uses a two-tier test method (xUnit):
+
+- **Unit tests** (`Testing/SAM.OCCT.UnitTests`) — fast, no native library
+  required. They cover build options, diagnostics, the managed native-input
+  serializer, the `Query` guard clauses, and the graceful "native missing" path.
+- **Integration tests** (`Testing/SAM.OCCT.IntegrationTests`) — drive the real
+  OCCT boolean/cell-complex operations. They auto-skip when `SAM.Occt.Native`
+  is not present, so they never fail an OCCT-less agent.
+
+```powershell
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj
+```
+
+Unit tests run on every PR via the Build workflow (coverage is collected and
+uploaded as an artifact). See `TESTING.md` for the conventions and how to run
+the integration tests against a built native library.
+
 ## OCCT SDK
 
 `build-native.ps1` auto-detects the default local SDK layout:
