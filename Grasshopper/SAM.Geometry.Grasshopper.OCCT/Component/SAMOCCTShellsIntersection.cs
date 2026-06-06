@@ -14,7 +14,7 @@ using System.Linq;
 
 namespace SAM.Geometry.Grasshopper.OCCT
 {
-    public class SAMOCCTShellsIntersection : GH_SAMComponent
+    public class SAMOCCTShellsIntersection : GH_SAMVariableOutputParameterComponent
     {
         public override Guid ComponentGuid => new Guid("1f28267c-08e7-4aa1-af07-bdd7a6afc5c0");
 
@@ -25,49 +25,94 @@ namespace SAM.Geometry.Grasshopper.OCCT
         {
         }
 
-        protected override void RegisterInputParams(GH_InputParamManager inputParamManager)
+        protected override GH_SAMParam[] Inputs
         {
-            int index = inputParamManager.AddGenericParameter("_shells", "_shells", "Closed target volumes to crop. Accepts SAM Shells or closed Rhino Breps/polysurfaces that convert to SAM Shells.", GH_ParamAccess.list);
-            inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
+            get
+            {
+                List<GH_SAMParam> result = new List<GH_SAMParam>();
 
-            index = inputParamManager.AddGenericParameter("_toolShells", "_toolShells", "Closed mask volumes that define what to keep from _shells. Accepts SAM Shells or closed Rhino Breps/polysurfaces. Surfaces/Face3Ds are not valid here unless first made into closed Shells.", GH_ParamAccess.list);
-            inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
+                global::Grasshopper.Kernel.Parameters.Param_GenericObject shells = new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "_shells", NickName = "_shells", Description = "Closed target volumes to crop. Accepts SAM Shells or closed Rhino Breps/polysurfaces that convert to SAM Shells.", Access = GH_ParamAccess.list };
+                shells.DataMapping = GH_DataMapping.Flatten;
+                result.Add(new GH_SAMParam(shells, ParamVisibility.Binding));
 
-            inputParamManager.AddNumberParameter("tolerance_", "tolerance_", "OCCT build tolerance", GH_ParamAccess.item, Tolerance.Distance);
-            inputParamManager.AddNumberParameter("fuzzyTolerance_", "fuzzyTolerance_", "OCCT fuzzy tolerance", GH_ParamAccess.item, Tolerance.MacroDistance);
-            inputParamManager.AddBooleanParameter("_run", "_run", "Run", GH_ParamAccess.item, false);
+                global::Grasshopper.Kernel.Parameters.Param_GenericObject toolShells = new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "_toolShells", NickName = "_toolShells", Description = "Closed mask volumes that define what to keep from _shells. Accepts SAM Shells or closed Rhino Breps/polysurfaces. Surfaces/Face3Ds are not valid here unless first made into closed Shells.", Access = GH_ParamAccess.list };
+                toolShells.DataMapping = GH_DataMapping.Flatten;
+                result.Add(new GH_SAMParam(toolShells, ParamVisibility.Binding));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT build tolerance", Access = GH_ParamAccess.item };
+                tolerance.SetPersistentData(Tolerance.Distance);
+                result.Add(new GH_SAMParam(tolerance, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number fuzzyTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "fuzzyTolerance_", NickName = "fuzzyTolerance_", Description = "OCCT fuzzy tolerance", Access = GH_ParamAccess.item };
+                fuzzyTolerance.SetPersistentData(Tolerance.MacroDistance);
+                result.Add(new GH_SAMParam(fuzzyTolerance, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Boolean run = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "_run", NickName = "_run", Description = "Run", Access = GH_ParamAccess.item };
+                run.SetPersistentData(false);
+                result.Add(new GH_SAMParam(run, ParamVisibility.Binding));
+
+                return result.ToArray();
+            }
         }
 
-        protected override void RegisterOutputParams(GH_OutputParamManager outputParamManager)
+        protected override GH_SAMParam[] Outputs
         {
-            outputParamManager.AddGenericParameter("Shells", "Shells", "Portions of _shells that overlap _toolShells. Tool shells are used as masks and are not returned directly.", GH_ParamAccess.list);
-            outputParamManager.AddTextParameter("Diagnostics", "Diagnostics", "OCCT diagnostics", GH_ParamAccess.list);
-            outputParamManager.AddBooleanParameter("Successful", "Successful", "Run successfully?", GH_ParamAccess.item);
+            get
+            {
+                List<GH_SAMParam> result = new List<GH_SAMParam>();
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "Shells", NickName = "Shells", Description = "Portions of _shells that overlap _toolShells. Tool shells are used as masks and are not returned directly.", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "Diagnostics", NickName = "Diagnostics", Description = "OCCT diagnostics", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "Successful", NickName = "Successful", Description = "Run successfully?", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
+                return result.ToArray();
+            }
         }
 
         protected override void SolveInstance(IGH_DataAccess dataAccess)
         {
-            dataAccess.SetData(2, false);
+            int index_Successful = Params.IndexOfOutputParam("Successful");
+            if (index_Successful != -1)
+            {
+                dataAccess.SetData(index_Successful, false);
+            }
+
+            int index;
 
             bool run = false;
-            if (!dataAccess.GetData(4, ref run) || !run)
+            index = Params.IndexOfInputParam("_run");
+            if (index == -1 || !dataAccess.GetData(index, ref run) || !run)
             {
                 return;
             }
 
             List<GH_ObjectWrapper> shellWrappers = new List<GH_ObjectWrapper>();
+            index = Params.IndexOfInputParam("_shells");
+            if (index == -1 || !dataAccess.GetDataList(index, shellWrappers))
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Invalid shells");
+                return;
+            }
+
             List<GH_ObjectWrapper> toolWrappers = new List<GH_ObjectWrapper>();
-            if (!dataAccess.GetDataList(0, shellWrappers) || !dataAccess.GetDataList(1, toolWrappers))
+            index = Params.IndexOfInputParam("_toolShells");
+            if (index == -1 || !dataAccess.GetDataList(index, toolWrappers))
             {
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Invalid shells");
                 return;
             }
 
             double tolerance = Tolerance.Distance;
-            dataAccess.GetData(2, ref tolerance);
+            index = Params.IndexOfInputParam("tolerance_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref tolerance);
+            }
 
             double fuzzyTolerance = Tolerance.MacroDistance;
-            dataAccess.GetData(3, ref fuzzyTolerance);
+            index = Params.IndexOfInputParam("fuzzyTolerance_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref fuzzyTolerance);
+            }
 
             List<Shell> shells = new List<Shell>();
             foreach (GH_ObjectWrapper objectWrapper in shellWrappers)
@@ -90,9 +135,22 @@ namespace SAM.Geometry.Grasshopper.OCCT
             List<Shell> resultShells = Geometry.OCCT.Query.ShellsIntersection(shells, toolShells, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance });
             List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList();
 
-            dataAccess.SetDataList(0, resultShells);
-            dataAccess.SetDataList(1, diagnostics);
-            dataAccess.SetData(2, result != null && result.Success && resultShells != null && resultShells.Count != 0);
+            index = Params.IndexOfOutputParam("Shells");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, resultShells);
+            }
+
+            index = Params.IndexOfOutputParam("Diagnostics");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, diagnostics);
+            }
+
+            if (index_Successful != -1)
+            {
+                dataAccess.SetData(index_Successful, result != null && result.Success && resultShells != null && resultShells.Count != 0);
+            }
 
             if (diagnostics != null)
             {

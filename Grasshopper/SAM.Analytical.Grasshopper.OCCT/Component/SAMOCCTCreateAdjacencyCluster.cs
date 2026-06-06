@@ -15,7 +15,7 @@ using System.Linq;
 
 namespace SAM.Analytical.Grasshopper.OCCT
 {
-    public class SAMOCCTCreateAdjacencyCluster : GH_SAMComponent
+    public class SAMOCCTCreateAdjacencyCluster : GH_SAMVariableOutputParameterComponent
     {
         public override Guid ComponentGuid => new Guid("c104f272-9b10-454f-9825-16e2d41adfa6");
 
@@ -26,53 +26,93 @@ namespace SAM.Analytical.Grasshopper.OCCT
         {
         }
 
-        protected override void RegisterInputParams(GH_InputParamManager inputParamManager)
+        protected override GH_SAMParam[] Inputs
         {
-            int index = inputParamManager.AddParameter(new GooPanelParam(), "_panels", "_panels", "Analytical Panels that define closed cell boundaries. Use this when your model starts from panels rather than closed Shells.", GH_ParamAccess.list);
-            inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
+            get
+            {
+                List<GH_SAMParam> result = new List<GH_SAMParam>();
 
-            GooSpaceParam gooSpaceParam = new GooSpaceParam();
-            gooSpaceParam.Optional = true;
-            index = inputParamManager.AddParameter(gooSpaceParam, "spaces_", "spaces_", "Optional existing Spaces to match into the OCCT-created cells.", GH_ParamAccess.list);
-            inputParamManager[index].DataMapping = GH_DataMapping.Flatten;
+                GooPanelParam panels = new GooPanelParam() { Name = "_panels", NickName = "_panels", Description = "Analytical Panels that define closed cell boundaries. Use this when your model starts from panels rather than closed Shells.", Access = GH_ParamAccess.list };
+                panels.DataMapping = GH_DataMapping.Flatten;
+                result.Add(new GH_SAMParam(panels, ParamVisibility.Binding));
 
-            inputParamManager.AddNumberParameter("tolerance_", "tolerance_", "OCCT build tolerance", GH_ParamAccess.item, Tolerance.Distance);
-            inputParamManager.AddNumberParameter("fuzzyTolerance_", "fuzzyTolerance_", "OCCT fuzzy tolerance", GH_ParamAccess.item, Tolerance.MacroDistance);
-            inputParamManager.AddBooleanParameter("_run", "_run", "Run", GH_ParamAccess.item, false);
+                GooSpaceParam spaces = new GooSpaceParam() { Name = "spaces_", NickName = "spaces_", Description = "Optional existing Spaces to match into the OCCT-created cells.", Access = GH_ParamAccess.list, Optional = true };
+                spaces.DataMapping = GH_DataMapping.Flatten;
+                result.Add(new GH_SAMParam(spaces, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT build tolerance", Access = GH_ParamAccess.item };
+                tolerance.SetPersistentData(Tolerance.Distance);
+                result.Add(new GH_SAMParam(tolerance, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number fuzzyTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "fuzzyTolerance_", NickName = "fuzzyTolerance_", Description = "OCCT fuzzy tolerance", Access = GH_ParamAccess.item };
+                fuzzyTolerance.SetPersistentData(Tolerance.MacroDistance);
+                result.Add(new GH_SAMParam(fuzzyTolerance, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Boolean run = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "_run", NickName = "_run", Description = "Run", Access = GH_ParamAccess.item };
+                run.SetPersistentData(false);
+                result.Add(new GH_SAMParam(run, ParamVisibility.Binding));
+
+                return result.ToArray();
+            }
         }
 
-        protected override void RegisterOutputParams(GH_OutputParamManager outputParamManager)
+        protected override GH_SAMParam[] Outputs
         {
-            outputParamManager.AddParameter(new GooAdjacencyClusterParam(), "AdjacencyCluster", "AdjacencyCluster", "SAM AdjacencyCluster", GH_ParamAccess.item);
-            outputParamManager.AddTextParameter("Diagnostics", "Diagnostics", "OCCT diagnostics", GH_ParamAccess.list);
-            outputParamManager.AddBooleanParameter("Successful", "Successful", "Run successfully?", GH_ParamAccess.item);
+            get
+            {
+                List<GH_SAMParam> result = new List<GH_SAMParam>();
+                result.Add(new GH_SAMParam(new GooAdjacencyClusterParam() { Name = "AdjacencyCluster", NickName = "AdjacencyCluster", Description = "SAM AdjacencyCluster", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "Diagnostics", NickName = "Diagnostics", Description = "OCCT diagnostics", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "Successful", NickName = "Successful", Description = "Run successfully?", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
+                return result.ToArray();
+            }
         }
 
         protected override void SolveInstance(IGH_DataAccess dataAccess)
         {
-            dataAccess.SetData(2, false);
+            int index_Successful = Params.IndexOfOutputParam("Successful");
+            if (index_Successful != -1)
+            {
+                dataAccess.SetData(index_Successful, false);
+            }
+
+            int index;
 
             bool run = false;
-            if (!dataAccess.GetData(4, ref run) || !run)
+            index = Params.IndexOfInputParam("_run");
+            if (index == -1 || !dataAccess.GetData(index, ref run) || !run)
             {
                 return;
             }
 
             List<Panel> panels = new List<Panel>();
-            if (!dataAccess.GetDataList(0, panels) || panels == null)
+            index = Params.IndexOfInputParam("_panels");
+            if (index == -1 || !dataAccess.GetDataList(index, panels) || panels == null)
             {
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Invalid panels");
                 return;
             }
 
             List<Space> spaces = new List<Space>();
-            dataAccess.GetDataList(1, spaces);
+            index = Params.IndexOfInputParam("spaces_");
+            if (index != -1)
+            {
+                dataAccess.GetDataList(index, spaces);
+            }
 
             double tolerance = Tolerance.Distance;
-            dataAccess.GetData(2, ref tolerance);
+            index = Params.IndexOfInputParam("tolerance_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref tolerance);
+            }
 
             double fuzzyTolerance = Tolerance.MacroDistance;
-            dataAccess.GetData(3, ref fuzzyTolerance);
+            index = Params.IndexOfInputParam("fuzzyTolerance_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref fuzzyTolerance);
+            }
 
             List<string> diagnostics = new List<string>();
             Stopwatch stopwatch_Total = Stopwatch.StartNew();
@@ -97,9 +137,22 @@ namespace SAM.Analytical.Grasshopper.OCCT
             }
             diagnostics.Add(string.Format("SAM_OCCT_TIMING_TOTAL: {0:0.000}s.", stopwatch_Total.Elapsed.TotalSeconds));
 
-            dataAccess.SetData(0, adjacencyCluster == null ? null : new GooAdjacencyCluster(adjacencyCluster));
-            dataAccess.SetDataList(1, diagnostics);
-            dataAccess.SetData(2, adjacencyCluster != null);
+            index = Params.IndexOfOutputParam("AdjacencyCluster");
+            if (index != -1)
+            {
+                dataAccess.SetData(index, adjacencyCluster == null ? null : new GooAdjacencyCluster(adjacencyCluster));
+            }
+
+            index = Params.IndexOfOutputParam("Diagnostics");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, diagnostics);
+            }
+
+            if (index_Successful != -1)
+            {
+                dataAccess.SetData(index_Successful, adjacencyCluster != null);
+            }
 
             foreach (string diagnostic in diagnostics)
             {
