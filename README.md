@@ -103,6 +103,19 @@ SAM_OCCT\build
 %APPDATA%\SAM
 ```
 
+## Tests
+
+The `SAM_OCCT.Tests` project is set up for OCCT macro tests and uploaded SAM
+geometry fixtures:
+
+```powershell
+dotnet test SAM_OCCT.Tests
+```
+
+Drop exported `*.sam` examples into `SAM_OCCT.Tests/Fixtures`. The fixture test
+loads each file, extracts usable `Face3D` geometry from common SAM object types,
+and runs the faces through the OCCT cell-complex builder.
+
 ## OCCT SDK
 
 `build-native.ps1` auto-detects the default local SDK layout:
