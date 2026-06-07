@@ -2,9 +2,9 @@ name: Build (Windows)
 
 on:
   push:
-    branches: [ "master", "main" ]
+    branches: [ "master", "main", "sow/**" ]
   pull_request:
-    branches: [ "master", "main" ]
+    branches: [ "master", "main", "sow/**" ]
   workflow_dispatch:
 
 jobs:
@@ -15,6 +15,10 @@ jobs:
 
     env:
       MSBUILDDISABLENODEREUSE: "1"
+      # The native OCCT layer (vcpkg/OpenCASCADE) is not available on the runner,
+      # so skip build-native.ps1 and build the managed assemblies only. Integration
+      # tests gracefully skip without the native library.
+      SAM_OCCT_SKIP_NATIVE_BUILD: "true"
 
     steps:
       # Checkout THIS repo into a folder so we can clone sibling repos next to it.
@@ -41,9 +45,21 @@ jobs:
             'SAM'
           )
 
+          # Match the SAM dependency to this repo's line of development. The
+          # sow/2026-Q2 SAM branch carries the System.Text.Json migration, so its
+          # public API no longer leaks Newtonsoft.Json types into SAM_OCCT (the
+          # default branch still does, which breaks the compile with CS0012).
+          # Falls back to the default branch if that branch does not exist yet.
+          $depBranch = 'sow/2026-Q2'
+
           foreach ($r in $deps) {
             if (Test-Path $r) { continue }
-            git clone --depth 1 "https://github.com/SAM-BIM/$r.git" $r
+            Write-Host "Cloning $r @ $depBranch"
+            git clone --depth 1 --branch $depBranch "https://github.com/SAM-BIM/$r.git" $r
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::warning::Branch '$depBranch' not found for $r; falling back to default branch."
+              git clone --depth 1 "https://github.com/SAM-BIM/$r.git" $r
+            }
           }
 
           # Ensure the reference path folder exists even before SAM_Windows builds
@@ -86,6 +102,36 @@ jobs:
             Write-Host "==> Rebuild: $sln"
             & msbuild $sln /t:Rebuild @common
           }
+
+      - name: Run tests (unit always; integration auto-skips without native)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $unit        = 'SAM_OCCT/Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj'
+          $integration = 'SAM_OCCT/Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj'
+
+          # Unit tests must pass. Coverage is collected for reporting (soft gate).
+          dotnet test $unit `
+            -c Release `
+            --logger "trx;LogFileName=unit.trx" `
+            --collect:"XPlat Code Coverage" `
+            --results-directory TestResults
+
+          # Integration tests run real OCCT; they SkippableFact-skip when the
+          # native library is absent, so this step stays green without it.
+          dotnet test $integration `
+            -c Release `
+            --logger "trx;LogFileName=integration.trx" `
+            --results-directory TestResults
+
+      - name: Upload test results & coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SAM_OCCT-test-results
+          path: TestResults/**
+          if-no-files-found: warn
 
       - name: Upload build folders (optional)
         uses: actions/upload-artifact@v4

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Common test props (TargetFramework, xUnit, coverlet) come from ..\Directory.Build.props -->
+
+  <ItemGroup>
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\SAM_OCCT\SAM.Core.OCCT\SAM.Core.OCCT.csproj" />
+    <ProjectReference Include="..\..\SAM_OCCT\SAM.Geometry.OCCT\SAM.Geometry.OCCT.csproj" />
+  </ItemGroup>
+
+  <!-- Sibling SAM types used directly by tests; see note in the unit-test project. -->
+  <ItemGroup>
+    <Reference Include="SAM.Core">
+      <HintPath>..\..\..\SAM\build\SAM.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="SAM.Geometry">
+      <HintPath>..\..\..\SAM\build\SAM.Geometry.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

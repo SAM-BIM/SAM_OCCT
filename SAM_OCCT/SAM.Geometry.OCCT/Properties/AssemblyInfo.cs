@@ -2,8 +2,11 @@
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
+// Expose internal helpers (e.g. OcctNativeInputBuilder) to the unit test assembly.
+[assembly: InternalsVisibleTo("SAM.OCCT.UnitTests")]
 [assembly: AssemblyTitle("SAM.Geometry.OCCT")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
