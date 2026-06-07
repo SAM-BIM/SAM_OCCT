@@ -39,6 +39,15 @@ once and inspects `OcctCellComplexResult.NativeAvailable`; each test calls
 `Skip.IfNot(NativeProbe.Available, ...)`. When `SAM.Occt.Native` is missing the
 tests are reported **skipped**, never failed.
 
+`build-native.ps1` writes `SAM.Occt.Native.dll` (and the OCCT/vcpkg runtime DLLs
+it depends on) into `<repoRoot>/build`, not into the testhost's own bin output.
+`NativeRuntimeBootstrap` (a module initializer in the integration test assembly)
+searches upward from the testhost's base directory for that folder and, if
+found, prepends it to `PATH` so the P/Invoke loader can resolve the library and
+its colocated dependencies — without copying any files (so it can never shadow
+the test project's own managed assemblies). This runs automatically; no manual
+setup is required once the native library has been built.
+
 ## Running locally
 
 Prerequisite: the sibling **SAM** repo must be built so the referenced
