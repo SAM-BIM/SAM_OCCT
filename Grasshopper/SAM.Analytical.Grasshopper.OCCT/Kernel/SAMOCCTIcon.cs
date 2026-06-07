@@ -2,6 +2,7 @@
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
 using System.Drawing;
+using System.IO;
 using System.Reflection;
 
 namespace SAM.Analytical.Grasshopper.OCCT
@@ -13,9 +14,17 @@ namespace SAM.Analytical.Grasshopper.OCCT
             get
             {
                 Assembly assembly = typeof(SAMOCCTIcon).Assembly;
-                using (System.IO.Stream stream = assembly.GetManifestResourceStream("SAM.Analytical.Grasshopper.OCCT.Resources.SAM_OCCT24.png"))
+                using (Stream stream = assembly.GetManifestResourceStream("SAM.Analytical.Grasshopper.OCCT.Resources.SAM_OCCT24.png"))
                 {
-                    return stream == null ? null : new Bitmap(stream);
+                    if (stream == null)
+                    {
+                        return null;
+                    }
+
+                    using (Bitmap bitmap = new Bitmap(stream))
+                    {
+                        return new Bitmap(bitmap);
+                    }
                 }
             }
         }
