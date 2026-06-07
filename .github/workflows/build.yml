@@ -41,9 +41,21 @@ jobs:
             'SAM'
           )
 
+          # Match the SAM dependency to this repo's line of development. The
+          # sow/2026-Q2 SAM branch carries the System.Text.Json migration, so its
+          # public API no longer leaks Newtonsoft.Json types into SAM_OCCT (the
+          # default branch still does, which breaks the compile with CS0012).
+          # Falls back to the default branch if that branch does not exist yet.
+          $depBranch = 'sow/2026-Q2'
+
           foreach ($r in $deps) {
             if (Test-Path $r) { continue }
-            git clone --depth 1 "https://github.com/SAM-BIM/$r.git" $r
+            Write-Host "Cloning $r @ $depBranch"
+            git clone --depth 1 --branch $depBranch "https://github.com/SAM-BIM/$r.git" $r
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::warning::Branch '$depBranch' not found for $r; falling back to default branch."
+              git clone --depth 1 "https://github.com/SAM-BIM/$r.git" $r
+            }
           }
 
           # Ensure the reference path folder exists even before SAM_Windows builds
