@@ -15,29 +15,39 @@ using Xunit;
 using Xunit.Abstractions;
 using OcctCreate = SAM.Geometry.OCCT.Create;
 
-namespace SAM.OCCT.Tests
+namespace SAM.OCCT.IntegrationTests
 {
-    public class OcctFixtureTests
+    /// <summary>
+    /// Data-driven integration tests that build OCCT cell complexes from a coded box and
+    /// from uploaded SAM geometry fixtures (<c>*.sam</c> in the Fixtures folder). These
+    /// drive the real native OCCT layer, so each test auto-skips (via SkippableFact) when
+    /// SAM.Occt.Native is not available - keeping the suite green on an OCCT-less agent.
+    /// </summary>
+    public class OcctFixtureIntegrationTests
     {
         private static readonly string FixturesDirectory = Path.Combine(AppContext.BaseDirectory, "Fixtures");
 
         private readonly ITestOutputHelper output;
 
-        public OcctFixtureTests(ITestOutputHelper output)
+        public OcctFixtureIntegrationTests(ITestOutputHelper output)
         {
             this.output = output;
         }
 
-        [Fact]
-        public void Coded_box_builds_one_occt_cell()
+        [SkippableFact]
+        public void Shells_CodedBox_BuildsSingleCell()
         {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange
             List<Face3D> face3Ds = BoxFace3Ds();
 
+            // Act
             OcctCellComplexResult result;
             List<Shell> shells = OcctCreate.Shells(face3Ds, out result, DefaultOptions());
 
+            // Assert
             WriteDiagnostics("coded box", face3Ds, result);
-
             Assert.NotNull(result);
             Assert.True(result.Success, FailureMessage("coded box", result));
             Assert.NotNull(shells);
@@ -45,9 +55,12 @@ namespace SAM.OCCT.Tests
             Assert.Single(result.Cells);
         }
 
-        [Fact]
-        public void Uploaded_sam_fixtures_build_occt_cells()
+        [SkippableFact]
+        public void Shells_UploadedSamFixtures_BuildCells()
         {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange
             List<string> paths = Directory.Exists(FixturesDirectory)
                 ? Directory.GetFiles(FixturesDirectory, "*.sam", SearchOption.TopDirectoryOnly).OrderBy(x => x).ToList()
                 : new List<string>();
@@ -61,15 +74,16 @@ namespace SAM.OCCT.Tests
             foreach (string path in paths)
             {
                 string fixtureName = Path.GetFileName(path);
-                List<Face3D> face3Ds = LoadFace3Ds(path);
 
+                // Act
+                List<Face3D> face3Ds = LoadFace3Ds(path);
                 Assert.True(face3Ds.Count != 0, string.Format("{0} did not contain extractable Face3D geometry.", fixtureName));
 
                 OcctCellComplexResult result;
                 List<Shell> shells = OcctCreate.Shells(face3Ds, out result, DefaultOptions());
 
+                // Assert
                 WriteDiagnostics(fixtureName, face3Ds, result);
-
                 Assert.NotNull(result);
                 Assert.True(result.Success, FailureMessage(fixtureName, result));
                 Assert.NotNull(shells);

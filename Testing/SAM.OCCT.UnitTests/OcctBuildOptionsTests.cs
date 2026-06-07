@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
+
+using SAM.Core.OCCT;
+using Xunit;
+
+namespace SAM.OCCT.UnitTests
+{
+    public class OcctBuildOptionsTests
+    {
+        [Fact]
+        public void Constructor_Default_SetsExpectedDefaults()
+        {
+            // Arrange & Act
+            OcctBuildOptions options = new OcctBuildOptions();
+
+            // Assert
+            Assert.Equal(global::SAM.Core.Tolerance.Distance, options.Tolerance);
+            Assert.Equal(global::SAM.Core.Tolerance.MacroDistance, options.FuzzyTolerance);
+            Assert.True(options.RunParallel);
+            Assert.True(options.AvoidInternalShapes);
+            Assert.True(options.ValidateInput);
+        }
+
+        [Theory]
+        [InlineData(true, true, true)]
+        [InlineData(false, false, false)]
+        [InlineData(true, false, true)]
+        public void CopyConstructor_WithSource_CopiesAllFields(bool runParallel, bool avoidInternalShapes, bool validateInput)
+        {
+            // Arrange
+            OcctBuildOptions source = new OcctBuildOptions
+            {
+                Tolerance = 0.123,
+                FuzzyTolerance = 0.456,
+                RunParallel = runParallel,
+                AvoidInternalShapes = avoidInternalShapes,
+                ValidateInput = validateInput
+            };
+
+            // Act
+            OcctBuildOptions copy = new OcctBuildOptions(source);
+
+            // Assert
+            Assert.Equal(source.Tolerance, copy.Tolerance);
+            Assert.Equal(source.FuzzyTolerance, copy.FuzzyTolerance);
+            Assert.Equal(source.RunParallel, copy.RunParallel);
+            Assert.Equal(source.AvoidInternalShapes, copy.AvoidInternalShapes);
+            Assert.Equal(source.ValidateInput, copy.ValidateInput);
+        }
+
+        [Fact]
+        public void CopyConstructor_WithNull_FallsBackToDefaults()
+        {
+            // Arrange & Act
+            OcctBuildOptions copy = new OcctBuildOptions(null);
+
+            // Assert - a null source must not throw and must leave defaults intact.
+            Assert.Equal(global::SAM.Core.Tolerance.Distance, copy.Tolerance);
+            Assert.True(copy.RunParallel);
+            Assert.True(copy.AvoidInternalShapes);
+            Assert.True(copy.ValidateInput);
+        }
+    }
+}

@@ -103,18 +103,30 @@ SAM_OCCT\build
 %APPDATA%\SAM
 ```
 
-## Tests
+## Testing
 
-The `SAM_OCCT.Tests` project is set up for OCCT macro tests and uploaded SAM
-geometry fixtures:
+SAM_OCCT uses a two-tier test method (xUnit):
+
+- **Unit tests** (`Testing/SAM.OCCT.UnitTests`) — fast, no native library
+  required, and independent of host DLL state. They cover build options,
+  diagnostics, the managed native-input serializer, and the `Query` input guard
+  clauses.
+- **Integration tests** (`Testing/SAM.OCCT.IntegrationTests`) — drive the real
+  OCCT boolean/cell-complex operations, plus the graceful "native missing"
+  contract. Each test is gated on native availability, so the suite never fails
+  an OCCT-less agent (boolean-op tests skip without the library; the
+  native-missing test skips with it). This project also runs uploaded `*.sam`
+  geometry fixtures (see `Testing/SAM.OCCT.IntegrationTests/Fixtures`) through
+  the OCCT cell-complex builder.
 
 ```powershell
-dotnet test SAM_OCCT.Tests
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj
 ```
 
-Drop exported `*.sam` examples into `SAM_OCCT.Tests/Fixtures`. The fixture test
-loads each file, extracts usable `Face3D` geometry from common SAM object types,
-and runs the faces through the OCCT cell-complex builder.
+Unit tests run on every PR via the Build workflow (coverage is collected and
+uploaded as an artifact). See `TESTING.md` for the conventions and how to run
+the integration tests against a built native library.
 
 ## OCCT SDK
 

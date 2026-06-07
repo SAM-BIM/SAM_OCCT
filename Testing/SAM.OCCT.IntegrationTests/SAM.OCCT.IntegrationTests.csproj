@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Common test props (TargetFramework, xUnit, coverlet) come from ..\Directory.Build.props -->
+
+  <ItemGroup>
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\SAM_OCCT\SAM.Core.OCCT\SAM.Core.OCCT.csproj" />
+    <ProjectReference Include="..\..\SAM_OCCT\SAM.Geometry.OCCT\SAM.Geometry.OCCT.csproj" />
+  </ItemGroup>
+
+  <!-- Sibling SAM types used directly by tests; see note in the unit-test project.
+       SAM.Analytical / SAM.Math are needed by the .sam fixture tests, which load
+       AnalyticalModel / AdjacencyCluster / Panel geometry. -->
+  <ItemGroup>
+    <Reference Include="SAM.Core">
+      <HintPath>..\..\..\SAM\build\SAM.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="SAM.Geometry">
+      <HintPath>..\..\..\SAM\build\SAM.Geometry.dll</HintPath>
+    </Reference>
+    <Reference Include="SAM.Analytical">
+      <HintPath>..\..\..\SAM\build\SAM.Analytical.dll</HintPath>
+    </Reference>
+    <Reference Include="SAM.Math">
+      <HintPath>..\..\..\SAM\build\SAM.Math.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Uploaded SAM geometry fixtures exercised by OcctFixtureIntegrationTests. -->
+  <ItemGroup>
+    <None Update="Fixtures\*.sam" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
