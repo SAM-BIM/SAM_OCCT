@@ -41,6 +41,9 @@
     <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
     <PackageReference Include="System.Drawing.Common" Version="7.0.0" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\SAM_OCCT24.png" />
+  </ItemGroup>
   <Target Name="BuildNativeOcct" BeforeTargets="Build" Condition="'$(SAM_OCCT_SKIP_NATIVE_BUILD)' != 'true'">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\build-native.ps1&quot; -Configuration $(Configuration) -SkipVcpkgInstall" />
   </Target>

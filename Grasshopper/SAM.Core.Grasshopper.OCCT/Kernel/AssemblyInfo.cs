@@ -1,4 +1,6 @@
-﻿using Grasshopper.Kernel;
+﻿// SPDX-License-Identifier: LGPL-3.0-or-later
+// Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
+using Grasshopper.Kernel;
 using System;
 using System.Drawing;
 
@@ -19,7 +21,7 @@ namespace SAM.Core.Grasshopper.OCCT
             get
             {
                 //Return a 24x24 pixel bitmap to represent this GHA library.
-                return SAM.Core.Grasshopper.TMP.Properties.Resources.HL_Logo24; ;
+                return SAM.Core.Grasshopper.TMP.Properties.Resources.SAM_OCCT24;
             }
         }
 
@@ -28,7 +30,7 @@ namespace SAM.Core.Grasshopper.OCCT
             get
             {
                 //Return a 24x24 pixel bitmap to represent this GHA library.
-                return SAM.Core.Grasshopper.TMP.Properties.Resources.HL_Logo24; ;
+                return SAM.Core.Grasshopper.TMP.Properties.Resources.SAM_OCCT24;
             }
         }
 
