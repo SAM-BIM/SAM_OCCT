@@ -9,8 +9,14 @@ C++/OpenCASCADE layer (`SAM.Occt.Native`).
 
 | Project | Purpose | Native needed? |
 | --- | --- | --- |
-| `Testing/SAM.OCCT.UnitTests` | Pure-managed logic: `OcctBuildOptions`, `OcctDiagnostic`, the `OcctNativeInputBuilder` serializer, `Query` guard clauses, and the graceful *native-missing* path. | No |
-| `Testing/SAM.OCCT.IntegrationTests` | Real OCCT boolean / cell-complex operations producing cells, volumes and face adjacencies. | Yes (auto-skips when absent) |
+| `Testing/SAM.OCCT.UnitTests` | Pure-managed logic that runs identically anywhere: `OcctBuildOptions`, `OcctDiagnostic`, the `OcctNativeInputBuilder` serializer, and the `Query` input guard clauses (which return before any native call). | No |
+| `Testing/SAM.OCCT.IntegrationTests` | Real OCCT boolean / cell-complex operations (cells, volumes, face adjacencies), **and** the graceful *native-missing* contract. | Gated on native availability |
+
+Anything whose outcome depends on whether the native library is loadable lives in
+the integration project, never in the unit project — so the unit suite cannot be
+broken by the host's DLL search state. The native-missing test is *inverse-gated*
+(`Skip.If(NativeProbe.Available)`): it runs where the library is absent (e.g. CI)
+and skips where it is present, while the boolean-op tests do the opposite.
 
 Common test settings (target framework, xUnit, coverage collector) live in
 `Testing/Directory.Build.props` so both projects stay consistent. This is scoped

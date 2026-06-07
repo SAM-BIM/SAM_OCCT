@@ -90,11 +90,14 @@ SAM_OCCT\build
 SAM_OCCT uses a two-tier test method (xUnit):
 
 - **Unit tests** (`Testing/SAM.OCCT.UnitTests`) — fast, no native library
-  required. They cover build options, diagnostics, the managed native-input
-  serializer, the `Query` guard clauses, and the graceful "native missing" path.
+  required, and independent of host DLL state. They cover build options,
+  diagnostics, the managed native-input serializer, and the `Query` input guard
+  clauses.
 - **Integration tests** (`Testing/SAM.OCCT.IntegrationTests`) — drive the real
-  OCCT boolean/cell-complex operations. They auto-skip when `SAM.Occt.Native`
-  is not present, so they never fail an OCCT-less agent.
+  OCCT boolean/cell-complex operations, plus the graceful "native missing"
+  contract. Each test is gated on native availability, so the suite never fails
+  an OCCT-less agent (boolean-op tests skip without the library; the
+  native-missing test skips with it).
 
 ```powershell
 dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj

@@ -44,21 +44,5 @@ namespace SAM.OCCT.UnitTests
             Assert.Null(shells);
             Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_UNION_INPUT_EMPTY");
         }
-
-        [Fact]
-        public void ShellsUnion_ValidInputWithoutNativeLibrary_ReportsNativeMissing()
-        {
-            // Arrange - geometry is serializable, so control reaches the native call,
-            // which is expected to be absent in the unit-test environment.
-            List<Shell> input = new List<Shell> { TestGeometry.CreateSingleFaceShell() };
-
-            // Act
-            List<Shell> shells = GeometryQuery.ShellsUnion(input, out OcctCellComplexResult result, new OcctBuildOptions());
-
-            // Assert
-            Assert.Null(shells);
-            Assert.False(result.NativeAvailable);
-            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_NATIVE_MISSING" && x.Severity == OcctDiagnosticSeverity.Error);
-        }
     }
 }
