@@ -40,6 +40,10 @@
     <None Update="Fixtures\*.sam" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <Target Name="BuildNativeOcct" BeforeTargets="Build" Condition="'$(SAM_OCCT_SKIP_NATIVE_BUILD)' != 'true'">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\build-native.ps1&quot; -Configuration $(Configuration) -SkipVcpkgInstall" />
+  </Target>
+
   <!-- The OCCT managed projects load SAM.Occt.Native by name. Copy the native bridge,
        OCCT runtime DLLs, and VC runtime DLLs next to the test assembly. -->
   <ItemGroup>
