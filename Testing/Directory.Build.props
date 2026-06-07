@@ -15,6 +15,8 @@
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <!-- Keep CI green: analyzer findings surface as warnings, not build breaks. -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!-- CA1707: the Method_State_Expected test naming convention uses underscores by design. -->
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

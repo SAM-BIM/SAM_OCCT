@@ -15,6 +15,10 @@ jobs:
 
     env:
       MSBUILDDISABLENODEREUSE: "1"
+      # The native OCCT layer (vcpkg/OpenCASCADE) is not available on the runner,
+      # so skip build-native.ps1 and build the managed assemblies only. Integration
+      # tests gracefully skip without the native library.
+      SAM_OCCT_SKIP_NATIVE_BUILD: "true"
 
     steps:
       # Checkout THIS repo into a folder so we can clone sibling repos next to it.
