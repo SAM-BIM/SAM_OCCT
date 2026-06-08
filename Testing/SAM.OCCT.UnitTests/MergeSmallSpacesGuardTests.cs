@@ -3,6 +3,7 @@
 
 using SAM.Analytical;
 using SAM.Analytical.OCCT;
+using System;
 using System.Collections.Generic;
 using Xunit;
 
@@ -28,7 +29,7 @@ namespace SAM.OCCT.UnitTests
             Assert.Null(result);
             Assert.Empty(mergedSpaces);
             Assert.Empty(unmergedSmallSpaces);
-            Assert.Contains(report, x => x.StartsWith("SAM_OCCT_MERGE_INPUT_NULL"));
+            Assert.Contains(report, x => x.StartsWith("SAM_OCCT_MERGE_INPUT_NULL", StringComparison.Ordinal));
         }
 
         [Fact]
@@ -47,7 +48,7 @@ namespace SAM.OCCT.UnitTests
             Assert.NotNull(result);
             Assert.Empty(mergedSpaces);
             Assert.Empty(unmergedSmallSpaces);
-            Assert.Contains(report, x => x.StartsWith("SAM_OCCT_MERGE_INPUT_EMPTY"));
+            Assert.Contains(report, x => x.StartsWith("SAM_OCCT_MERGE_INPUT_EMPTY", StringComparison.Ordinal));
         }
     }
 }
