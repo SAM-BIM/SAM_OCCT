@@ -54,6 +54,7 @@ Analytical:
 
 - `SAMOCCT.CreateAdjacencyCluster`
 - `SAMOCCT.CreateAdjacencyClusterByShells`
+- `SAMOCCT.MergeSmallSpaces`
 - `SAMOCCT.PanelsFromShells`
 
 Both adjacency components expose `tolerance_` and `fuzzyTolerance_` as the main
@@ -75,6 +76,18 @@ relations were decoded before SAM creates spaces, panels, and relations.
 directly from this OCCT topology first. If successful, diagnostics include
 `SAM_OCCT_ANALYTICAL_DIRECT_SUCCESS`; if not, the component falls back to the
 older SAM geometric rebuild and reports `SAM_OCCT_ANALYTICAL_DIRECT_FALLBACK`.
+
+`SAMOCCT.MergeSmallSpaces` is a clean-up step that runs on an existing
+`AdjacencyCluster`. It finds spaces whose floor area is below `minArea_` (or
+volume below `minVolume_`) and merges each into the best adjacent larger space
+across a shared internal boundary. The now-internal shared panels are dropped,
+the surviving space inherits the small space's remaining panels, volume, and
+adjacency, and panel types and constructions are recalculated. `mergeMode_`
+chooses the merge target (`LongestSharedBoundary`, `LargestNeighbour`, or
+`SameTypeFirst`), `protectedSpaces_` keeps shafts/risers intact, and
+vertically stacked neighbours on a different level are never used as targets.
+The component reports merged and unmerged spaces and a coded `report` of every
+decision (`SAM_OCCT_MERGE_*`).
 
 ## Modeling Guide
 
