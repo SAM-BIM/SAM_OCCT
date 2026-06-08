@@ -57,12 +57,15 @@ Analytical:
 - `SAMOCCT.CreateAdjacencyClusterByShells`
 - `SAMOCCT.PanelsFromShells`
 
-`SAMOCCT.TriangulateSurface` takes possibly non-planar surfaces (Rhino
-surfaces, Breps/polysurfaces or meshes) and triangulates them into planar SAM
-`Face3D`s ready for panelling. Because every output is a triangle it is
-guaranteed planar; use `maxEdgeLength_` to drive panel size and
-`minEdgeLength_`/`minArea_` to avoid too-tiny panels. The resulting `Face3D`s
-feed straight into `SAMOCCT.CreateShells` / `SAMOCCT.PanelsFromShells`.
+`SAMOCCT.TriangulateSurface` takes possibly non-planar surfaces and
+triangulates them into planar SAM `Face3D`s ready for panelling, using OCCT for
+the meshing. Coplanar boundaries are meshed as a plane; non-planar (warped)
+boundaries are spanned with an OCCT filling surface (`BRepOffsetAPI_MakeFilling`)
+and meshed with `BRepMesh_IncrementalMesh`, so every output triangle is
+guaranteed planar. `linearDeflection_` is the maximum distance a panel may
+deviate from the true surface — larger values give fewer, bigger panels —
+while `minArea_` discards too-tiny panels. The resulting `Face3D`s feed straight
+into `SAMOCCT.CreateShells` / `SAMOCCT.PanelsFromShells`.
 
 Both adjacency components expose `tolerance_` and `fuzzyTolerance_` as the main
 OCCT controls. `SAMOCCT.CreateAdjacencyClusterByShells` also retains advanced
