@@ -188,19 +188,23 @@ room/cell shells (or closed Breps)
 -> SAMOCCT.CreateAdjacencyClusterByShells
 ```
 
+The supplied shells are decoded into an OCCT cell complex first, so the merge
+works on real per-cell volumes and real shared-face adjacency rather than
+bounding-box estimates.
+
 What it does:
 
-1. Finds shells with floor footprint below `minArea_` or axis-aligned
-   bounding-box volume below `minVolume_`.
-2. For each small shell, looks for touching neighbours (bounding boxes that meet
-   or overlap within `tolerance_`).
-3. Skips protected shells (`protectedShells_`, matched to the inputs by centroid)
-   as both candidates and targets.
-4. Picks the best neighbour according to `mergeMode_`:
-   - `LongestSharedBoundary`: largest estimated touching contact area (default).
-   - `LargestNeighbour`: largest neighbouring footprint, then bounding-box volume.
-5. Fuses each small shell with its chosen neighbour using OCCT `ShellsUnion`
-   (`tolerance_` and `fuzzyTolerance_` control the union).
+1. Decodes the input shells into OCCT cells (true volume, faces, and shared-face
+   adjacency).
+2. Finds cells with floor footprint below `minArea_` or volume below `minVolume_`.
+3. For each small cell, looks at the cells it shares a face with.
+4. Skips protected shells (`protectedShells_`, matched to decoded cells by
+   containment) as both candidates and targets.
+5. Picks the best neighbour according to `mergeMode_`:
+   - `LongestSharedBoundary`: largest shared face boundary area (default).
+   - `LargestNeighbour`: largest neighbouring footprint, then volume.
+6. Fuses each small cell with its chosen neighbour using OCCT `ShellsUnion`
+   (`tolerance_` and `fuzzyTolerance_` control the build and union).
 
 Inputs: `_shells`, `minArea_`, `minVolume_`, `tolerance_`, `fuzzyTolerance_`,
 `mergeMode_`, `protectedShells_`.
@@ -210,18 +214,20 @@ Outputs: `Shells` (cleaned), `mergedSmallShells`, `unmergedSmallShells`,
 
 Notes:
 
-- `minVolume_` here compares the shell's axis-aligned bounding-box volume, an
-  approximate enclosing volume, because exact shell volume is not computed at the
-  geometry layer. Footprint (`minArea_`) is the more precise filter.
-- Adjacency and contact area are estimated from bounding boxes, so very thin or
-  diagonally touching shells may need a slightly larger `tolerance_`.
-- If native OCCT is unavailable the union step cannot run; the component then
-  keeps the original shells for each group and records the union diagnostics in
-  `report` so no geometry is lost.
+- Because the inputs are decoded into a cell complex, the outputs are the decoded
+  (and merged) cells. OCCT may re-partition overlapping or shared faces, so the
+  output cell count can differ from the input shell count; the
+  `SAM_OCCT_MERGE_SHELLS_TOPOLOGY` diagnostic reports both.
+- `minVolume_` and `minArea_` compare the true OCCT cell volume and floor
+  footprint, so the thresholds are meaningful even for sloped or L-shaped cells.
+- Merging needs native OCCT. If it is unavailable the cell decode produces no
+  cells; the component then returns the input unchanged and records the OCCT
+  diagnostics in `report` so no geometry is lost.
 
 Useful diagnostics: `SAM_OCCT_MERGE_SHELLS_PARAMETERS`,
-`SAM_OCCT_MERGE_SHELLS_CANDIDATES`, `SAM_OCCT_MERGE_SHELLS_MERGED`,
-`SAM_OCCT_MERGE_SHELLS_UNMERGED`, and `SAM_OCCT_MERGE_SHELLS_RESULT`.
+`SAM_OCCT_MERGE_SHELLS_TOPOLOGY`, `SAM_OCCT_MERGE_SHELLS_CANDIDATES`,
+`SAM_OCCT_MERGE_SHELLS_MERGED`, `SAM_OCCT_MERGE_SHELLS_UNMERGED`, and
+`SAM_OCCT_MERGE_SHELLS_RESULT`.
 
 ## Panels/Faces vs Shells
 

@@ -38,11 +38,11 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 shells.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(shells, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number minArea = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "minArea_", NickName = "minArea_", Description = "Minimum acceptable floor footprint in m². Shells below this become merge candidates.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number minArea = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "minArea_", NickName = "minArea_", Description = "Minimum acceptable floor footprint in m². Cells below this become merge candidates.", Access = GH_ParamAccess.item };
                 minArea.SetPersistentData(0.3);
                 result.Add(new GH_SAMParam(minArea, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number minVolume = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "minVolume_", NickName = "minVolume_", Description = "Optional minimum acceptable axis-aligned bounding-box volume in m³. Shells below this become merge candidates. Leave unset to ignore volume.", Access = GH_ParamAccess.item, Optional = true };
+                global::Grasshopper.Kernel.Parameters.Param_Number minVolume = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "minVolume_", NickName = "minVolume_", Description = "Optional minimum acceptable volume in m³ (true OCCT cell volume). Cells below this become merge candidates. Leave unset to ignore volume.", Access = GH_ParamAccess.item, Optional = true };
                 minVolume.SetPersistentData(0.5);
                 result.Add(new GH_SAMParam(minVolume, ParamVisibility.Voluntary));
 
@@ -58,7 +58,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 mergeMode.SetPersistentData(MergeShellsMode.LongestSharedBoundary.ToString());
                 result.Add(new GH_SAMParam(mergeMode, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_GenericObject protectedShells = new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "protectedShells_", NickName = "protectedShells_", Description = "Optional Shells/Breps that must never be merged away or used as a merge target (e.g. shafts and risers). Matched to inputs by centroid.", Access = GH_ParamAccess.list, Optional = true };
+                global::Grasshopper.Kernel.Parameters.Param_GenericObject protectedShells = new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "protectedShells_", NickName = "protectedShells_", Description = "Optional Shells/Breps that must never be merged away or used as a merge target (e.g. shafts and risers). Matched to decoded cells by containment.", Access = GH_ParamAccess.list, Optional = true };
                 protectedShells.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(protectedShells, ParamVisibility.Voluntary));
 

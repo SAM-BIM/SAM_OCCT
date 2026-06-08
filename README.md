@@ -91,13 +91,14 @@ The component reports merged and unmerged spaces and a coded `report` of every
 decision (`SAM_OCCT_MERGE_*`).
 
 `SAMOCCT.MergeSmallShells` is the shell/Brep counterpart of the same clean-up.
-It runs before any analytical model exists: it finds tiny closed shells (floor
-footprint below `minArea_` or bounding-box volume below `minVolume_`), groups
-each with its best touching neighbour (`LongestSharedBoundary` or
-`LargestNeighbour`), and fuses each group with OCCT `ShellsUnion`. Shells that
-are large, isolated, or listed in `protectedShells_` pass through unchanged. The
-component reports merged and unmerged shells and a coded `report`
-(`SAM_OCCT_MERGE_SHELLS_*`).
+It runs before any analytical model exists. The supplied shells are decoded into
+an OCCT cell complex, so merging uses real per-cell volumes and real shared-face
+adjacency (not bounding-box estimates). It finds tiny cells (floor footprint
+below `minArea_` or volume below `minVolume_`), groups each with its best
+face-adjacent neighbour (`LongestSharedBoundary` or `LargestNeighbour`), and
+fuses each group with OCCT `ShellsUnion`. Cells that are large, isolated, or
+listed in `protectedShells_` pass through unchanged. The component reports merged
+and unmerged cells and a coded `report` (`SAM_OCCT_MERGE_SHELLS_*`).
 
 ## Modeling Guide
 

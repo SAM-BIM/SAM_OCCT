@@ -14,25 +14,27 @@ namespace SAM.Geometry.OCCT
     {
         /// <summary>
         /// Merges unwanted tiny closed shells/cells into the best adjacent larger
-        /// shell. A shell is treated as "small" when its floor footprint is below
-        /// <paramref name="minArea"/> or its axis-aligned bounding-box volume is
-        /// below <paramref name="minVolume"/>. Each small shell is grouped with the
-        /// most suitable touching neighbour and the groups are fused with OCCT
+        /// shell. The supplied shells are decoded into an OCCT cell complex so that
+        /// merging uses real per-cell volumes and real shared-face adjacency rather
+        /// than bounding-box estimates. A cell is treated as "small" when its floor
+        /// footprint is below <paramref name="minArea"/> or its volume is below
+        /// <paramref name="minVolume"/>. Each small cell is grouped with the most
+        /// suitable face-adjacent neighbour and the groups are fused with OCCT
         /// <see cref="Query.ShellsUnion(IEnumerable{Shell}, out OcctCellComplexResult, OcctBuildOptions)"/>.
-        /// This is the shell/Brep counterpart of the analytical
-        /// <c>MergeSmallSpaces</c> clean-up.
+        /// This is the shell/Brep counterpart of the analytical <c>MergeSmallSpaces</c>
+        /// clean-up.
         /// </summary>
         /// <param name="shells">Closed shells (e.g. converted from Breps) to clean.</param>
-        /// <param name="mergedSmallShells">Original small shells that were merged into a neighbour.</param>
-        /// <param name="unmergedSmallShells">Original small shells that could not be merged (isolated or protected).</param>
+        /// <param name="mergedSmallShells">Decoded small cells that were merged into a neighbour.</param>
+        /// <param name="unmergedSmallShells">Decoded small cells that could not be merged (isolated or protected).</param>
         /// <param name="report">Coded diagnostics describing what was merged and what could not be.</param>
-        /// <param name="minArea">Minimum acceptable floor footprint in m². Shells below this are merge candidates. Default 0.3.</param>
-        /// <param name="minVolume">Optional minimum acceptable bounding-box volume in m³. Shells below this are merge candidates. Pass null to ignore volume. Default 0.5.</param>
-        /// <param name="tolerance">Distance tolerance for adjacency and footprint comparisons. Default <see cref="Tolerance.Distance"/>.</param>
-        /// <param name="fuzzyTolerance">OCCT fuzzy tolerance for the union step. Default <see cref="Tolerance.MacroDistance"/>.</param>
+        /// <param name="minArea">Minimum acceptable floor footprint in m². Cells below this are merge candidates. Default 0.3.</param>
+        /// <param name="minVolume">Optional minimum acceptable volume in m³. Cells below this are merge candidates. Pass null to ignore volume. Default 0.5.</param>
+        /// <param name="tolerance">Distance tolerance for footprint comparisons and OCCT build/union. Default <see cref="Tolerance.Distance"/>.</param>
+        /// <param name="fuzzyTolerance">OCCT fuzzy tolerance for the cell build and union. Default <see cref="Tolerance.MacroDistance"/>.</param>
         /// <param name="mergeMode">Strategy for choosing the merge target. Default <see cref="MergeShellsMode.LongestSharedBoundary"/>.</param>
-        /// <param name="protectedShells">Optional shells that must never be merged away or used as a merge target (matched by centroid/size).</param>
-        /// <returns>The cleaned set of shells, or null when no valid shells were supplied.</returns>
+        /// <param name="protectedShells">Optional shells that must never be merged away or used as a merge target (matched to decoded cells by containment).</param>
+        /// <returns>The cleaned set of shells, or null when no valid shells were supplied. When native OCCT is unavailable the input is returned unchanged.</returns>
         public static List<Shell> MergeSmallShells(
             IEnumerable<Shell> shells,
             out List<Shell> mergedSmallShells,
@@ -56,19 +58,7 @@ namespace SAM.Geometry.OCCT
                 return null;
             }
 
-            // Per-shell metrics.
-            int count = input.Count;
-            BoundingBox3D[] boundingBoxes = new BoundingBox3D[count];
-            double[] footprints = new double[count];
-            double[] boxVolumes = new double[count];
-            for (int i = 0; i < count; i++)
-            {
-                boundingBoxes[i] = input[i].GetBoundingBox();
-                footprints[i] = Footprint(input[i], tolerance);
-                boxVolumes[i] = BoxVolume(boundingBoxes[i]);
-            }
-
-            HashSet<int> protectedIndices = ProtectedIndices(input, boundingBoxes, footprints, protectedShells, tolerance);
+            List<Shell> protectedList = protectedShells?.Where(x => x != null).ToList() ?? new List<Shell>();
 
             report.Add(string.Format(
                 "SAM_OCCT_MERGE_SHELLS_PARAMETERS: minArea={0:0.###} m², minVolume={1}, tolerance={2:0.####}, fuzzyTolerance={3:0.####}, mergeMode={4}, protected={5}, shells={6}.",
@@ -77,87 +67,147 @@ namespace SAM.Geometry.OCCT
                 tolerance,
                 fuzzyTolerance,
                 mergeMode,
-                protectedIndices.Count,
-                count));
+                protectedList.Count,
+                input.Count));
 
-            // Identify small shells.
+            // Decode the shells into an OCCT cell complex so merging uses real
+            // volumes and real shared-face adjacency.
+            List<Face3D> face3Ds = input
+                .SelectMany(x => x.Face3Ds ?? new List<Face3D>())
+                .Where(x => x != null)
+                .ToList();
+            if (face3Ds.Count == 0)
+            {
+                report.Add("SAM_OCCT_MERGE_SHELLS_NO_FACES: No Face3D geometry could be extracted from the supplied shells.");
+                return input.ToList();
+            }
+
+            OcctBuildOptions options = new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance };
+            Create.Shells(face3Ds, out OcctCellComplexResult result, options);
+            if (result?.Diagnostics != null)
+            {
+                report.AddRange(result.Diagnostics.Select(x => x.ToString()));
+            }
+
+            IReadOnlyList<OcctCell> cells = result?.Cells;
+            if (cells == null || cells.Count == 0)
+            {
+                report.Add("SAM_OCCT_MERGE_SHELLS_NO_CELLS: OCCT decoded no closed cells (native OCCT may be unavailable). Returning the input unchanged.");
+                return input.ToList();
+            }
+
+            int count = cells.Count;
+            report.Add(string.Format("SAM_OCCT_MERGE_SHELLS_TOPOLOGY: Decoded {0} cell(s) and {1} shared-face adjacency relation(s) from {2} input shell(s).", count, result.FaceAdjacencies?.Count ?? 0, input.Count));
+
+            // Per-cell metrics.
+            double[] volumes = new double[count];
+            double[] footprints = new double[count];
+            for (int i = 0; i < count; i++)
+            {
+                volumes[i] = double.IsNaN(cells[i].Volume) ? double.NaN : Math.Abs(cells[i].Volume);
+                footprints[i] = Footprint(cells[i].Faces, tolerance);
+            }
+
+            // Real shared-face boundary area between adjacent cells.
+            Dictionary<int, Dictionary<int, double>> sharedArea = new Dictionary<int, Dictionary<int, double>>();
+            foreach (OcctCellFaceAdjacency adjacency in result.FaceAdjacencies ?? new List<OcctCellFaceAdjacency>())
+            {
+                int a = adjacency.CellIndex1;
+                int b = adjacency.CellIndex2;
+                if (a < 0 || a >= count || b < 0 || b >= count || a == b)
+                {
+                    continue;
+                }
+
+                double area = SharedFaceArea(cells[a], adjacency.FaceIndex1, cells[b], adjacency.FaceIndex2);
+                if (double.IsNaN(area) || area <= 0)
+                {
+                    continue;
+                }
+
+                AddSharedArea(sharedArea, a, b, area);
+                AddSharedArea(sharedArea, b, a, area);
+            }
+
+            HashSet<int> protectedIndices = ProtectedIndices(cells, protectedList, fuzzyTolerance, tolerance);
+
+            // Identify small cells.
             List<int> smallIndices = new List<int>();
             for (int i = 0; i < count; i++)
             {
                 bool smallByArea = !double.IsNaN(footprints[i]) && footprints[i] > 0 && footprints[i] < minArea;
-                bool smallByVolume = minVolume.HasValue && !double.IsNaN(boxVolumes[i]) && boxVolumes[i] > 0 && boxVolumes[i] < minVolume.Value;
+                bool smallByVolume = minVolume.HasValue && !double.IsNaN(volumes[i]) && volumes[i] > 0 && volumes[i] < minVolume.Value;
                 if (smallByArea || smallByVolume)
                 {
                     smallIndices.Add(i);
                 }
             }
 
-            report.Add(string.Format("SAM_OCCT_MERGE_SHELLS_CANDIDATES: Found {0} small shell(s) out of {1}.", smallIndices.Count, count));
+            report.Add(string.Format("SAM_OCCT_MERGE_SHELLS_CANDIDATES: Found {0} small cell(s) out of {1}.", smallIndices.Count, count));
 
             if (smallIndices.Count == 0)
             {
-                report.Add("SAM_OCCT_MERGE_SHELLS_NO_OP: No shells fell below the supplied thresholds. Returning the input unchanged.");
-                return input.ToList();
+                report.Add("SAM_OCCT_MERGE_SHELLS_NO_OP: No cells fell below the supplied thresholds. Returning the decoded cells unchanged.");
+                return cells.Select(x => x.Shell).Where(x => x != null).ToList();
             }
 
-            // Union-find over shell indices; merging a small shell into a target unions their groups.
+            // Union-find over cell indices; merging a small cell into a target unions their groups.
             int[] parent = Enumerable.Range(0, count).ToArray();
-            HashSet<int> mergedIndices = new HashSet<int>();
 
-            foreach (int i in smallIndices.OrderBy(x => NonNegative(footprints[x])).ThenBy(x => NonNegative(boxVolumes[x])))
+            foreach (int i in smallIndices.OrderBy(x => NonNegative(footprints[x])).ThenBy(x => NonNegative(volumes[x])))
             {
-                string label = ShellLabel(i, footprints[i], boxVolumes[i]);
+                string label = CellLabel(i, footprints[i], volumes[i]);
 
                 if (protectedIndices.Contains(i))
                 {
-                    unmergedSmallShells.Add(input[i]);
+                    unmergedSmallShells.Add(cells[i].Shell);
                     report.Add(string.Format("SAM_OCCT_MERGE_SHELLS_UNMERGED: {0} is protected and was left unchanged.", label));
+                    continue;
+                }
+
+                if (!sharedArea.TryGetValue(i, out Dictionary<int, double> neighbours) || neighbours.Count == 0)
+                {
+                    unmergedSmallShells.Add(cells[i].Shell);
+                    report.Add(string.Format("SAM_OCCT_MERGE_SHELLS_UNMERGED: {0} has no face-adjacent neighbour to merge into.", label));
                     continue;
                 }
 
                 int target = -1;
                 double targetMetric = double.NegativeInfinity;
-                double targetContact = 0;
-                for (int j = 0; j < count; j++)
+                double targetShared = 0;
+                foreach (KeyValuePair<int, double> neighbour in neighbours)
                 {
-                    if (j == i || protectedIndices.Contains(j))
+                    if (protectedIndices.Contains(neighbour.Key))
                     {
                         continue;
                     }
 
-                    if (!Adjacent(boundingBoxes[i], boundingBoxes[j], tolerance))
-                    {
-                        continue;
-                    }
-
-                    double contact = ContactArea(boundingBoxes[i], boundingBoxes[j]);
                     double metric = mergeMode == MergeShellsMode.LargestNeighbour
-                        ? Math.Max(NonNegative(footprints[j]), NonNegative(boxVolumes[j]))
-                        : contact;
+                        ? Math.Max(NonNegative(footprints[neighbour.Key]), NonNegative(volumes[neighbour.Key]))
+                        : neighbour.Value;
 
                     if (metric > targetMetric)
                     {
                         targetMetric = metric;
-                        target = j;
-                        targetContact = contact;
+                        target = neighbour.Key;
+                        targetShared = neighbour.Value;
                     }
                 }
 
                 if (target == -1)
                 {
-                    unmergedSmallShells.Add(input[i]);
-                    report.Add(string.Format("SAM_OCCT_MERGE_SHELLS_UNMERGED: {0} has no touching neighbour to merge into.", label));
+                    unmergedSmallShells.Add(cells[i].Shell);
+                    report.Add(string.Format("SAM_OCCT_MERGE_SHELLS_UNMERGED: {0} had only protected neighbours.", label));
                     continue;
                 }
 
                 Union(parent, i, target);
-                mergedIndices.Add(i);
-                mergedSmallShells.Add(input[i]);
-                report.Add(string.Format("SAM_OCCT_MERGE_SHELLS_MERGED: {0} merged into shell {1} (estimated shared contact {2:0.###} m²).", label, target, targetContact));
+                mergedSmallShells.Add(cells[i].Shell);
+                report.Add(string.Format("SAM_OCCT_MERGE_SHELLS_MERGED: {0} merged into cell {1} across {2:0.###} m² of shared boundary.", label, target, targetShared));
             }
 
             // Fuse each multi-member group with OCCT; pass singletons through unchanged.
-            List<Shell> result = new List<Shell>();
+            List<Shell> resultShells = new List<Shell>();
             int unionGroups = 0;
             int unionFailures = 0;
             foreach (IGrouping<int, int> group in Enumerable.Range(0, count).GroupBy(x => Find(parent, x)))
@@ -165,17 +215,21 @@ namespace SAM.Geometry.OCCT
                 List<int> members = group.ToList();
                 if (members.Count == 1)
                 {
-                    result.Add(input[members[0]]);
+                    if (cells[members[0]].Shell != null)
+                    {
+                        resultShells.Add(cells[members[0]].Shell);
+                    }
+
                     continue;
                 }
 
-                List<Shell> groupShells = members.Select(x => input[x]).ToList();
-                List<Shell> unioned = Query.ShellsUnion(groupShells, out OcctCellComplexResult unionResult, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance });
+                List<Shell> groupShells = members.Select(x => cells[x].Shell).Where(x => x != null).ToList();
+                List<Shell> unioned = Query.ShellsUnion(groupShells, out OcctCellComplexResult unionResult, options);
                 if (unioned == null || unioned.Count == 0)
                 {
-                    // Union failed (e.g. native OCCT unavailable). Keep the originals so no geometry is lost.
+                    // Union failed; keep the originals so no geometry is lost.
                     unionFailures++;
-                    result.AddRange(groupShells);
+                    resultShells.AddRange(groupShells);
                     if (unionResult?.Diagnostics != null)
                     {
                         report.AddRange(unionResult.Diagnostics.Select(x => x.ToString()));
@@ -185,48 +239,41 @@ namespace SAM.Geometry.OCCT
                 }
 
                 unionGroups++;
-                result.AddRange(unioned);
+                resultShells.AddRange(unioned);
             }
 
             report.Add(string.Format(
-                "SAM_OCCT_MERGE_SHELLS_RESULT: {0} shell(s) after merging (was {1}). Fused {2} group(s), {3} union failure(s). Merged {4}, unmerged {5}.",
-                result.Count,
+                "SAM_OCCT_MERGE_SHELLS_RESULT: {0} shell(s) after merging (decoded {1} cell(s) from {2} input shell(s)). Fused {3} group(s), {4} union failure(s). Merged {5}, unmerged {6}.",
+                resultShells.Count,
                 count,
+                input.Count,
                 unionGroups,
                 unionFailures,
                 mergedSmallShells.Count,
                 unmergedSmallShells.Count));
 
-            return result;
+            return resultShells;
         }
 
-        private static HashSet<int> ProtectedIndices(List<Shell> shells, BoundingBox3D[] boundingBoxes, double[] footprints, IEnumerable<Shell> protectedShells, double tolerance)
+        private static HashSet<int> ProtectedIndices(IReadOnlyList<OcctCell> cells, List<Shell> protectedShells, double fuzzyTolerance, double tolerance)
         {
             HashSet<int> result = new HashSet<int>();
-            List<Shell> protectedList = protectedShells?.Where(x => x != null).ToList();
-            if (protectedList == null || protectedList.Count == 0)
+            if (protectedShells == null || protectedShells.Count == 0)
             {
                 return result;
             }
 
-            foreach (Shell protectedShell in protectedList)
+            for (int i = 0; i < cells.Count; i++)
             {
-                BoundingBox3D protectedBox = protectedShell.GetBoundingBox();
-                Point3D protectedCentroid = protectedBox?.GetCentroid();
-                if (protectedCentroid == null)
+                Point3D center = cells[i].Center;
+                if (center == null)
                 {
                     continue;
                 }
 
-                for (int i = 0; i < shells.Count; i++)
+                foreach (Shell protectedShell in protectedShells)
                 {
-                    if (result.Contains(i) || boundingBoxes[i] == null)
-                    {
-                        continue;
-                    }
-
-                    Point3D centroid = boundingBoxes[i].GetCentroid();
-                    if (centroid != null && centroid.Distance(protectedCentroid) <= tolerance)
+                    if (protectedShell.Inside(center, fuzzyTolerance, tolerance) || protectedShell.On(center, tolerance))
                     {
                         result.Add(i);
                         break;
@@ -237,66 +284,34 @@ namespace SAM.Geometry.OCCT
             return result;
         }
 
-        private static bool Adjacent(BoundingBox3D a, BoundingBox3D b, double tolerance)
+        private static double SharedFaceArea(OcctCell cellA, int faceIndexA, OcctCell cellB, int faceIndexB)
         {
-            if (a == null || b == null)
+            Face3D face3D = FaceAt(cellA, faceIndexA) ?? FaceAt(cellB, faceIndexB);
+            return face3D == null ? double.NaN : face3D.GetArea();
+        }
+
+        private static Face3D FaceAt(OcctCell cell, int faceIndex)
+        {
+            IReadOnlyList<OcctCellFace> faces = cell?.Faces;
+            if (faces == null || faceIndex < 0 || faceIndex >= faces.Count)
             {
-                return false;
+                return null;
             }
 
-            return AxisOverlap(a.Min.X, a.Max.X, b.Min.X, b.Max.X) >= -tolerance
-                && AxisOverlap(a.Min.Y, a.Max.Y, b.Min.Y, b.Max.Y) >= -tolerance
-                && AxisOverlap(a.Min.Z, a.Max.Z, b.Min.Z, b.Max.Z) >= -tolerance;
+            return faces[faceIndex]?.Face3D;
         }
 
-        private static double ContactArea(BoundingBox3D a, BoundingBox3D b)
+        private static double Footprint(IReadOnlyList<OcctCellFace> faces, double tolerance)
         {
-            if (a == null || b == null)
-            {
-                return 0;
-            }
-
-            double[] overlaps =
-            {
-                Math.Max(0, AxisOverlap(a.Min.X, a.Max.X, b.Min.X, b.Max.X)),
-                Math.Max(0, AxisOverlap(a.Min.Y, a.Max.Y, b.Min.Y, b.Max.Y)),
-                Math.Max(0, AxisOverlap(a.Min.Z, a.Max.Z, b.Min.Z, b.Max.Z))
-            };
-
-            Array.Sort(overlaps);
-            // Product of the two largest axis overlaps approximates the touching face area.
-            return overlaps[2] * overlaps[1];
-        }
-
-        private static double AxisOverlap(double minA, double maxA, double minB, double maxB)
-        {
-            return Math.Min(maxA, maxB) - Math.Max(minA, minB);
-        }
-
-        private static double BoxVolume(BoundingBox3D boundingBox)
-        {
-            if (boundingBox == null)
-            {
-                return double.NaN;
-            }
-
-            double dx = boundingBox.Max.X - boundingBox.Min.X;
-            double dy = boundingBox.Max.Y - boundingBox.Min.Y;
-            double dz = boundingBox.Max.Z - boundingBox.Min.Z;
-            return dx * dy * dz;
-        }
-
-        private static double Footprint(Shell shell, double tolerance)
-        {
-            List<Face3D> face3Ds = shell?.Face3Ds;
-            if (face3Ds == null || face3Ds.Count == 0)
+            if (faces == null || faces.Count == 0)
             {
                 return double.NaN;
             }
 
             List<Tuple<double, double>> horizontal = new List<Tuple<double, double>>();
-            foreach (Face3D face3D in face3Ds)
+            foreach (OcctCellFace cellFace in faces)
             {
+                Face3D face3D = cellFace?.Face3D;
                 if (face3D == null)
                 {
                     continue;
@@ -327,16 +342,28 @@ namespace SAM.Geometry.OCCT
             return horizontal.Where(x => x.Item1 <= floorZ + tolerance).Sum(x => x.Item2);
         }
 
-        private static string ShellLabel(int index, double footprint, double boxVolume)
+        private static string CellLabel(int index, double footprint, double volume)
         {
             string footprintText = double.IsNaN(footprint) ? "n/a" : string.Format("{0:0.###} m²", footprint);
-            string volumeText = double.IsNaN(boxVolume) ? "n/a" : string.Format("{0:0.###} m³", boxVolume);
-            return string.Format("Shell {0} (footprint {1}, bbox volume {2})", index, footprintText, volumeText);
+            string volumeText = double.IsNaN(volume) ? "n/a" : string.Format("{0:0.###} m³", volume);
+            return string.Format("Cell {0} (footprint {1}, volume {2})", index, footprintText, volumeText);
         }
 
         private static double NonNegative(double value)
         {
             return double.IsNaN(value) || value < 0 ? 0 : value;
+        }
+
+        private static void AddSharedArea(Dictionary<int, Dictionary<int, double>> sharedArea, int from, int to, double area)
+        {
+            if (!sharedArea.TryGetValue(from, out Dictionary<int, double> inner))
+            {
+                inner = new Dictionary<int, double>();
+                sharedArea[from] = inner;
+            }
+
+            inner.TryGetValue(to, out double existing);
+            inner[to] = existing + area;
         }
 
         private static int Find(int[] parent, int index)
