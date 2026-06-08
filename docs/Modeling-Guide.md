@@ -175,6 +175,54 @@ Useful diagnostics:
 Do not set `minArea_` or `minVolume_` so high that real rooms are swallowed.
 Merge thresholds are for slivers and offcuts, not for combining valid spaces.
 
+### Cleaning Small Shells (volume-first)
+
+When you are still working with closed volumes and have not built an analytical
+model yet, use `SAMOCCT.MergeSmallShells` to remove tiny shells before adjacency
+creation. It is the shell/Brep counterpart of `SAMOCCT.MergeSmallSpaces`.
+
+```text
+room/cell shells (or closed Breps)
+-> SAMOCCT.MergeSmallShells
+-> cleaned shells
+-> SAMOCCT.CreateAdjacencyClusterByShells
+```
+
+What it does:
+
+1. Finds shells with floor footprint below `minArea_` or axis-aligned
+   bounding-box volume below `minVolume_`.
+2. For each small shell, looks for touching neighbours (bounding boxes that meet
+   or overlap within `tolerance_`).
+3. Skips protected shells (`protectedShells_`, matched to the inputs by centroid)
+   as both candidates and targets.
+4. Picks the best neighbour according to `mergeMode_`:
+   - `LongestSharedBoundary`: largest estimated touching contact area (default).
+   - `LargestNeighbour`: largest neighbouring footprint, then bounding-box volume.
+5. Fuses each small shell with its chosen neighbour using OCCT `ShellsUnion`
+   (`tolerance_` and `fuzzyTolerance_` control the union).
+
+Inputs: `_shells`, `minArea_`, `minVolume_`, `tolerance_`, `fuzzyTolerance_`,
+`mergeMode_`, `protectedShells_`.
+
+Outputs: `Shells` (cleaned), `mergedSmallShells`, `unmergedSmallShells`,
+`report`.
+
+Notes:
+
+- `minVolume_` here compares the shell's axis-aligned bounding-box volume, an
+  approximate enclosing volume, because exact shell volume is not computed at the
+  geometry layer. Footprint (`minArea_`) is the more precise filter.
+- Adjacency and contact area are estimated from bounding boxes, so very thin or
+  diagonally touching shells may need a slightly larger `tolerance_`.
+- If native OCCT is unavailable the union step cannot run; the component then
+  keeps the original shells for each group and records the union diagnostics in
+  `report` so no geometry is lost.
+
+Useful diagnostics: `SAM_OCCT_MERGE_SHELLS_PARAMETERS`,
+`SAM_OCCT_MERGE_SHELLS_CANDIDATES`, `SAM_OCCT_MERGE_SHELLS_MERGED`,
+`SAM_OCCT_MERGE_SHELLS_UNMERGED`, and `SAM_OCCT_MERGE_SHELLS_RESULT`.
+
 ## Panels/Faces vs Shells
 
 Use `Panel`/`Face3D` when:

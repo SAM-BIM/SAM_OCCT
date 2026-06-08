@@ -49,6 +49,7 @@ Geometry:
 - `SAMOCCT.ShellsRepair`
 - `SAMOCCT.ShellsSplit`
 - `SAMOCCT.ShellsSectionByPlane`
+- `SAMOCCT.MergeSmallShells`
 
 Analytical:
 
@@ -88,6 +89,15 @@ chooses the merge target (`LongestSharedBoundary`, `LargestNeighbour`, or
 vertically stacked neighbours on a different level are never used as targets.
 The component reports merged and unmerged spaces and a coded `report` of every
 decision (`SAM_OCCT_MERGE_*`).
+
+`SAMOCCT.MergeSmallShells` is the shell/Brep counterpart of the same clean-up.
+It runs before any analytical model exists: it finds tiny closed shells (floor
+footprint below `minArea_` or bounding-box volume below `minVolume_`), groups
+each with its best touching neighbour (`LongestSharedBoundary` or
+`LargestNeighbour`), and fuses each group with OCCT `ShellsUnion`. Shells that
+are large, isolated, or listed in `protectedShells_` pass through unchanged. The
+component reports merged and unmerged shells and a coded `report`
+(`SAM_OCCT_MERGE_SHELLS_*`).
 
 ## Modeling Guide
 
