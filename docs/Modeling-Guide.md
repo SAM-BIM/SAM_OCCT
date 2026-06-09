@@ -520,9 +520,23 @@ Notes:
 
 - Increase `angleTolerance_` to merge faces that are only approximately coplanar;
   keep it small to avoid flattening intentional creases.
-- This is geometry-level only. Coplanar merging for analytical `Panels` and
-  `AdjacencyCluster`s (which must also respect panel type, construction, shared
-  apertures, and space adjacency) is a separate, forthcoming step.
+
+### Analytical Coplanar Merging
+
+`SAMOCCT.MergeCoplanarPanels` and `SAMOCCT.MergeCoplanarAdjacencyCluster` apply
+the same OCCT engine at the analytical level, but with extra rules so the model
+stays valid:
+
+- Only panels with the **same panel type and construction** may merge.
+- In an `AdjacencyCluster`, panels must additionally **separate the same
+  space(s)** (same adjacency), so internal/external relations are preserved.
+- **Apertures** (windows/doors) on the original panels are re-hosted onto the
+  merged panel.
+
+Use these to simplify over-segmented analytical models - for example after
+shell-to-panel conversion or cell-complex creation produced many small coplanar
+panels per wall - without changing the spaces, panel types, constructions, or
+glazing.
 
 ## Rule Of Thumb
 

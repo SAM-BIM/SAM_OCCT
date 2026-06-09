@@ -59,6 +59,8 @@ Analytical:
 - `SAMOCCT.CreateAdjacencyCluster`
 - `SAMOCCT.CreateAdjacencyClusterByShells`
 - `SAMOCCT.MergeSmallSpaces`
+- `SAMOCCT.MergeCoplanarPanels`
+- `SAMOCCT.MergeCoplanarAdjacencyCluster`
 - `SAMOCCT.PanelsFromShells`
 
 `SAMOCCT.TriangulateSurface` takes possibly non-planar surfaces and
@@ -148,6 +150,8 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | `SAMOCCT.CreateAdjacencyCluster` | Builds a SAM `AdjacencyCluster` from analytical `Panels` via OCCT cell building. | `_panels`, `spaces_`, `tolerance_`, `fuzzyTolerance_` | `AdjacencyCluster` |
 | `SAMOCCT.CreateAdjacencyClusterByShells` | Builds an `AdjacencyCluster` from closed shell space volumes, reusing space metadata. | `_shells`, `spaces_`, `names_`, `elevationGround_`, `fuzzyTolerance_`, `maxDistance_`, `maxAngle_`, `minArea_`, `tolerance_` | `AdjacencyCluster` |
 | `SAMOCCT.MergeSmallSpaces` | Merges tiny spaces of an `AdjacencyCluster` into the best adjacent larger space. | `_adjacencyCluster`, `minArea_`, `minVolume_`, `mergeMode_`, `allowMergeExternal_`, `protectedSpaces_`, `tolerance_` | `adjacencyCluster` (+ `mergedSpaces`, `unmergedSmallSpaces`, `report`) |
+| `SAMOCCT.MergeCoplanarPanels` | Merges coplanar `Panels` of the same type+construction into fewer panels via OCCT; apertures are re-hosted. | `_panels`, `angleTolerance_`, `tolerance_` | `Panels` |
+| `SAMOCCT.MergeCoplanarAdjacencyCluster` | Merges coplanar cluster panels of the same type+construction+space-adjacency via OCCT, preserving topology and apertures. | `_adjacencyCluster`, `angleTolerance_`, `tolerance_` | `AdjacencyCluster` |
 | `SAMOCCT.PanelsFromShells` | Creates analytical SAM `Panels` from the faces of closed shells. | `_shells`, `silverSpacing_`, `tolerance_` | `Panels` |
 
 For full input/output descriptions, hover the component parameters in
