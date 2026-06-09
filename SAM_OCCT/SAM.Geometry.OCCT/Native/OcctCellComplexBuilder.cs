@@ -223,7 +223,11 @@ namespace SAM.Geometry.OCCT.Native
 
         public static bool TryBuild(IEnumerable<Face3D> face3Ds, OcctBuildOptions options, OcctCellComplexResult result)
         {
-            if (!OcctNativeInputBuilder.TryBuild(face3Ds, options, result, out OcctNativeInput input))
+            // Materialise once so the watertightness fallback can re-read the
+            // same faces after a native failure without re-enumerating a lazy source.
+            List<Face3D> face3DList = face3Ds?.ToList();
+
+            if (!OcctNativeInputBuilder.TryBuild(face3DList, options, result, out OcctNativeInput input))
             {
                 return false;
             }
@@ -248,7 +252,11 @@ namespace SAM.Geometry.OCCT.Native
 
                 if (status != 0)
                 {
-                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_FAILED", string.Format("Native OCCT builder returned status {0}.", status));
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_FAILED", string.Format("Native OCCT builder returned status {0} ({1}).", status, OcctOpenShellAnalysis.DescribeBuildStatus(status)));
+
+                    // The faces did not bound a volume; report where the shell is
+                    // open so the failure is actionable instead of an opaque code.
+                    OcctOpenShellAnalysis.Report(face3DList, options, result);
                     return false;
                 }
 
