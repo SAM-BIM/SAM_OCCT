@@ -6,6 +6,7 @@ using SAM.Core.OCCT;
 using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
+using System.Linq;
 using Xunit;
 using Xunit.Abstractions;
 using AnalyticalOcctCreate = SAM.Analytical.OCCT.Create;
@@ -13,10 +14,11 @@ using AnalyticalOcctCreate = SAM.Analytical.OCCT.Create;
 namespace SAM.OCCT.IntegrationTests
 {
     /// <summary>
-    /// Regression tests for issue #11: Create.AdjacencyCluster(shells, ...) must not
-    /// drop sub-minArea faces from an already-closed shell, because removing a
-    /// load-bearing face opens the volume and OCCT can no longer build the cell.
-    /// Native-gated (auto-skips without SAM.Occt.Native).
+    /// Regression tests for issue #11. Create.AdjacencyCluster(shells, ...) must:
+    /// (1) keep every shell face for the OCCT volume build - dropping a sub-minArea
+    /// face from an already-closed shell opens it and OCCT cannot build the cell; and
+    /// (2) still honour minArea as a POST-build panel filter, so tiny sliver faces
+    /// are kept for closure but not turned into SAM panels. Native-gated.
     /// </summary>
     public class AdjacencyClusterShellFaceFilterIntegrationTests
     {
@@ -58,6 +60,30 @@ namespace SAM.OCCT.IntegrationTests
             List<Space> spaces = adjacencyCluster.GetSpaces();
             Assert.NotNull(spaces);
             Assert.Single(spaces);
+        }
+
+        [SkippableFact]
+        public void AdjacencyCluster_MinAreaAboveSliver_KeepsClosureButExcludesSliverPanel()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - caps 0.0009 m^2, walls 0.03 m^2. minArea sits between them.
+            Shell shell = TestGeometry.CreateSlenderColumnBox(0, 0, 0, 1.0, out double capArea);
+            const double minArea = 0.005;
+            Assert.True(capArea < minArea, "cap must be below minArea");
+
+            // Act - minArea is a post-build panel filter: it must NOT reopen the shell.
+            AdjacencyCluster adjacencyCluster = AnalyticalOcctCreate.AdjacencyCluster(
+                new List<Shell> { shell }, null, out OcctCellComplexResult result, null, new OcctBuildOptions(), minArea: minArea);
+
+            // Assert - the space still builds (closure preserved) and no panel is below minArea.
+            Assert.NotNull(adjacencyCluster);
+            Assert.Single(adjacencyCluster.GetSpaces());
+
+            List<Panel> panels = adjacencyCluster.GetPanels();
+            Assert.NotNull(panels);
+            Assert.NotEmpty(panels);
+            Assert.DoesNotContain(panels, p => { double a = p.GetFace3D()?.GetArea() ?? double.NaN; return !double.IsNaN(a) && a < minArea; });
         }
     }
 }

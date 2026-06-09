@@ -175,7 +175,7 @@ namespace SAM.Analytical.OCCT
             cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_SHELL_FACES", string.Format("Extracted {0} face(s) directly from {1} shell(s).", face3Ds.Count, shells_Temp.Count));
             if (smallFacesKept > 0)
             {
-                cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_SHELL_SMALL_FACES_KEPT", string.Format("Kept {0} face(s) below minArea ({1:0.######} m^2): removing faces from an already-closed shell would open it. Use ShellsRepair to defeature slivers while preserving closure.", smallFacesKept, minArea));
+                cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_SHELL_SMALL_FACES_KEPT", string.Format("Kept {0} face(s) below minArea ({1:0.######} m^2) for the OCCT volume build so the cell stays closed; they are excluded from SAM panels by minArea afterwards. (Dropping them before the build would open the shell.)", smallFacesKept, minArea));
             }
             cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_SHELL_FACE_EXTRACTION", string.Format("Shell face extraction took {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
 

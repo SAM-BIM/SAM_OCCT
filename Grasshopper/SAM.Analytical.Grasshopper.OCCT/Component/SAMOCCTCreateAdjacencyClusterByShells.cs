@@ -20,7 +20,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("d6950fec-cea4-4b48-9099-8943a7765e81");
 
-        public override string LatestComponentVersion => "0.3.2";
+        public override string LatestComponentVersion => "0.3.3";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -55,9 +55,12 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 fuzzyTolerance.SetPersistentData(Tolerance.MacroDistance);
                 result.Add(new GH_SAMParam(fuzzyTolerance, ParamVisibility.Voluntary));
 
-                // minArea_ was removed in 0.3.2: these shells are already closed volumes,
-                // so dropping small faces opened them (issue #11). Tiny-face handling that
-                // preserves closure belongs to SAMOCCT.ShellsRepair (OCCT defeaturing).
+                // minArea_ is a POST-build panel filter only (issue #11): every shell face
+                // is kept for the OCCT volume build so the cell never opens, then faces below
+                // minArea_ are simply not turned into SAM panels. It cannot reopen a shell.
+                global::Grasshopper.Kernel.Parameters.Param_Number minArea = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "minArea_", NickName = "minArea_", Description = "Minimum SAM panel area in m². Applied AFTER the OCCT volume is built: every shell face is kept so the cell stays closed, but faces below this area are not turned into SAM panels (e.g. tiny triangulation slivers). Does not reopen shells. Set to 0 to keep every panel.", Access = GH_ParamAccess.item };
+                minArea.SetPersistentData(0.01);
+                result.Add(new GH_SAMParam(minArea, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT and SAM model tolerance", Access = GH_ParamAccess.item };
                 tolerance.SetPersistentData(Tolerance.Distance);
@@ -165,6 +168,13 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref fuzzyTolerance);
             }
 
+            double minArea = 0.01;
+            index = Params.IndexOfInputParam("minArea_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref minArea);
+            }
+
             double tolerance = Tolerance.Distance;
             index = Params.IndexOfInputParam("tolerance_");
             if (index != -1)
@@ -197,6 +207,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 log,
                 new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance },
                 names,
+                minArea: minArea,
                 maxAngle: maxAngle);
             diagnostics.Add(string.Format("SAM_OCCT_TIMING_OCCT_AND_ADJACENCY: {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
 
