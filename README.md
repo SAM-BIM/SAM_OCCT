@@ -59,6 +59,8 @@ Analytical:
 - `SAMOCCT.CreateAdjacencyCluster`
 - `SAMOCCT.CreateAdjacencyClusterByShells`
 - `SAMOCCT.MergeSmallSpaces`
+- `SAMOCCT.MergeCoplanarPanels`
+- `SAMOCCT.MergeCoplanarAdjacencyCluster`
 - `SAMOCCT.PanelsFromShells`
 
 `SAMOCCT.TriangulateSurface` takes possibly non-planar surfaces and
@@ -137,9 +139,9 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | `SAMOCCT.ShellsUnion` | Merges touching or overlapping closed shells into combined solids. | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsDifference` | Subtracts closed cutter volumes from target shells. | `_shells`, `_cutterShells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsIntersection` | Keeps only the volume where target shells overlap tool shells. | `_shells`, `_toolShells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
-| `SAMOCCT.ShellsRepair` | Rebuilds/repairs each closed shell through OCCT (heals gaps, bad faces). | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ShellsRepair` | Rebuilds/repairs each closed shell through OCCT (heals gaps, bad faces) and defeatures away tiny sliver faces below `minArea_` left by sectioning, extending neighbours to keep the shell closed. | `_shells`, `tolerance_`, `fuzzyTolerance_`, `minArea_` | `Shells` |
 | `SAMOCCT.ShellsSplit` | Splits overlapping/touching shells into cleaner adjacent pieces. | `_shells`, `silverSpacing_`, `tolerance_` | `Shells` |
-| `SAMOCCT.ShellsSectionByPlane` | Sections shells by a plane, returning the cut faces and the split shells. | `_shells`, `plane_`, `tolerance_` | `Face3Ds`, `Shells` |
+| `SAMOCCT.ShellsSectionByPlane` | Sections shells by one or more planes (supply many level planes to cut many levels at once), returning the cut faces and the split shells. | `_shells`, `planes_`, `tolerance_` | `Face3Ds`, `Shells` |
 | `SAMOCCT.MergeSmallShells` | Fuses tiny closed shells into their best face-adjacent neighbour via OCCT cell topology. | `_shells`, `minArea_`, `minVolume_`, `mergeMode_`, `protectedShells_`, `fuzzyTolerance_`, `tolerance_` | `Shells` (+ `mergedSmallShells`, `unmergedSmallShells`, `report`) |
 | `SAMOCCT.MergeCoplanarFace3Ds` | Merges adjacent coplanar Face3Ds into fewer, larger faces via OCCT `ShapeUpgrade_UnifySameDomain`. | `_face3Ds`, `angleTolerance_`, `tolerance_` | `Face3Ds` |
 | `SAMOCCT.MergeCoplanarShells` | Merges each shell's coplanar faces into fewer faces (volume preserved) via OCCT. | `_shells`, `angleTolerance_`, `tolerance_` | `Shells` |
@@ -152,6 +154,8 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | `SAMOCCT.CreateAdjacencyCluster` | Builds a SAM `AdjacencyCluster` from analytical `Panels` via OCCT cell building. | `_panels`, `spaces_`, `tolerance_`, `fuzzyTolerance_` | `AdjacencyCluster` |
 | `SAMOCCT.CreateAdjacencyClusterByShells` | Builds an `AdjacencyCluster` from closed shell space volumes, reusing space metadata. | `_shells`, `spaces_`, `names_`, `elevationGround_`, `fuzzyTolerance_`, `maxDistance_`, `maxAngle_`, `minArea_`, `tolerance_` | `AdjacencyCluster` |
 | `SAMOCCT.MergeSmallSpaces` | Merges tiny spaces of an `AdjacencyCluster` into the best adjacent larger space. | `_adjacencyCluster`, `minArea_`, `minVolume_`, `mergeMode_`, `allowMergeExternal_`, `protectedSpaces_`, `tolerance_` | `adjacencyCluster` (+ `mergedSpaces`, `unmergedSmallSpaces`, `report`) |
+| `SAMOCCT.MergeCoplanarPanels` | Merges coplanar `Panels` of the same type+construction into fewer panels via OCCT; apertures are re-hosted. | `_panels`, `angleTolerance_`, `tolerance_` | `Panels` |
+| `SAMOCCT.MergeCoplanarAdjacencyCluster` | Merges coplanar cluster panels of the same type+construction+space-adjacency via OCCT, preserving topology and apertures. | `_adjacencyCluster`, `angleTolerance_`, `tolerance_` | `AdjacencyCluster` |
 | `SAMOCCT.PanelsFromShells` | Creates analytical SAM `Panels` from the faces of closed shells. | `_shells`, `silverSpacing_`, `tolerance_` | `Panels` |
 
 For full input/output descriptions, hover the component parameters in

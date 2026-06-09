@@ -5,9 +5,12 @@ using Grasshopper.Kernel;
 using Grasshopper.Kernel.Types;
 using SAM.Core;
 using SAM.Core.Grasshopper;
+using SAM.Core.OCCT;
+using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace SAM.Geometry.Grasshopper.OCCT
 {
@@ -15,7 +18,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("67f00e15-259c-4080-8b34-efb4cd59cb8c");
 
-        public override string LatestComponentVersion => "0.1.1";
+        public override string LatestComponentVersion => "0.2.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -34,7 +37,9 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 shells.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(shells, ParamVisibility.Binding));
 
-                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "plane_", NickName = "plane_", Description = "SAM/Rhino plane. Uses shell centroid XY plane if omitted.", Access = GH_ParamAccess.item, Optional = true }, ParamVisibility.Voluntary));
+                global::Grasshopper.Kernel.Parameters.Param_GenericObject planes = new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "planes_", NickName = "planes_", Description = "One or more SAM/Rhino planes to section by. Supply many level planes to cut a shell into many levels in one go. Uses the shell centroid XY plane if none are supplied.", Access = GH_ParamAccess.list, Optional = true };
+                planes.DataMapping = GH_DataMapping.Flatten;
+                result.Add(new GH_SAMParam(planes, ParamVisibility.Binding));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "Tolerance", Access = GH_ParamAccess.item };
                 tolerance.SetPersistentData(Tolerance.Distance);
@@ -86,16 +91,19 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 return;
             }
 
-            Plane plane = null;
-            index = Params.IndexOfInputParam("plane_");
+            List<Plane> planes = new List<Plane>();
+            index = Params.IndexOfInputParam("planes_");
             if (index != -1)
             {
-                GH_ObjectWrapper planeWrapper = null;
-                if (dataAccess.GetData(index, ref planeWrapper) && planeWrapper != null)
+                List<GH_ObjectWrapper> planeWrappers = new List<GH_ObjectWrapper>();
+                if (dataAccess.GetDataList(index, planeWrappers))
                 {
-                    if (Query.TryGetSAMGeometries(planeWrapper, out List<Plane> planes) && planes != null && planes.Count != 0)
+                    foreach (GH_ObjectWrapper planeWrapper in planeWrappers)
                     {
-                        plane = planes[0];
+                        if (planeWrapper != null && Query.TryGetSAMGeometries(planeWrapper, out List<Plane> planes_Temp) && planes_Temp != null)
+                        {
+                            planes.AddRange(planes_Temp.Where(x => x != null));
+                        }
                     }
                 }
             }
@@ -118,6 +126,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
             List<Face3D> face3Ds = new List<Face3D>();
             List<Shell> shells_Split = new List<Shell>();
+            List<string> occtDiagnostics = new List<string>();
             foreach (Shell shell in shells)
             {
                 BoundingBox3D boundingBox3D = shell?.GetBoundingBox();
@@ -126,27 +135,62 @@ namespace SAM.Geometry.Grasshopper.OCCT
                     continue;
                 }
 
-                Plane plane_Temp = plane ?? new Plane(boundingBox3D.GetCentroid(), Vector3D.WorldZ);
-                List<Face3D> face3Ds_Temp = shell.Section(plane_Temp, true, Tolerance.Angle, tolerance, Tolerance.MacroDistance);
-                if (face3Ds_Temp != null)
-                {
-                    face3Ds.AddRange(face3Ds_Temp);
+                List<Plane> planes_Temp = planes.Count != 0 ? planes : new List<Plane> { new Plane(boundingBox3D.GetCentroid(), Vector3D.WorldZ) };
 
-                    List<Shell> shells_Split_Temp = shell.Split(face3Ds_Temp, Tolerance.MacroDistance, Tolerance.Angle, tolerance);
-                    if (shells_Split_Temp != null && shells_Split_Temp.Count != 0)
+                // Cross-section the shell at each plane.
+                List<Face3D> sectionFace3Ds = new List<Face3D>();
+                foreach (Plane plane_Temp in planes_Temp)
+                {
+                    List<Face3D> face3Ds_Temp = shell.Section(plane_Temp, true, Tolerance.Angle, tolerance, Tolerance.MacroDistance);
+                    if (face3Ds_Temp != null)
                     {
-                        shells_Split.AddRange(shells_Split_Temp);
-                        continue;
+                        sectionFace3Ds.AddRange(face3Ds_Temp.Where(x => x != null));
                     }
                 }
 
-                shells_Split.Add(new Shell(shell));
+                face3Ds.AddRange(sectionFace3Ds);
+
+                if (sectionFace3Ds.Count == 0)
+                {
+                    shells_Split.Add(new Shell(shell));
+                    continue;
+                }
+
+                // Build the level cells with the OCCT engine: the shell's boundary faces plus the
+                // horizontal section faces are fed to BOPAlgo_MakerVolume, which reliably partitions
+                // the volume into every closed level cell in one pass - including interior slabs
+                // bounded by two planes that managed Section/Split can drop.
+                List<Face3D> allFace3Ds = new List<Face3D>();
+                List<Face3D> shellFace3Ds = shell.Face3Ds;
+                if (shellFace3Ds != null)
+                {
+                    allFace3Ds.AddRange(shellFace3Ds.Where(x => x != null));
+                }
+
+                allFace3Ds.AddRange(sectionFace3Ds);
+
+                List<Shell> levels = Geometry.OCCT.Create.Shells(allFace3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance });
+                if (result?.Diagnostics != null)
+                {
+                    occtDiagnostics.AddRange(result.Diagnostics.Select(x => x.ToString()));
+                }
+
+                if (levels != null && levels.Count != 0)
+                {
+                    shells_Split.AddRange(levels);
+                }
+                else
+                {
+                    // OCCT could not build cells (e.g. native unavailable); keep the original shell.
+                    shells_Split.Add(new Shell(shell));
+                }
             }
 
             List<string> diagnostics = new List<string>
             {
-                string.Format("SAM_OCCT_SECTION_SUCCESS: Created {0} section Face3D(s) and {1} split shell(s).", face3Ds.Count, shells_Split.Count)
+                string.Format("SAM_OCCT_SECTION_SUCCESS: Created {0} section Face3D(s) and {1} level shell(s).", face3Ds.Count, shells_Split.Count)
             };
+            diagnostics.AddRange(occtDiagnostics);
 
             index = Params.IndexOfOutputParam("Face3Ds");
             if (index != -1)

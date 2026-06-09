@@ -147,6 +147,68 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
+        public static bool TryRepair(IEnumerable<Shell> shells, OcctBuildOptions options, double minArea, OcctCellComplexResult result)
+        {
+            if (!OcctNativeInputBuilder.TryBuild(shells, options, result, "SAM_OCCT_REPAIR_INPUT_EMPTY", "No serializable shell geometry was found.", out OcctNativeInput input))
+            {
+                return false;
+            }
+
+            IntPtr resultHandle = IntPtr.Zero;
+            try
+            {
+                int status = NativeMethods.sam_occt_shells_repair(
+                    input.Coordinates,
+                    input.Coordinates.Length / 3,
+                    input.LoopPointCounts,
+                    input.LoopPointCounts.Length,
+                    input.FaceLoopCounts,
+                    input.FaceCount,
+                    input.ShellFaceCounts,
+                    input.ShellCount,
+                    options.Tolerance,
+                    options.FuzzyTolerance,
+                    options.RunParallel ? 1 : 0,
+                    minArea,
+                    out resultHandle);
+
+                result.NativeAvailable = true;
+
+                if (status != 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_REPAIR_NATIVE_FAILED", string.Format("Native OCCT repair returned status {0}.", status));
+                    return false;
+                }
+
+                return DecodeResult(resultHandle, result);
+            }
+            catch (DllNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_MISSING", string.Format("Native OCCT library '{0}' was not found. {1}", global::SAM.Core.OCCT.Query.NativeLibraryName(), exception.Message));
+                return false;
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_ENTRYPOINT_MISSING", exception.Message);
+                return false;
+            }
+            finally
+            {
+                if (resultHandle != IntPtr.Zero)
+                {
+                    try
+                    {
+                        NativeMethods.sam_occt_free_result(resultHandle);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+
         public static bool TryDifference(IEnumerable<Shell> shells, IEnumerable<Shell> cutterShells, OcctBuildOptions options, OcctCellComplexResult result)
         {
             if (!OcctNativeInputBuilder.TryBuild(shells, options, result, "SAM_OCCT_DIFFERENCE_TARGET_EMPTY", "No serializable target shell geometry was found.", out OcctNativeInput targetInput))
@@ -543,6 +605,22 @@ namespace SAM.Geometry.OCCT.Native
                 double tolerance,
                 double fuzzyTolerance,
                 int runParallel,
+                out IntPtr resultHandle);
+
+            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+            public static extern int sam_occt_shells_repair(
+                [In] double[] coordinates,
+                int pointCount,
+                [In] int[] loopPointCounts,
+                int loopCount,
+                [In] int[] faceLoopCounts,
+                int faceCount,
+                [In] int[] shellFaceCounts,
+                int shellCount,
+                double tolerance,
+                double fuzzyTolerance,
+                int runParallel,
+                double minArea,
                 out IntPtr resultHandle);
 
             [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]

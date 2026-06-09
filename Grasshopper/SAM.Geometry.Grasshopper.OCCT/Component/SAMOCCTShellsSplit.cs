@@ -5,9 +5,12 @@ using Grasshopper.Kernel;
 using Grasshopper.Kernel.Types;
 using SAM.Core;
 using SAM.Core.Grasshopper;
+using SAM.Core.OCCT;
+using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace SAM.Geometry.Grasshopper.OCCT
 {
@@ -15,12 +18,12 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("fb08a424-65d4-4b4e-8f8a-7af2d13de524");
 
-        public override string LatestComponentVersion => "0.1.0";
+        public override string LatestComponentVersion => "0.2.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
         public SAMOCCTShellsSplit()
-          : base("SAMOCCT.ShellsSplit", "SAMOCCT.ShellsSplit", "Split overlapping or touching shell volumes into cleaner adjacent pieces", "SAM", "OCCT")
+          : base("SAMOCCT.ShellsSplit", "SAMOCCT.ShellsSplit", "Split overlapping or touching shell volumes into cleaner adjacent pieces using the OCCT engine (BOPAlgo_MakerVolume)", "SAM", "OCCT")
         {
         }
 
@@ -110,11 +113,29 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 }
             }
 
-            List<Shell> resultShells = shells.Split(silverSpacing, Tolerance.Angle, tolerance);
+            // Split via the OCCT engine: feed every input shell face to BOPAlgo_MakerVolume
+            // (Create.Shells), which arranges the overlapping/touching volumes into clean,
+            // non-overlapping adjacent cells. No managed SAM split is used.
+            List<Face3D> face3Ds = new List<Face3D>();
+            foreach (Shell shell in shells)
+            {
+                List<Face3D> shellFace3Ds = shell?.Face3Ds;
+                if (shellFace3Ds != null)
+                {
+                    face3Ds.AddRange(shellFace3Ds.Where(x => x != null));
+                }
+            }
+
+            List<Shell> resultShells = Geometry.OCCT.Create.Shells(face3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = silverSpacing });
+
             List<string> diagnostics = new List<string>
             {
                 string.Format("SAM_OCCT_SPLIT_SUCCESS: Split {0} input shell(s) into {1} shell(s).", shells.Count, resultShells?.Count ?? 0)
             };
+            if (result?.Diagnostics != null)
+            {
+                diagnostics.AddRange(result.Diagnostics.Select(x => x.ToString()));
+            }
 
             index = Params.IndexOfOutputParam("Shells");
             if (index != -1)

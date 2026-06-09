@@ -44,6 +44,21 @@ room box shells
 This is a good workflow for conceptual massing, roof-shaped spaces, atrium
 division, shafts, and other volume-first modeling.
 
+### Cleaning Up Tiny Faces After Sectioning
+
+`SAMOCCT.ShellsSectionByPlane` can leave very small sliver faces on the level
+shells it produces (e.g. a stray face of `0.000079` m²). Feed those shells into
+`SAMOCCT.ShellsRepair` with `minArea_` set to remove them.
+
+Internally this uses OCCT **defeaturing** (`BRepAlgoAPI_Defeaturing`): faces
+below `minArea_` (in m²) are removed and the **neighbouring faces are extended to
+fill the gap**, so each shell stays a closed solid. This is why simply deleting a
+face and rebuilding does not work — once a face is gone the volume is no longer
+bounded and OCCT cannot reconstruct the cell. The default `minArea_` is `0.01`
+m²; set it to `0` to repair without removing any face. The number of detected
+sub-threshold faces is reported on the `Diagnostics` output
+(`SAM_OCCT_REPAIR_SMALL_FACES`).
+
 Do not union adjacent room shells before creating an adjacency cluster if each
 room should remain a separate space. Union is for merging volumes into a larger
 solid, not for preserving individual rooms.
@@ -520,9 +535,23 @@ Notes:
 
 - Increase `angleTolerance_` to merge faces that are only approximately coplanar;
   keep it small to avoid flattening intentional creases.
-- This is geometry-level only. Coplanar merging for analytical `Panels` and
-  `AdjacencyCluster`s (which must also respect panel type, construction, shared
-  apertures, and space adjacency) is a separate, forthcoming step.
+
+### Analytical Coplanar Merging
+
+`SAMOCCT.MergeCoplanarPanels` and `SAMOCCT.MergeCoplanarAdjacencyCluster` apply
+the same OCCT engine at the analytical level, but with extra rules so the model
+stays valid:
+
+- Only panels with the **same panel type and construction** may merge.
+- In an `AdjacencyCluster`, panels must additionally **separate the same
+  space(s)** (same adjacency), so internal/external relations are preserved.
+- **Apertures** (windows/doors) on the original panels are re-hosted onto the
+  merged panel.
+
+Use these to simplify over-segmented analytical models - for example after
+shell-to-panel conversion or cell-complex creation produced many small coplanar
+panels per wall - without changing the spaces, panel types, constructions, or
+glazing.
 
 ## Rule Of Thumb
 
