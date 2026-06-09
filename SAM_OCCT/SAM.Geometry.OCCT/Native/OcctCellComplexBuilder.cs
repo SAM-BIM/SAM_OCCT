@@ -290,6 +290,25 @@ namespace SAM.Geometry.OCCT.Native
                 return false;
             }
 
+            return TryTriangulateCore(input, options, linearDeflection, angularDeflection, relativeDeflection, result, out triangles);
+        }
+
+        public static bool TryTriangulate(IEnumerable<IReadOnlyList<Point3D>> boundaryLoops, OcctBuildOptions options, double linearDeflection, double angularDeflection, bool relativeDeflection, OcctCellComplexResult result, out List<Triangle3D> triangles)
+        {
+            triangles = new List<Triangle3D>();
+
+            if (!OcctNativeInputBuilder.TryBuild(boundaryLoops, options, result, out OcctNativeInput input))
+            {
+                return false;
+            }
+
+            return TryTriangulateCore(input, options, linearDeflection, angularDeflection, relativeDeflection, result, out triangles);
+        }
+
+        private static bool TryTriangulateCore(OcctNativeInput input, OcctBuildOptions options, double linearDeflection, double angularDeflection, bool relativeDeflection, OcctCellComplexResult result, out List<Triangle3D> triangles)
+        {
+            triangles = new List<Triangle3D>();
+
             IntPtr resultHandle = IntPtr.Zero;
             try
             {

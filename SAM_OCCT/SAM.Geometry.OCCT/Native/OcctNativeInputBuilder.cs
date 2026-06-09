@@ -4,6 +4,7 @@
 using SAM.Core.OCCT;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace SAM.Geometry.OCCT.Native
 {
@@ -147,6 +148,77 @@ namespace SAM.Geometry.OCCT.Native
                 ShellCount = shellFaceCounts.Count
             };
 
+            return true;
+        }
+
+        public static bool TryBuild(IEnumerable<IReadOnlyList<Point3D>> boundaryLoops, OcctBuildOptions options, OcctCellComplexResult result, out OcctNativeInput input)
+        {
+            input = null;
+
+            List<double> coordinates = new List<double>();
+            List<int> loopPointCounts = new List<int>();
+            List<int> faceLoopCounts = new List<int>();
+
+            int faceIndex = 0;
+            if (boundaryLoops != null)
+            {
+                foreach (IReadOnlyList<Point3D> boundaryLoop in boundaryLoops)
+                {
+                    if (TryAppendPointLoop(boundaryLoop, options, result, faceIndex, coordinates, loopPointCounts))
+                    {
+                        // Each surface boundary becomes one OCCT face with a single (possibly non-planar) loop.
+                        faceLoopCounts.Add(1);
+                    }
+
+                    faceIndex++;
+                }
+            }
+
+            if (faceLoopCounts.Count == 0)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_INPUT_EMPTY", "No serializable boundary loops were found.");
+                return false;
+            }
+
+            input = new OcctNativeInput
+            {
+                Coordinates = coordinates.ToArray(),
+                LoopPointCounts = loopPointCounts.ToArray(),
+                FaceLoopCounts = faceLoopCounts.ToArray(),
+                FaceCount = faceLoopCounts.Count
+            };
+
+            return true;
+        }
+
+        private static bool TryAppendPointLoop(IReadOnlyList<Point3D> boundaryLoop, OcctBuildOptions options, OcctCellComplexResult result, int sourceIndex, List<double> coordinates, List<int> loopPointCounts)
+        {
+            List<Point3D> points = boundaryLoop?.Where(x => x != null).ToList();
+            if (points == null || points.Count < 3)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_LOOP_TOO_SMALL", "Boundary loop has fewer than three points.", sourceIndex);
+                return false;
+            }
+
+            if (points.Count > 1 && points[0].Distance(points[points.Count - 1]) <= options.Tolerance)
+            {
+                points.RemoveAt(points.Count - 1);
+            }
+
+            if (points.Count < 3)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_LOOP_TOO_SMALL", "Boundary loop has fewer than three unique points.", sourceIndex);
+                return false;
+            }
+
+            foreach (Point3D point in points)
+            {
+                coordinates.Add(point.X);
+                coordinates.Add(point.Y);
+                coordinates.Add(point.Z);
+            }
+
+            loopPointCounts.Add(points.Count);
             return true;
         }
 

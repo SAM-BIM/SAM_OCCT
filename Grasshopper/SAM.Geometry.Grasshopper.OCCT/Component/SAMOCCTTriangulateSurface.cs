@@ -126,22 +126,39 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 dataAccess.GetData(index, ref tolerance);
             }
 
-            List<Face3D> face3Ds = new List<Face3D>();
+            // Extract each surface's outer boundary as raw 3D points. We deliberately avoid
+            // converting to a SAM Face3D first: Face3D is planar, so a warped/non-planar surface
+            // would be flattened (or fail) before OCCT could span and mesh it. Keeping the true
+            // corners lets OCCT triangulate the real surface.
+            List<IReadOnlyList<Point3D>> boundaryLoops = new List<IReadOnlyList<Point3D>>();
             foreach (GH_ObjectWrapper objectWrapper in objectWrappers)
             {
+                if (AppendBoundaryLoops(objectWrapper?.Value, boundaryLoops) > 0)
+                {
+                    continue;
+                }
+
+                // Fallback: SAM geometry that converts to planar Face3Ds.
                 if (Query.TryGetSAMGeometries(objectWrapper, out List<Face3D> face3Ds_Temp) && face3Ds_Temp != null)
                 {
-                    face3Ds.AddRange(face3Ds_Temp);
+                    foreach (Face3D face3D in face3Ds_Temp)
+                    {
+                        List<Point3D> external = ExternalLoopPoints(face3D);
+                        if (external != null && external.Count >= 3)
+                        {
+                            boundaryLoops.Add(external);
+                        }
+                    }
                 }
             }
 
-            if (face3Ds.Count == 0)
+            if (boundaryLoops.Count == 0)
             {
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Could not convert any input into SAM Face3Ds");
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Could not extract any surface boundary loops from the input");
                 return;
             }
 
-            List<Triangle3D> triangles = Geometry.OCCT.Create.Triangulate(face3Ds, out OcctCellComplexResult result, linearDeflection, angularDeflection, false, new OcctBuildOptions { Tolerance = tolerance });
+            List<Triangle3D> triangles = Geometry.OCCT.Create.Triangulate(boundaryLoops, out OcctCellComplexResult result, linearDeflection, angularDeflection, false, new OcctBuildOptions { Tolerance = tolerance });
 
             int skippedSmall = 0;
             List<Face3D> panels = new List<Face3D>();
@@ -165,7 +182,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
             }
 
             List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList() ?? new List<string>();
-            diagnostics.Add(string.Format("SAM_OCCT_TRIANGULATE_SURFACE: Produced {0} planar Face3D(s) from {1} source face(s); skipped {2} below minArea.", panels.Count, face3Ds.Count, skippedSmall));
+            diagnostics.Add(string.Format("SAM_OCCT_TRIANGULATE_SURFACE: Produced {0} planar Face3D(s) from {1} surface boundary loop(s); skipped {2} below minArea.", panels.Count, boundaryLoops.Count, skippedSmall));
 
             index = Params.IndexOfOutputParam("Face3Ds");
             if (index != -1)
@@ -183,6 +200,109 @@ namespace SAM.Geometry.Grasshopper.OCCT
             {
                 dataAccess.SetData(index_Successful, panels.Count != 0);
             }
+        }
+
+        private static int AppendBoundaryLoops(object value, List<IReadOnlyList<Point3D>> boundaryLoops)
+        {
+            Rhino.Geometry.Brep brep = ToBrep(value);
+            if (brep == null)
+            {
+                return 0;
+            }
+
+            int added = 0;
+            foreach (Rhino.Geometry.BrepLoop brepLoop in brep.Loops)
+            {
+                if (brepLoop == null || brepLoop.LoopType != Rhino.Geometry.BrepLoopType.Outer)
+                {
+                    continue;
+                }
+
+                List<Point3D> points = LoopPoints(brepLoop);
+                if (points != null && points.Count >= 3)
+                {
+                    boundaryLoops.Add(points);
+                    added++;
+                }
+            }
+
+            return added;
+        }
+
+        private static Rhino.Geometry.Brep ToBrep(object value)
+        {
+            switch (value)
+            {
+                case null:
+                    return null;
+                case GH_Brep ghBrep:
+                    return ghBrep.Value;
+                case GH_Surface ghSurface:
+                    return ghSurface.Value;
+                case Rhino.Geometry.Brep brep:
+                    return brep;
+                case Rhino.Geometry.Surface surface:
+                    return surface.ToBrep();
+            }
+
+            Rhino.Geometry.Brep converted = null;
+            if (GH_Convert.ToBrep(value, ref converted, GH_Conversion.Both))
+            {
+                return converted;
+            }
+
+            return null;
+        }
+
+        private static List<Point3D> LoopPoints(Rhino.Geometry.BrepLoop brepLoop)
+        {
+            Rhino.Geometry.Curve curve = brepLoop.To3dCurve();
+            if (curve == null)
+            {
+                return null;
+            }
+
+            List<Point3D> points = new List<Point3D>();
+
+            if (curve.TryGetPolyline(out Rhino.Geometry.Polyline polyline) && polyline != null && polyline.Count >= 2)
+            {
+                int count = polyline.Count;
+                if (count >= 2 && polyline[0].DistanceTo(polyline[count - 1]) <= Rhino.RhinoMath.ZeroTolerance)
+                {
+                    count--;
+                }
+
+                for (int i = 0; i < count; i++)
+                {
+                    points.Add(new Point3D(polyline[i].X, polyline[i].Y, polyline[i].Z));
+                }
+
+                return points;
+            }
+
+            // Curved boundary: sample the loop so OCCT can span and mesh it.
+            double length = curve.GetLength();
+            int divisions = length > 0 ? System.Math.Max(8, (int)System.Math.Ceiling(length)) : 8;
+            if (curve.DivideByCount(divisions, true, out Rhino.Geometry.Point3d[] samples) != null && samples != null)
+            {
+                foreach (Rhino.Geometry.Point3d sample in samples)
+                {
+                    points.Add(new Point3D(sample.X, sample.Y, sample.Z));
+                }
+            }
+
+            return points;
+        }
+
+        private static List<Point3D> ExternalLoopPoints(Face3D face3D)
+        {
+            IClosedPlanar3D externalEdge = face3D?.GetExternalEdge3D();
+            if (externalEdge is ISegmentable3D segmentable3D)
+            {
+                return segmentable3D.GetPoints();
+            }
+
+            return null;
         }
     }
 }

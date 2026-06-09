@@ -48,5 +48,38 @@ namespace SAM.Geometry.OCCT
         {
             return Triangulate(face3Ds, out result, linearDeflection, 0.5, false, new OcctBuildOptions { Tolerance = tolerance });
         }
+
+        /// <summary>
+        /// Triangulates raw (possibly non-planar) boundary loops into planar SAM Triangle3Ds using OCCT.
+        /// Each loop is the outer boundary of one surface; the points are passed to OCCT unchanged, so a
+        /// warped boundary keeps its true corners. Coplanar loops are meshed as a plane and non-planar loops
+        /// are spanned by an OCCT filling surface before meshing. Convert with <c>new Face3D(triangle3D)</c>.
+        /// </summary>
+        /// <param name="boundaryLoops">Outer boundary loops, one per surface. Points may be non-planar.</param>
+        /// <param name="result">OCCT diagnostics and native availability.</param>
+        /// <param name="linearDeflection">Maximum chord deviation from the true surface; larger values give fewer, bigger planar panels.</param>
+        /// <param name="angularDeflection">Maximum angular deviation (radians) used along curved boundaries.</param>
+        /// <param name="relativeDeflection">When true, OCCT treats <paramref name="linearDeflection"/> as relative to each face size.</param>
+        /// <param name="options">OCCT build options (tolerance is reused for loop point de-duplication).</param>
+        public static List<Triangle3D> Triangulate(IEnumerable<IReadOnlyList<Point3D>> boundaryLoops, out OcctCellComplexResult result, double linearDeflection = 0.1, double angularDeflection = 0.5, bool relativeDeflection = false, OcctBuildOptions options = null)
+        {
+            result = new OcctCellComplexResult();
+
+            List<IReadOnlyList<Point3D>> boundaryLoops_Temp = boundaryLoops?.Where(x => x != null && x.Count >= 3).ToList();
+            if (boundaryLoops_Temp == null || boundaryLoops_Temp.Count == 0)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_INPUT_EMPTY", "No boundary loops were supplied.");
+                return null;
+            }
+
+            options = options == null ? new OcctBuildOptions() : new OcctBuildOptions(options);
+
+            if (!Native.OcctCellComplexBuilder.TryTriangulate(boundaryLoops_Temp, options, linearDeflection, angularDeflection, relativeDeflection, result, out List<Triangle3D> triangles))
+            {
+                return null;
+            }
+
+            return triangles;
+        }
     }
 }
