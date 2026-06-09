@@ -196,6 +196,14 @@ namespace SAM.Analytical.OCCT
                 cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_CELL_SPACE_DELTA", string.Format("Input shell count ({0}) differs from OCCT cell count ({1}). This usually means OCCT merged, rejected, or could not close at least one intended cell.", shells_Temp.Count, occtShells.Count));
             }
 
+            // When the combined MakerVolume rebuild produced a different number of
+            // cells than the input shells, log exactly which input shells were not
+            // reproduced so the dropped levels can be identified. See issue #11.
+            if (shells_Temp.Count != occtShells.Count)
+            {
+                LogUncoveredInputShells(shells_Temp, occtShells, options, cellComplexResult);
+            }
+
             stopwatch.Restart();
             AdjacencyCluster adjacencyCluster = DirectAdjacencyCluster(cellComplexResult, spaces_Temp, options, minArea, maxAngle, names_Temp);
             if (adjacencyCluster == null)
@@ -209,6 +217,76 @@ namespace SAM.Analytical.OCCT
             int directPanelCount = adjacencyCluster.GetPanels()?.Count ?? 0;
             cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_DIRECT_SUCCESS", string.Format("Created SAM adjacency cluster directly from OCCT topology with {0} space(s), {1} panel(s), and {2} shared face relation(s).", directSpaceCount, directPanelCount, cellComplexResult.FaceAdjacencies?.Count ?? 0));
             return adjacencyCluster;
+        }
+
+        /// <summary>
+        /// Logs each input shell whose interior is not contained by any rebuilt
+        /// OCCT cell, i.e. shells that the combined MakerVolume rebuild failed to
+        /// reproduce. Each is reported with its Z range, centroid and face count so
+        /// the dropped levels can be located. Runs only when there is a cell/shell
+        /// count delta, so the point-in-solid tests are not paid for the common
+        /// case where everything closed.
+        /// </summary>
+        private static void LogUncoveredInputShells(List<Shell> inputShells, List<Shell> occtShells, OcctBuildOptions options, OcctCellComplexResult cellComplexResult)
+        {
+            if (inputShells == null || occtShells == null || cellComplexResult == null)
+            {
+                return;
+            }
+
+            int uncovered = 0;
+            for (int i = 0; i < inputShells.Count; i++)
+            {
+                Shell inputShell = inputShells[i];
+                if (inputShell == null)
+                {
+                    continue;
+                }
+
+                Point3D internalPoint = inputShell.InternalPoint3D(options.FuzzyTolerance, options.Tolerance);
+
+                bool covered = false;
+                if (internalPoint != null)
+                {
+                    foreach (Shell occtShell in occtShells)
+                    {
+                        if (occtShell != null && (occtShell.Inside(internalPoint, options.FuzzyTolerance, options.Tolerance) || occtShell.On(internalPoint, options.Tolerance)))
+                        {
+                            covered = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (covered)
+                {
+                    continue;
+                }
+
+                uncovered++;
+
+                BoundingBox3D boundingBox3D = inputShell.GetBoundingBox();
+                Point3D centroid = boundingBox3D?.GetCentroid();
+                cellComplexResult.AddDiagnostic(
+                    OcctDiagnosticSeverity.Warning,
+                    "SAM_OCCT_ANALYTICAL_SHELL_NOT_REBUILT",
+                    string.Format(
+                        "Input shell [{0}] was not reproduced as an OCCT cell (no rebuilt cell contains its interior{1}). Z range {2:0.###}..{3:0.###} m, centroid ({4:0.###}, {5:0.###}, {6:0.###}), {7} face(s). The combined MakerVolume rebuild could not close this volume - often a mismatched shared face with an adjacent shell.",
+                        i,
+                        internalPoint == null ? "; no interior point could be sampled" : string.Empty,
+                        boundingBox3D == null ? double.NaN : boundingBox3D.Min.Z,
+                        boundingBox3D == null ? double.NaN : boundingBox3D.Max.Z,
+                        centroid == null ? double.NaN : centroid.X,
+                        centroid == null ? double.NaN : centroid.Y,
+                        centroid == null ? double.NaN : centroid.Z,
+                        inputShell.Face3Ds?.Count ?? 0),
+                    i);
+            }
+
+            if (uncovered > 0)
+            {
+                cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_SHELL_NOT_REBUILT_SUMMARY", string.Format("{0} of {1} input shell(s) were not reproduced as OCCT cells.", uncovered, inputShells.Count));
+            }
         }
 
         private static AdjacencyCluster DirectAdjacencyCluster(OcctCellComplexResult cellComplexResult, List<Space> seedSpaces, OcctBuildOptions options, double minArea, double toleranceAngle, List<string> names = null)
