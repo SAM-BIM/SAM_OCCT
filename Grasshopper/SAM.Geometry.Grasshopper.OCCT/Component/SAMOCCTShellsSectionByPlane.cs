@@ -18,7 +18,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("67f00e15-259c-4080-8b34-efb4cd59cb8c");
 
-        public override string LatestComponentVersion => "0.2.0";
+        public override string LatestComponentVersion => "0.3.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -137,39 +137,11 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
                 List<Plane> planes_Temp = planes.Count != 0 ? planes : new List<Plane> { new Plane(boundingBox3D.GetCentroid(), Vector3D.WorldZ) };
 
-                // Cross-section the shell at each plane.
-                List<Face3D> sectionFace3Ds = new List<Face3D>();
-                foreach (Plane plane_Temp in planes_Temp)
-                {
-                    List<Face3D> face3Ds_Temp = shell.Section(plane_Temp, true, Tolerance.Angle, tolerance, Tolerance.MacroDistance);
-                    if (face3Ds_Temp != null)
-                    {
-                        sectionFace3Ds.AddRange(face3Ds_Temp.Where(x => x != null));
-                    }
-                }
-
-                face3Ds.AddRange(sectionFace3Ds);
-
-                if (sectionFace3Ds.Count == 0)
-                {
-                    shells_Split.Add(new Shell(shell));
-                    continue;
-                }
-
-                // Build the level cells with the OCCT engine: the shell's boundary faces plus the
-                // horizontal section faces are fed to BOPAlgo_MakerVolume, which reliably partitions
-                // the volume into every closed level cell in one pass - including interior slabs
-                // bounded by two planes that managed Section/Split can drop.
-                List<Face3D> allFace3Ds = new List<Face3D>();
-                List<Face3D> shellFace3Ds = shell.Face3Ds;
-                if (shellFace3Ds != null)
-                {
-                    allFace3Ds.AddRange(shellFace3Ds.Where(x => x != null));
-                }
-
-                allFace3Ds.AddRange(sectionFace3Ds);
-
-                List<Shell> levels = Geometry.OCCT.Create.Shells(allFace3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance });
+                // Section and split with the OCCT engine in one BOPAlgo_MakerVolume pass: the
+                // shell's boundary faces plus a bounded patch per plane are partitioned into the
+                // level cells, and the on-plane cell faces - already trimmed to the shell by
+                // OCCT - are the section Face3Ds. No managed SAM sectioning is involved.
+                List<Shell> levels = Geometry.OCCT.Query.ShellSectionByPlanes(shell, planes_Temp, out List<Face3D> sectionFace3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance });
                 if (result?.Diagnostics != null)
                 {
                     occtDiagnostics.AddRange(result.Diagnostics.Select(x => x.ToString()));
@@ -177,13 +149,28 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
                 if (levels != null && levels.Count != 0)
                 {
+                    if (sectionFace3Ds != null)
+                    {
+                        face3Ds.AddRange(sectionFace3Ds);
+                    }
+
                     shells_Split.AddRange(levels);
+                    continue;
                 }
-                else
+
+                // OCCT could not build cells (e.g. native unavailable); fall back to the managed
+                // SAM Shell.Section for the section faces and keep the original shell.
+                occtDiagnostics.Add("SAM_OCCT_SECTION_MANAGED_FALLBACK: OCCT section unavailable. Using managed SAM Shell.Section and keeping the original shell.");
+                foreach (Plane plane_Temp in planes_Temp)
                 {
-                    // OCCT could not build cells (e.g. native unavailable); keep the original shell.
-                    shells_Split.Add(new Shell(shell));
+                    List<Face3D> face3Ds_Temp = shell.Section(plane_Temp, true, Tolerance.Angle, tolerance, Tolerance.MacroDistance);
+                    if (face3Ds_Temp != null)
+                    {
+                        face3Ds.AddRange(face3Ds_Temp.Where(x => x != null));
+                    }
                 }
+
+                shells_Split.Add(new Shell(shell));
             }
 
             List<string> diagnostics = new List<string>
