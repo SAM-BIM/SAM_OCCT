@@ -91,6 +91,47 @@ directly from this OCCT topology first. If successful, diagnostics include
 `SAM_OCCT_ANALYTICAL_DIRECT_SUCCESS`; if not, the component falls back to the
 older SAM geometric rebuild and reports `SAM_OCCT_ANALYTICAL_DIRECT_FALLBACK`.
 
+## Component Reference
+
+Every component shares the `_run` boolean (nothing happens until it is `true`)
+and a `Diagnostics` (codes/messages) plus `Successful` output. Inputs starting
+with `_` are required; inputs ending with `_` are optional. Tolerance inputs are
+covered under [Tolerances](#tolerances-and-key-inputs) below.
+
+### Geometry (`SAM.Geometry.Grasshopper.OCCT`)
+
+| Component | What it does | Key inputs | Main output |
+| --- | --- | --- | --- |
+| `SAMOCCT.CreateShells` | Builds closed SAM `Shell` volumes from boundary faces/surfaces using OCCT. | `_face3Ds`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ShellsUnion` | Merges touching or overlapping closed shells into combined solids. | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ShellsDifference` | Subtracts closed cutter volumes from target shells. | `_shells`, `_cutterShells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ShellsIntersection` | Keeps only the volume where target shells overlap tool shells. | `_shells`, `_toolShells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ShellsRepair` | Rebuilds/repairs each closed shell through OCCT (heals gaps, bad faces). | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ShellsSplit` | Splits overlapping/touching shells into cleaner adjacent pieces. | `_shells`, `silverSpacing_`, `tolerance_` | `Shells` |
+| `SAMOCCT.ShellsSectionByPlane` | Sections shells by a plane, returning the cut faces and the split shells. | `_shells`, `plane_`, `tolerance_` | `Face3Ds`, `Shells` |
+| `SAMOCCT.TriangulateSurface` | Triangulates possibly non-planar surfaces into planar `Face3D` panels via OCCT meshing. | `_surfaces`, `linearDeflection_`, `angularDeflection_`, `minArea_`, `tolerance_` | `Face3Ds` |
+
+### Analytical (`SAM.Analytical.Grasshopper.OCCT`)
+
+| Component | What it does | Key inputs | Main output |
+| --- | --- | --- | --- |
+| `SAMOCCT.CreateAdjacencyCluster` | Builds a SAM `AdjacencyCluster` from analytical `Panels` via OCCT cell building. | `_panels`, `spaces_`, `tolerance_`, `fuzzyTolerance_` | `AdjacencyCluster` |
+| `SAMOCCT.CreateAdjacencyClusterByShells` | Builds an `AdjacencyCluster` from closed shell space volumes, reusing space metadata. | `_shells`, `spaces_`, `names_`, `elevationGround_`, `fuzzyTolerance_`, `maxDistance_`, `maxAngle_`, `minArea_`, `tolerance_` | `AdjacencyCluster` |
+| `SAMOCCT.PanelsFromShells` | Creates analytical SAM `Panels` from the faces of closed shells. | `_shells`, `silverSpacing_`, `tolerance_` | `Panels` |
+
+For full input/output descriptions, hover the component parameters in
+Grasshopper; for recommended settings and end-to-end workflows (including
+watertight panelling) see `docs/Modeling-Guide.md`.
+
+### Tolerances And Key Inputs
+
+- `tolerance_`: base model tolerance (e.g. 1 mm / `0.001` for meters).
+- `fuzzyTolerance_`: OCCT tolerance for fusing near-touching faces/edges.
+- `silverSpacing_`: snap distance used to remove sliver geometry.
+- `linearDeflection_` / `angularDeflection_`: OCCT meshing deflection used by
+  `SAMOCCT.TriangulateSurface` (panel size / curvature control).
+- `minArea_`: discards faces below this area.
+
 ## Modeling Guide
 
 See `docs/Modeling-Guide.md` for the recommended Panels/Face3D vs Shell
