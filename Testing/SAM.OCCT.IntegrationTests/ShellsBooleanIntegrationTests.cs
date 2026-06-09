@@ -22,7 +22,7 @@ namespace SAM.OCCT.IntegrationTests
     public class ShellsBooleanIntegrationTests
     {
         [SkippableFact]
-        public void ShellsUnion_TwoAdjacentBoxes_ProducesCellsWithAdjacency()
+        public void ShellsUnion_TwoAdjacentBoxes_MergesIntoSingleCell()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
 
@@ -36,13 +36,17 @@ namespace SAM.OCCT.IntegrationTests
             // Act
             List<Shell> result_Shells = GeometryQuery.ShellsUnion(shells, out OcctCellComplexResult result, new OcctBuildOptions());
 
-            // Assert
+            // Assert - a union (OCCT BRepAlgoAPI_Fuse) welds the two adjacent boxes
+            // into a single solid and discards the shared internal partition at
+            // x = 1, so the result is one cell of the combined volume. With a single
+            // cell there is, by definition, no inter-cell face adjacency.
             Assert.True(result.NativeAvailable);
             Assert.True(result.Success);
             Assert.NotNull(result_Shells);
-            Assert.NotEmpty(result.Cells);
+            Assert.Single(result.Cells);
             Assert.All(result.Cells, cell => Assert.True(cell.Volume > 0));
-            Assert.True(result.FaceAdjacencies.Count >= 1, "Adjacent boxes should share at least one cell face.");
+            Assert.Equal(2.0, result.Cells.Sum(x => x.Volume), 6);
+            Assert.Empty(result.FaceAdjacencies);
         }
 
         [SkippableFact]
