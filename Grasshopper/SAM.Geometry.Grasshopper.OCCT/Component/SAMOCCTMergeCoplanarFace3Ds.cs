@@ -4,6 +4,7 @@
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Types;
 using SAM.Core;
+using SAM.Core.Grasshopper;
 using SAM.Core.OCCT;
 using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
