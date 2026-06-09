@@ -281,9 +281,9 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
-        public static bool TryTriangulate(IEnumerable<Face3D> face3Ds, OcctBuildOptions options, double linearDeflection, double angularDeflection, bool relativeDeflection, OcctCellComplexResult result, out List<Face3D> triangles)
+        public static bool TryTriangulate(IEnumerable<Face3D> face3Ds, OcctBuildOptions options, double linearDeflection, double angularDeflection, bool relativeDeflection, OcctCellComplexResult result, out List<Triangle3D> triangles)
         {
-            triangles = new List<Face3D>();
+            triangles = new List<Triangle3D>();
 
             if (!OcctNativeInputBuilder.TryBuild(face3Ds, options, result, out OcctNativeInput input))
             {
@@ -317,24 +317,12 @@ namespace SAM.Geometry.OCCT.Native
                 int cellCount = NativeMethods.sam_occt_result_cell_count(resultHandle);
                 for (int cellIndex = 0; cellIndex < cellCount; cellIndex++)
                 {
-                    List<OcctCellFace> faces = DecodeFaces(resultHandle, cellIndex, result);
-                    if (faces == null)
-                    {
-                        continue;
-                    }
-
-                    foreach (OcctCellFace face in faces)
-                    {
-                        if (face?.Face3D != null)
-                        {
-                            triangles.Add(face.Face3D);
-                        }
-                    }
+                    triangles.AddRange(DecodeTriangle3Ds(resultHandle, cellIndex));
                 }
 
                 if (triangles.Count == 0)
                 {
-                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TRIANGULATE_NO_FACES", "Native OCCT triangulation did not return any planar faces.");
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TRIANGULATE_NO_FACES", "Native OCCT triangulation did not return any planar triangles.");
                     return false;
                 }
 
@@ -534,6 +522,47 @@ namespace SAM.Geometry.OCCT.Native
             }
 
             return new Point3D(x, y, z);
+        }
+
+        private static List<Triangle3D> DecodeTriangle3Ds(IntPtr resultHandle, int cellIndex)
+        {
+            int faceCount = NativeMethods.sam_occt_result_cell_face_count(resultHandle, cellIndex);
+            List<Triangle3D> triangle3Ds = new List<Triangle3D>();
+
+            for (int faceIndex = 0; faceIndex < faceCount; faceIndex++)
+            {
+                // Each triangulated face is a single loop of three points.
+                int pointCount = NativeMethods.sam_occt_result_loop_point_count(resultHandle, cellIndex, faceIndex, 0);
+                if (pointCount < 3)
+                {
+                    continue;
+                }
+
+                List<Point3D> points = new List<Point3D>();
+                for (int pointIndex = 0; pointIndex < 3; pointIndex++)
+                {
+                    if (NativeMethods.sam_occt_result_point(resultHandle, cellIndex, faceIndex, 0, pointIndex, out double x, out double y, out double z) != 0)
+                    {
+                        points.Add(new Point3D(x, y, z));
+                    }
+                }
+
+                if (points.Count != 3)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    triangle3Ds.Add(new Triangle3D(points[0], points[1], points[2]));
+                }
+                catch
+                {
+                    // Skip degenerate (collinear/coincident) triangles.
+                }
+            }
+
+            return triangle3Ds;
         }
 
         private static List<OcctCellFace> DecodeFaces(IntPtr resultHandle, int cellIndex, OcctCellComplexResult result)

@@ -141,38 +141,36 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 return;
             }
 
-            List<Face3D> triangles = Geometry.OCCT.Create.Triangulate(face3Ds, out OcctCellComplexResult result, linearDeflection, angularDeflection, false, new OcctBuildOptions { Tolerance = tolerance });
+            List<Triangle3D> triangles = Geometry.OCCT.Create.Triangulate(face3Ds, out OcctCellComplexResult result, linearDeflection, angularDeflection, false, new OcctBuildOptions { Tolerance = tolerance });
 
             int skippedSmall = 0;
-            if (triangles != null && minArea > 0)
+            List<Face3D> panels = new List<Face3D>();
+            if (triangles != null)
             {
-                List<Face3D> filtered = new List<Face3D>();
-                foreach (Face3D triangle in triangles)
+                foreach (Triangle3D triangle in triangles)
                 {
                     if (triangle == null)
                     {
                         continue;
                     }
 
-                    if (triangle.GetArea() < minArea)
+                    if (minArea > 0 && triangle.GetArea() < minArea)
                     {
                         skippedSmall++;
                         continue;
                     }
 
-                    filtered.Add(triangle);
+                    panels.Add(new Face3D(triangle));
                 }
-
-                triangles = filtered;
             }
 
             List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList() ?? new List<string>();
-            diagnostics.Add(string.Format("SAM_OCCT_TRIANGULATE_SURFACE: Produced {0} planar Face3D(s) from {1} source face(s); skipped {2} below minArea.", triangles?.Count ?? 0, face3Ds.Count, skippedSmall));
+            diagnostics.Add(string.Format("SAM_OCCT_TRIANGULATE_SURFACE: Produced {0} planar Face3D(s) from {1} source face(s); skipped {2} below minArea.", panels.Count, face3Ds.Count, skippedSmall));
 
             index = Params.IndexOfOutputParam("Face3Ds");
             if (index != -1)
             {
-                dataAccess.SetDataList(index, triangles);
+                dataAccess.SetDataList(index, panels);
             }
 
             index = Params.IndexOfOutputParam("Diagnostics");
@@ -183,7 +181,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
             if (index_Successful != -1)
             {
-                dataAccess.SetData(index_Successful, triangles != null && triangles.Count != 0);
+                dataAccess.SetData(index_Successful, panels.Count != 0);
             }
         }
     }

@@ -22,10 +22,10 @@ namespace SAM.OCCT.UnitTests
         public void Triangulate_NullInput_ReturnsNullWithEmptyDiagnostic()
         {
             // Act
-            List<Face3D> face3Ds = GeometryCreate.Triangulate((IEnumerable<Face3D>)null, out OcctCellComplexResult result, 0.1, 0.5, false, new OcctBuildOptions());
+            List<Triangle3D> triangle3Ds = GeometryCreate.Triangulate((IEnumerable<Face3D>)null, out OcctCellComplexResult result, 0.1, 0.5, false, new OcctBuildOptions());
 
             // Assert
-            Assert.Null(face3Ds);
+            Assert.Null(triangle3Ds);
             Assert.False(result.Success);
             Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_INPUT_EMPTY" && x.Severity == OcctDiagnosticSeverity.Error);
         }
@@ -37,10 +37,10 @@ namespace SAM.OCCT.UnitTests
             List<Face3D> input = new List<Face3D> { null, null };
 
             // Act
-            List<Face3D> face3Ds = GeometryCreate.Triangulate(input, out OcctCellComplexResult result, 0.1, 0.5, false, new OcctBuildOptions());
+            List<Triangle3D> triangle3Ds = GeometryCreate.Triangulate(input, out OcctCellComplexResult result, 0.1, 0.5, false, new OcctBuildOptions());
 
             // Assert
-            Assert.Null(face3Ds);
+            Assert.Null(triangle3Ds);
             Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_INPUT_EMPTY");
         }
     }
