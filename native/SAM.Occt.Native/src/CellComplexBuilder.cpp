@@ -5,6 +5,7 @@
 
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BOPAlgo_MakerVolume.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -446,6 +447,67 @@ namespace
 
         return !solids.empty();
     }
+
+    double face_surface_area(const TopoDS_Face& face)
+    {
+        GProp_GProps properties;
+        BRepGProp::SurfaceProperties(face, properties);
+        return properties.Mass();
+    }
+
+    // Removes the tiny sliver faces (surface area < min_area) left on a section
+    // shell and lets OCCT defeaturing extend the neighbouring faces to fill the
+    // gap, so the solid stays closed. Deleting a face and re-running MakerVolume
+    // cannot do this: the volume would no longer be bounded. Falls back to the
+    // original solid whenever there is nothing small to remove or defeaturing
+    // cannot reconstruct the solid.
+    TopoDS_Shape remove_small_faces(const TopoDS_Shape& solid, double min_area, int run_parallel)
+    {
+        if (min_area <= 0.0)
+        {
+            return solid;
+        }
+
+        TopTools_ListOfShape faces_to_remove;
+        for (TopExp_Explorer face_explorer(solid, TopAbs_FACE); face_explorer.More(); face_explorer.Next())
+        {
+            const TopoDS_Face& face = TopoDS::Face(face_explorer.Current());
+            if (face_surface_area(face) < min_area)
+            {
+                faces_to_remove.Append(face);
+            }
+        }
+
+        if (faces_to_remove.IsEmpty())
+        {
+            return solid;
+        }
+
+        BRepAlgoAPI_Defeaturing defeaturing;
+        defeaturing.SetShape(solid);
+        defeaturing.AddFacesToRemove(faces_to_remove);
+        defeaturing.SetRunParallel(run_parallel != 0);
+        defeaturing.Build();
+
+        if (defeaturing.HasErrors())
+        {
+            return solid;
+        }
+
+        TopoDS_Shape shape = defeaturing.Shape();
+        if (shape.IsNull())
+        {
+            return solid;
+        }
+
+        // Defeaturing extends the neighbours of each removed sliver; unify the
+        // now co-planar neighbours so the repaired solid does not keep redundant
+        // split faces where the sliver used to be.
+        ShapeUpgrade_UnifySameDomain unify(shape, Standard_True, Standard_True, Standard_True);
+        unify.Build();
+        TopoDS_Shape unified = unify.Shape();
+        return unified.IsNull() ? shape : unified;
+    }
 }
 
 int sam_occt_build_cell_complex(
@@ -862,6 +924,82 @@ int sam_occt_shells_union(
             }
 
             append_shape_solids_to_result(fuse.Shape(), *result, tolerance);
+        }
+
+        if (result->cells.empty())
+        {
+            return 40;
+        }
+
+        *result_handle = result.release();
+        return 0;
+    }
+    catch (...)
+    {
+        return 99;
+    }
+}
+
+int sam_occt_shells_repair(
+    const double* coordinates,
+    int point_count,
+    const int* loop_point_counts,
+    int loop_count,
+    const int* face_loop_counts,
+    int face_count,
+    const int* shell_face_counts,
+    int shell_count,
+    double tolerance,
+    double fuzzy_tolerance,
+    int run_parallel,
+    double min_area,
+    void** result_handle)
+{
+    if (result_handle != nullptr)
+    {
+        *result_handle = nullptr;
+    }
+
+    if (coordinates == nullptr || loop_point_counts == nullptr || face_loop_counts == nullptr || shell_face_counts == nullptr || result_handle == nullptr)
+    {
+        return 10;
+    }
+
+    if (point_count <= 0 || loop_count <= 0 || face_count <= 0 || shell_count <= 0)
+    {
+        return 11;
+    }
+
+    try
+    {
+        std::vector<TopoDS_Solid> solids;
+        if (!build_shell_solids(
+                coordinates,
+                loop_point_counts,
+                face_loop_counts,
+                shell_face_counts,
+                shell_count,
+                fuzzy_tolerance,
+                run_parallel,
+                solids))
+        {
+            return 20;
+        }
+
+        std::unique_ptr<Result> result(new Result());
+        for (const TopoDS_Solid& solid : solids)
+        {
+            const std::size_t before = result->cells.size();
+
+            TopoDS_Shape repaired = remove_small_faces(solid, min_area, run_parallel);
+            append_shape_solids_to_result(repaired, *result, tolerance);
+
+            // Healing may yield nothing usable; keep the original solid so a
+            // shell is never silently dropped during repair.
+            if (result->cells.size() == before)
+            {
+                append_solid_to_result(solid, *result, tolerance);
+            }
         }
 
         if (result->cells.empty())

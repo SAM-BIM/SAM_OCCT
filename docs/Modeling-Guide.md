@@ -48,11 +48,16 @@ division, shafts, and other volume-first modeling.
 
 `SAMOCCT.ShellsSectionByPlane` can leave very small sliver faces on the level
 shells it produces (e.g. a stray face of `0.000079` m²). Feed those shells into
-`SAMOCCT.ShellsRepair` with `minArea_` set to remove them: any face below
-`minArea_` (in m²) is dropped and the shell is rebuilt through OCCT so the
-volume stays closed. The default `minArea_` is `0.01` m²; set it to `0` to keep
-every face. Removed/kept faces are reported on the `Diagnostics` output
-(`SAM_OCCT_REPAIR_SMALL_FACES_REMOVED` / `SAM_OCCT_REPAIR_SMALL_FACES_KEPT`).
+`SAMOCCT.ShellsRepair` with `minArea_` set to remove them.
+
+Internally this uses OCCT **defeaturing** (`BRepAlgoAPI_Defeaturing`): faces
+below `minArea_` (in m²) are removed and the **neighbouring faces are extended to
+fill the gap**, so each shell stays a closed solid. This is why simply deleting a
+face and rebuilding does not work — once a face is gone the volume is no longer
+bounded and OCCT cannot reconstruct the cell. The default `minArea_` is `0.01`
+m²; set it to `0` to repair without removing any face. The number of detected
+sub-threshold faces is reported on the `Diagnostics` output
+(`SAM_OCCT_REPAIR_SMALL_FACES`).
 
 Do not union adjacent room shells before creating an adjacency cluster if each
 room should remain a separate space. Union is for merging volumes into a larger

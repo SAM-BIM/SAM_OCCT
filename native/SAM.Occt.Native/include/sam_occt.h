@@ -88,6 +88,21 @@ SAM_OCCT_API int sam_occt_shells_union(
     int run_parallel,
     void** result_handle);
 
+SAM_OCCT_API int sam_occt_shells_repair(
+    const double* coordinates,
+    int point_count,
+    const int* loop_point_counts,
+    int loop_count,
+    const int* face_loop_counts,
+    int face_count,
+    const int* shell_face_counts,
+    int shell_count,
+    double tolerance,
+    double fuzzy_tolerance,
+    int run_parallel,
+    double min_area,
+    void** result_handle);
+
 SAM_OCCT_API int sam_occt_triangulate(
     const double* coordinates,
     int point_count,

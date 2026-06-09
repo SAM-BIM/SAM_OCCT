@@ -13,16 +13,17 @@ namespace SAM.Geometry.OCCT
     {
         /// <summary>
         /// Rebuilds and repairs each supplied closed shell through OCCT. When
-        /// <paramref name="minArea"/> is greater than zero, tiny sliver faces below
-        /// that area (in m²) are removed from each repaired shell and the shell is
-        /// rebuilt so the gap is healed. This addresses the tiny faces (e.g. an
-        /// 0.000079 m² face) that <c>SAMOCCT.ShellsSectionByPlane</c> can leave
-        /// behind. See issue #11.
+        /// <paramref name="minArea"/> is greater than zero, the tiny sliver faces
+        /// (surface area below <paramref name="minArea"/> m²) that
+        /// <c>SAMOCCT.ShellsSectionByPlane</c> can leave behind — e.g. an
+        /// 0.000079 m² face — are removed with OCCT defeaturing
+        /// (<c>BRepAlgoAPI_Defeaturing</c>), which extends the neighbouring faces
+        /// to fill the gap so each shell stays a closed solid. See issue #11.
         /// </summary>
         /// <param name="shells">Closed shells to repair.</param>
         /// <param name="result">OCCT diagnostics for the repair.</param>
         /// <param name="options">OCCT build options (tolerance / fuzzy tolerance).</param>
-        /// <param name="minArea">Minimum acceptable face area in m². Faces below this are removed and the shell is rebuilt. Pass 0 (default) to keep every face.</param>
+        /// <param name="minArea">Minimum acceptable face area in m². Faces below this are defeatured away. Pass 0 (default) to repair without removing any face.</param>
         /// <returns>The repaired shells, or null when no valid shells were supplied.</returns>
         public static List<Shell> ShellsRepair(IEnumerable<Shell> shells, out OcctCellComplexResult result, OcctBuildOptions options = null, double minArea = 0.0)
         {
@@ -37,36 +38,11 @@ namespace SAM.Geometry.OCCT
 
             options = options == null ? new OcctBuildOptions() : new OcctBuildOptions(options);
 
-            List<Shell> resultShells = new List<Shell>();
-            for (int i = 0; i < shells_Temp.Count; i++)
-            {
-                List<Shell> repairedShells = ShellsUnion(new Shell[] { shells_Temp[i] }, out OcctCellComplexResult repairResult, options);
-                if (repairResult?.Diagnostics != null)
-                {
-                    foreach (OcctDiagnostic diagnostic in repairResult.Diagnostics)
-                    {
-                        result.AddDiagnostic(diagnostic.Severity, diagnostic.Code, diagnostic.Message, i);
-                    }
-                }
+            List<Shell> resultShells = minArea > 0
+                ? RepairWithDefeaturing(shells_Temp, options, minArea, result)
+                : RepairPerShell(shells_Temp, options, result);
 
-                if (repairedShells == null)
-                {
-                    continue;
-                }
-
-                if (minArea <= 0)
-                {
-                    resultShells.AddRange(repairedShells);
-                    continue;
-                }
-
-                foreach (Shell repairedShell in repairedShells)
-                {
-                    resultShells.Add(RemoveSmallFace3Ds(repairedShell, minArea, options, result, i));
-                }
-            }
-
-            if (resultShells.Count == 0)
+            if (resultShells == null || resultShells.Count == 0)
             {
                 result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_REPAIR_FAILED", "OCCT could not repair any supplied shells.");
                 return null;
@@ -82,10 +58,62 @@ namespace SAM.Geometry.OCCT
         }
 
         /// <summary>
+        /// Repairs each shell independently through an OCCT rebuild (no face
+        /// removal). This is the behaviour used when no minimum face area is set.
+        /// </summary>
+        private static List<Shell> RepairPerShell(List<Shell> shells, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            List<Shell> resultShells = new List<Shell>();
+            for (int i = 0; i < shells.Count; i++)
+            {
+                List<Shell> repairedShells = ShellsUnion(new Shell[] { shells[i] }, out OcctCellComplexResult repairResult, options);
+                if (repairResult?.Diagnostics != null)
+                {
+                    foreach (OcctDiagnostic diagnostic in repairResult.Diagnostics)
+                    {
+                        result.AddDiagnostic(diagnostic.Severity, diagnostic.Code, diagnostic.Message, i);
+                    }
+                }
+
+                if (repairedShells != null)
+                {
+                    resultShells.AddRange(repairedShells);
+                }
+            }
+
+            return resultShells;
+        }
+
+        /// <summary>
+        /// Repairs the shells while removing faces below <paramref name="minArea"/>
+        /// using OCCT defeaturing in the native layer. The neighbouring faces are
+        /// extended to close the gap, so unlike a managed delete-and-rebuild the
+        /// solid never opens up.
+        /// </summary>
+        private static List<Shell> RepairWithDefeaturing(List<Shell> shells, OcctBuildOptions options, double minArea, OcctCellComplexResult result)
+        {
+            int smallFaceCount = 0;
+            foreach (Shell shell in shells)
+            {
+                RemoveSmallFace3Ds(shell?.Face3Ds, minArea, out int removed);
+                smallFaceCount += removed;
+            }
+
+            result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_REPAIR_SMALL_FACES", string.Format("Detected {0} input face(s) below {1:0.######} m²; removing them with OCCT defeaturing so each shell stays closed.", smallFaceCount, minArea));
+
+            if (!Native.OcctCellComplexBuilder.TryRepair(shells, options, minArea, result))
+            {
+                return null;
+            }
+
+            return result.Shells?.ToList();
+        }
+
+        /// <summary>
         /// Returns the supplied faces with tiny sliver faces (area below
-        /// <paramref name="minArea"/> m²) removed. Pure managed geometry helper used
-        /// by <see cref="ShellsRepair(IEnumerable{Shell}, out OcctCellComplexResult, OcctBuildOptions, double)"/>
-        /// and unit-testable without native OCCT.
+        /// <paramref name="minArea"/> m²) filtered out. Pure managed geometry
+        /// helper, used to report how many faces a repair will defeature and
+        /// unit-testable without native OCCT.
         /// </summary>
         /// <param name="face3Ds">Faces to filter.</param>
         /// <param name="minArea">Minimum acceptable face area in m². Faces with a smaller area are dropped.</param>
@@ -119,40 +147,6 @@ namespace SAM.Geometry.OCCT
             }
 
             return result;
-        }
-
-        /// <summary>
-        /// Removes faces below <paramref name="minArea"/> from a single repaired
-        /// shell and rebuilds it through OCCT so the resulting volume stays closed.
-        /// Falls back to the unmodified shell when nothing tiny is found or the
-        /// rebuild cannot reconstruct a closed volume.
-        /// </summary>
-        private static Shell RemoveSmallFace3Ds(Shell shell, double minArea, OcctBuildOptions options, OcctCellComplexResult result, int sourceIndex)
-        {
-            List<Face3D> face3Ds = RemoveSmallFace3Ds(shell?.Face3Ds, minArea, out int removedCount);
-            if (removedCount == 0 || face3Ds == null || face3Ds.Count == 0)
-            {
-                return shell;
-            }
-
-            List<Shell> rebuiltShells = Create.Shells(face3Ds, out OcctCellComplexResult rebuildResult, options);
-            if (rebuildResult?.Diagnostics != null)
-            {
-                foreach (OcctDiagnostic diagnostic in rebuildResult.Diagnostics)
-                {
-                    result.AddDiagnostic(diagnostic.Severity, diagnostic.Code, diagnostic.Message, sourceIndex);
-                }
-            }
-
-            Shell rebuiltShell = rebuiltShells?.FirstOrDefault(x => x != null);
-            if (rebuiltShell == null)
-            {
-                result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_REPAIR_SMALL_FACES_KEPT", string.Format("Found {0} face(s) below {1:0.######} m² but OCCT could not rebuild the shell without them; the original shell was kept.", removedCount, minArea), sourceIndex);
-                return shell;
-            }
-
-            result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_REPAIR_SMALL_FACES_REMOVED", string.Format("Removed {0} face(s) below {1:0.######} m² and rebuilt the shell.", removedCount, minArea), sourceIndex);
-            return rebuiltShell;
         }
     }
 }
