@@ -4,7 +4,6 @@
 using SAM.Core.OCCT;
 using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using Xunit;
@@ -59,7 +58,7 @@ namespace SAM.OCCT.IntegrationTests
             Assert.True(result.Success);
             Assert.NotNull(result_Shells);
             Assert.Single(result_Shells);
-            Assert.True(Math.Abs(result.Cells.Sum(x => Math.Abs(x.Volume)) - 1.0) < 1e-3);
+            Assert.True(System.Math.Abs(result.Cells.Sum(x => System.Math.Abs(x.Volume)) - 1.0) < 1e-3);
             Assert.All(result_Shells, shell => Assert.All(shell.Face3Ds, face => Assert.True(face.GetArea() >= 0.01)));
         }
 
@@ -79,8 +78,8 @@ namespace SAM.OCCT.IntegrationTests
             Assert.NotNull(result_Shells);
             Assert.Single(result_Shells);
 
-            double volume = result.Cells.Sum(x => Math.Abs(x.Volume));
-            Assert.True(Math.Abs(volume - 1.0) < 1e-3, string.Format("Volume should be preserved (~1.0), was {0}.", volume));
+            double volume = result.Cells.Sum(x => System.Math.Abs(x.Volume));
+            Assert.True(System.Math.Abs(volume - 1.0) < 1e-3, string.Format("Volume should be preserved (~1.0), was {0}.", volume));
 
             Assert.All(result_Shells, shell => Assert.All(shell.Face3Ds, face => Assert.True(face.GetArea() >= 0.02, string.Format("Face area {0} should be >= 0.02 after defeaturing.", face.GetArea()))));
         }
