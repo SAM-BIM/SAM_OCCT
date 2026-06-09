@@ -384,6 +384,146 @@ For large buildings, the preferred robust workflow is:
 4. Merge or join analytical results later if needed.
 ```
 
+## Triangulating Non-Planar Surfaces Into Planar Panels
+
+`SAMOCCT.TriangulateSurface` turns surfaces that may be non-planar (curved or
+warped facade panels, freeform roofs) into planar triangular `Face3D`s that the
+rest of the OCCT pipeline can panel and close.
+
+OCCT meshes each surface with `BRepMesh`:
+
+- A coplanar boundary is meshed as a flat plane.
+- A non-planar (warped) boundary is first spanned by a filling surface, then
+  meshed into planar facets.
+
+Because every output is a triangle, every panel is guaranteed planar.
+
+### How Panel Size Is Controlled
+
+`linearDeflection_` is the **maximum distance a flat panel may deviate from the
+true surface**, in model units. It is the main size control:
+
+- Larger `linearDeflection_` -> fewer, bigger, flatter panels.
+- Smaller `linearDeflection_` -> more, smaller panels that hug curvature.
+
+Deflection is curvature-driven, not a fixed grid. A flat region deviates by
+zero, so it is never subdivided and stays coarse; a high-curvature region is
+subdivided automatically. This is what you want for panelling: detail where the
+surface bends, large panels where it is flat.
+
+`angularDeflection_` (radians) adds extra subdivision along tightly curved
+boundaries. `minArea_` discards triangles below an area so seams do not produce
+slivers.
+
+`nonPlanarOnly_` keeps the face count down: when set, a surface whose boundary
+is already planar (every point within `tolerance_` of its best-fit plane) passes
+straight through as a single `Face3D` instead of being split into triangles.
+Only genuinely warped surfaces are triangulated. Leave it off to triangulate
+every surface uniformly; turn it on for mixed models where most surfaces are
+flat and you only want the warped ones panelled.
+
+### Settings For Watertight Shells (the hard part)
+
+This is the difficult step. Each surface is triangulated **independently**, so
+two neighbouring surfaces that share a curved edge can end up with slightly
+different vertices along that edge. Those mismatches are tiny gaps and
+T-junctions, and they are why a naive triangulation does not close into a
+watertight shell.
+
+The fix has four parts:
+
+1. **Use one identical `linearDeflection_` (and `angularDeflection_`) for every
+   surface in the same model.** Equal deflection makes a shared edge subdivide
+   the same way on both sides, so the seams almost match.
+
+2. **Let the downstream OCCT step sew the seams with a fuzzy tolerance.** The
+   leftover gap along a shared edge is on the order of `linearDeflection_`, so
+   when you feed the panels into `SAMOCCT.CreateShells` (or
+   `SAMOCCT.CreateAdjacencyCluster`) set:
+
+   ```text
+   tolerance_      = 0.001                 (1 mm, normal model tolerance)
+   fuzzyTolerance_ = linearDeflection_     (e.g. 0.1, or a little larger)
+   ```
+
+   `fuzzyTolerance_` is the OCCT tolerance for fusing near-touching faces. It
+   must be **larger than the seam gap** (about `linearDeflection_`) but
+   **smaller than the smallest real feature** you want to keep separate. Use the
+   smallest value that closes the model reliably.
+
+3. **Keep `minArea_` at 0 when watertightness matters.** Dropping sliver
+   triangles can punch holes exactly along the seams you need to close. Only
+   raise `minArea_` for visualisation or panel-count reduction where small gaps
+   are acceptable.
+
+4. **Pre-split shared edges where you can.** The most reliable watertight result
+   comes from surfaces that already meet on exact, shared boundaries (split
+   where neighbours touch) before triangulating. Deflection-consistent meshing
+   of pre-split surfaces leaves almost nothing for the fuzzy step to bridge.
+
+### Recommended Settings (meter-based models)
+
+```text
+SAMOCCT.TriangulateSurface
+    linearDeflection_  = 0.1     (0.05 fine ... 0.2 coarse; SAME for all surfaces)
+    angularDeflection_ = 0.5
+    minArea_           = 0       (0 for watertight; raise only for visuals)
+    tolerance_         = 0.001
+
+then
+
+SAMOCCT.CreateShells (or CreateAdjacencyCluster)
+    tolerance_      = 0.001
+    fuzzyTolerance_ = 0.1        (about linearDeflection_; raise if gaps remain)
+```
+
+### Pipeline
+
+```text
+non-planar surfaces
+-> SAMOCCT.TriangulateSurface   (one shared linearDeflection_, minArea_ = 0)
+-> planar Face3Ds
+-> SAMOCCT.CreateShells         (fuzzyTolerance_ about linearDeflection_)
+-> watertight Shells
+-> SAMOCCT.PanelsFromShells / SAMOCCT.CreateAdjacencyClusterByShells
+```
+
+If the shells still do not close:
+
+- Increase `fuzzyTolerance_` gradually, for example 0.1 -> 0.15 -> 0.2.
+- Lower `linearDeflection_` so the seams start closer together.
+- Set `minArea_` back to 0.
+- Run `SAMOCCT.ShellsRepair` on the chunks that fail.
+- Pre-split neighbouring surfaces so they share exact edges before triangulating.
+
+## Merging Coplanar Faces
+
+`SAMOCCT.MergeCoplanarFace3Ds` and `SAMOCCT.MergeCoplanarShells` are the inverse
+of panelling: they collapse adjacent faces that lie on the same plane back into
+fewer, larger faces using OCCT `ShapeUpgrade_UnifySameDomain`. Use them to clean
+up over-segmented geometry (for example after sectioning, boolean operations, or
+imported meshes) before creating shells or analytical models, which keeps face
+counts and downstream solve times down.
+
+How it works:
+
+1. Input faces are sewn with `tolerance_` so coincident edges become shared.
+2. Neighbours whose normals agree within `angleTolerance_` are unified, and the
+   now-redundant edges between them are removed.
+3. Disjoint faces, and faces on different planes, are left untouched.
+
+`SAMOCCT.MergeCoplanarShells` runs the same operation per shell and rebuilds each
+closed volume, so only the face count changes - the geometry of the volume is
+preserved. If a shell cannot be merged it is passed through unchanged.
+
+Notes:
+
+- Increase `angleTolerance_` to merge faces that are only approximately coplanar;
+  keep it small to avoid flattening intentional creases.
+- This is geometry-level only. Coplanar merging for analytical `Panels` and
+  `AdjacencyCluster`s (which must also respect panel type, construction, shared
+  apertures, and space adjacency) is a separate, forthcoming step.
+
 ## Rule Of Thumb
 
 If the goal is an analytical building model, start with `Panel` or `Face3D`.

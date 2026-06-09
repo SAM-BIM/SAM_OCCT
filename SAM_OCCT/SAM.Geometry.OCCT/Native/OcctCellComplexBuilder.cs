@@ -281,6 +281,185 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
+        public static bool TryTriangulate(IEnumerable<Face3D> face3Ds, OcctBuildOptions options, double linearDeflection, double angularDeflection, bool relativeDeflection, OcctCellComplexResult result, out List<Triangle3D> triangles)
+        {
+            triangles = new List<Triangle3D>();
+
+            if (!OcctNativeInputBuilder.TryBuild(face3Ds, options, result, out OcctNativeInput input))
+            {
+                return false;
+            }
+
+            return TryTriangulateCore(input, options, linearDeflection, angularDeflection, relativeDeflection, result, out triangles);
+        }
+
+        public static bool TryTriangulate(IEnumerable<IReadOnlyList<Point3D>> boundaryLoops, OcctBuildOptions options, double linearDeflection, double angularDeflection, bool relativeDeflection, OcctCellComplexResult result, out List<Triangle3D> triangles)
+        {
+            triangles = new List<Triangle3D>();
+
+            if (!OcctNativeInputBuilder.TryBuild(boundaryLoops, options, result, out OcctNativeInput input))
+            {
+                return false;
+            }
+
+            return TryTriangulateCore(input, options, linearDeflection, angularDeflection, relativeDeflection, result, out triangles);
+        }
+
+        private static bool TryTriangulateCore(OcctNativeInput input, OcctBuildOptions options, double linearDeflection, double angularDeflection, bool relativeDeflection, OcctCellComplexResult result, out List<Triangle3D> triangles)
+        {
+            triangles = new List<Triangle3D>();
+
+            IntPtr resultHandle = IntPtr.Zero;
+            try
+            {
+                int status = NativeMethods.sam_occt_triangulate(
+                    input.Coordinates,
+                    input.Coordinates.Length / 3,
+                    input.LoopPointCounts,
+                    input.LoopPointCounts.Length,
+                    input.FaceLoopCounts,
+                    input.FaceCount,
+                    linearDeflection,
+                    angularDeflection,
+                    relativeDeflection ? 1 : 0,
+                    options.Tolerance,
+                    out resultHandle);
+
+                result.NativeAvailable = true;
+
+                if (status != 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TRIANGULATE_NATIVE_FAILED", string.Format("Native OCCT triangulation returned status {0}.", status));
+                    return false;
+                }
+
+                int cellCount = NativeMethods.sam_occt_result_cell_count(resultHandle);
+                for (int cellIndex = 0; cellIndex < cellCount; cellIndex++)
+                {
+                    triangles.AddRange(DecodeTriangle3Ds(resultHandle, cellIndex));
+                }
+
+                if (triangles.Count == 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TRIANGULATE_NO_FACES", "Native OCCT triangulation did not return any planar triangles.");
+                    return false;
+                }
+
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TRIANGULATE_SUCCESS", string.Format("Decoded {0} planar triangle(s).", triangles.Count));
+                return true;
+            }
+            catch (DllNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_MISSING", string.Format("Native OCCT library '{0}' was not found. {1}", global::SAM.Core.OCCT.Query.NativeLibraryName(), exception.Message));
+                return false;
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_ENTRYPOINT_MISSING", exception.Message);
+                return false;
+            }
+            finally
+            {
+                if (resultHandle != IntPtr.Zero)
+                {
+                    try
+                    {
+                        NativeMethods.sam_occt_free_result(resultHandle);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+
+        public static bool TryMergeCoplanar(IEnumerable<Face3D> face3Ds, OcctBuildOptions options, double angularTolerance, OcctCellComplexResult result, out List<Face3D> merged)
+        {
+            merged = new List<Face3D>();
+
+            if (!OcctNativeInputBuilder.TryBuild(face3Ds, options, result, out OcctNativeInput input))
+            {
+                return false;
+            }
+
+            IntPtr resultHandle = IntPtr.Zero;
+            try
+            {
+                int status = NativeMethods.sam_occt_merge_coplanar(
+                    input.Coordinates,
+                    input.Coordinates.Length / 3,
+                    input.LoopPointCounts,
+                    input.LoopPointCounts.Length,
+                    input.FaceLoopCounts,
+                    input.FaceCount,
+                    options.Tolerance,
+                    angularTolerance,
+                    out resultHandle);
+
+                result.NativeAvailable = true;
+
+                if (status != 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_MERGE_COPLANAR_NATIVE_FAILED", string.Format("Native OCCT coplanar merge returned status {0}.", status));
+                    return false;
+                }
+
+                int cellCount = NativeMethods.sam_occt_result_cell_count(resultHandle);
+                for (int cellIndex = 0; cellIndex < cellCount; cellIndex++)
+                {
+                    List<OcctCellFace> faces = DecodeFaces(resultHandle, cellIndex, result);
+                    if (faces == null)
+                    {
+                        continue;
+                    }
+
+                    foreach (OcctCellFace face in faces)
+                    {
+                        if (face?.Face3D != null)
+                        {
+                            merged.Add(face.Face3D);
+                        }
+                    }
+                }
+
+                if (merged.Count == 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_MERGE_COPLANAR_NO_FACES", "Native OCCT coplanar merge did not return any faces.");
+                    return false;
+                }
+
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_MERGE_COPLANAR_SUCCESS", string.Format("Merged into {0} face(s).", merged.Count));
+                return true;
+            }
+            catch (DllNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_MISSING", string.Format("Native OCCT library '{0}' was not found. {1}", global::SAM.Core.OCCT.Query.NativeLibraryName(), exception.Message));
+                return false;
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_ENTRYPOINT_MISSING", exception.Message);
+                return false;
+            }
+            finally
+            {
+                if (resultHandle != IntPtr.Zero)
+                {
+                    try
+                    {
+                        NativeMethods.sam_occt_free_result(resultHandle);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+
         private static class NativeMethods
         {
             [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
@@ -359,6 +538,32 @@ namespace SAM.Geometry.OCCT.Native
                 out IntPtr resultHandle);
 
             [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+            public static extern int sam_occt_triangulate(
+                [In] double[] coordinates,
+                int pointCount,
+                [In] int[] loopPointCounts,
+                int loopCount,
+                [In] int[] faceLoopCounts,
+                int faceCount,
+                double linearDeflection,
+                double angularDeflection,
+                int relativeDeflection,
+                double tolerance,
+                out IntPtr resultHandle);
+
+            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+            public static extern int sam_occt_merge_coplanar(
+                [In] double[] coordinates,
+                int pointCount,
+                [In] int[] loopPointCounts,
+                int loopCount,
+                [In] int[] faceLoopCounts,
+                int faceCount,
+                double tolerance,
+                double angularTolerance,
+                out IntPtr resultHandle);
+
+            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
             public static extern void sam_occt_free_result(IntPtr resultHandle);
 
             [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
@@ -433,6 +638,47 @@ namespace SAM.Geometry.OCCT.Native
             }
 
             return new Point3D(x, y, z);
+        }
+
+        private static List<Triangle3D> DecodeTriangle3Ds(IntPtr resultHandle, int cellIndex)
+        {
+            int faceCount = NativeMethods.sam_occt_result_cell_face_count(resultHandle, cellIndex);
+            List<Triangle3D> triangle3Ds = new List<Triangle3D>();
+
+            for (int faceIndex = 0; faceIndex < faceCount; faceIndex++)
+            {
+                // Each triangulated face is a single loop of three points.
+                int pointCount = NativeMethods.sam_occt_result_loop_point_count(resultHandle, cellIndex, faceIndex, 0);
+                if (pointCount < 3)
+                {
+                    continue;
+                }
+
+                List<Point3D> points = new List<Point3D>();
+                for (int pointIndex = 0; pointIndex < 3; pointIndex++)
+                {
+                    if (NativeMethods.sam_occt_result_point(resultHandle, cellIndex, faceIndex, 0, pointIndex, out double x, out double y, out double z) != 0)
+                    {
+                        points.Add(new Point3D(x, y, z));
+                    }
+                }
+
+                if (points.Count != 3)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    triangle3Ds.Add(new Triangle3D(points[0], points[1], points[2]));
+                }
+                catch
+                {
+                    // Skip degenerate (collinear/coincident) triangles.
+                }
+            }
+
+            return triangle3Ds;
         }
 
         private static List<OcctCellFace> DecodeFaces(IntPtr resultHandle, int cellIndex, OcctCellComplexResult result)

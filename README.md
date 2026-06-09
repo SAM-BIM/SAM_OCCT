@@ -50,6 +50,9 @@ Geometry:
 - `SAMOCCT.ShellsSplit`
 - `SAMOCCT.ShellsSectionByPlane`
 - `SAMOCCT.MergeSmallShells`
+- `SAMOCCT.MergeCoplanarFace3Ds`
+- `SAMOCCT.MergeCoplanarShells`
+- `SAMOCCT.TriangulateSurface`
 
 Analytical:
 
@@ -57,6 +60,20 @@ Analytical:
 - `SAMOCCT.CreateAdjacencyClusterByShells`
 - `SAMOCCT.MergeSmallSpaces`
 - `SAMOCCT.PanelsFromShells`
+
+`SAMOCCT.TriangulateSurface` takes possibly non-planar surfaces and
+triangulates them into planar SAM `Face3D`s ready for panelling, using OCCT for
+the meshing. Coplanar boundaries are meshed as a plane; non-planar (warped)
+boundaries are spanned with an OCCT filling surface (`BRepOffsetAPI_MakeFilling`)
+and meshed with `BRepMesh_IncrementalMesh`, so every output triangle is
+guaranteed planar. `linearDeflection_` is the maximum distance a panel may
+deviate from the true surface — larger values give fewer, bigger panels —
+while `minArea_` discards too-tiny panels. The resulting `Face3D`s feed straight
+into `SAMOCCT.CreateShells` / `SAMOCCT.PanelsFromShells`. To turn the triangulated
+panels into **watertight** shells you must use one consistent `linearDeflection_`
+across all surfaces and a matching downstream `fuzzyTolerance_`; see the
+"Triangulating Non-Planar Surfaces Into Planar Panels" section of
+[`docs/Modeling-Guide.md`](docs/Modeling-Guide.md) for the full recipe.
 
 Both adjacency components expose `tolerance_` and `fuzzyTolerance_` as the main
 OCCT controls. `SAMOCCT.CreateAdjacencyClusterByShells` also retains advanced
@@ -99,6 +116,52 @@ face-adjacent neighbour (`LongestSharedBoundary` or `LargestNeighbour`), and
 fuses each group with OCCT `ShellsUnion`. Cells that are large, isolated, or
 listed in `protectedShells_` pass through unchanged. The component reports merged
 and unmerged cells and a coded `report` (`SAM_OCCT_MERGE_SHELLS_*`).
+
+## Component Reference
+
+Every component shares the `_run` boolean (nothing happens until it is `true`)
+and a `Successful` output. Most also expose a `Diagnostics` (codes/messages)
+output; the clean-up components instead emit a coded `report`. Inputs starting
+with `_` are required; inputs ending with `_` are optional. Tolerance inputs are
+covered under [Tolerances](#tolerances-and-key-inputs) below.
+
+### Geometry (`SAM.Geometry.Grasshopper.OCCT`)
+
+| Component | What it does | Key inputs | Main output |
+| --- | --- | --- | --- |
+| `SAMOCCT.CreateShells` | Builds closed SAM `Shell` volumes from boundary faces/surfaces using OCCT. | `_face3Ds`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ShellsUnion` | Merges touching or overlapping closed shells into combined solids. | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ShellsDifference` | Subtracts closed cutter volumes from target shells. | `_shells`, `_cutterShells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ShellsIntersection` | Keeps only the volume where target shells overlap tool shells. | `_shells`, `_toolShells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ShellsRepair` | Rebuilds/repairs each closed shell through OCCT (heals gaps, bad faces). | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ShellsSplit` | Splits overlapping/touching shells into cleaner adjacent pieces. | `_shells`, `silverSpacing_`, `tolerance_` | `Shells` |
+| `SAMOCCT.ShellsSectionByPlane` | Sections shells by a plane, returning the cut faces and the split shells. | `_shells`, `plane_`, `tolerance_` | `Face3Ds`, `Shells` |
+| `SAMOCCT.MergeSmallShells` | Fuses tiny closed shells into their best face-adjacent neighbour via OCCT cell topology. | `_shells`, `minArea_`, `minVolume_`, `mergeMode_`, `protectedShells_`, `fuzzyTolerance_`, `tolerance_` | `Shells` (+ `mergedSmallShells`, `unmergedSmallShells`, `report`) |
+| `SAMOCCT.MergeCoplanarFace3Ds` | Merges adjacent coplanar Face3Ds into fewer, larger faces via OCCT `ShapeUpgrade_UnifySameDomain`. | `_face3Ds`, `angleTolerance_`, `tolerance_` | `Face3Ds` |
+| `SAMOCCT.MergeCoplanarShells` | Merges each shell's coplanar faces into fewer faces (volume preserved) via OCCT. | `_shells`, `angleTolerance_`, `tolerance_` | `Shells` |
+| `SAMOCCT.TriangulateSurface` | Triangulates possibly non-planar surfaces into planar `Face3D` panels via OCCT meshing. `nonPlanarOnly_` passes flat surfaces through as a single face to save face count. | `_surfaces`, `linearDeflection_`, `angularDeflection_`, `minArea_`, `nonPlanarOnly_`, `tolerance_` | `Face3Ds` |
+
+### Analytical (`SAM.Analytical.Grasshopper.OCCT`)
+
+| Component | What it does | Key inputs | Main output |
+| --- | --- | --- | --- |
+| `SAMOCCT.CreateAdjacencyCluster` | Builds a SAM `AdjacencyCluster` from analytical `Panels` via OCCT cell building. | `_panels`, `spaces_`, `tolerance_`, `fuzzyTolerance_` | `AdjacencyCluster` |
+| `SAMOCCT.CreateAdjacencyClusterByShells` | Builds an `AdjacencyCluster` from closed shell space volumes, reusing space metadata. | `_shells`, `spaces_`, `names_`, `elevationGround_`, `fuzzyTolerance_`, `maxDistance_`, `maxAngle_`, `minArea_`, `tolerance_` | `AdjacencyCluster` |
+| `SAMOCCT.MergeSmallSpaces` | Merges tiny spaces of an `AdjacencyCluster` into the best adjacent larger space. | `_adjacencyCluster`, `minArea_`, `minVolume_`, `mergeMode_`, `allowMergeExternal_`, `protectedSpaces_`, `tolerance_` | `adjacencyCluster` (+ `mergedSpaces`, `unmergedSmallSpaces`, `report`) |
+| `SAMOCCT.PanelsFromShells` | Creates analytical SAM `Panels` from the faces of closed shells. | `_shells`, `silverSpacing_`, `tolerance_` | `Panels` |
+
+For full input/output descriptions, hover the component parameters in
+Grasshopper; for recommended settings and end-to-end workflows (including
+watertight panelling) see `docs/Modeling-Guide.md`.
+
+### Tolerances And Key Inputs
+
+- `tolerance_`: base model tolerance (e.g. 1 mm / `0.001` for meters).
+- `fuzzyTolerance_`: OCCT tolerance for fusing near-touching faces/edges.
+- `silverSpacing_`: snap distance used to remove sliver geometry.
+- `linearDeflection_` / `angularDeflection_`: OCCT meshing deflection used by
+  `SAMOCCT.TriangulateSurface` (panel size / curvature control).
+- `minArea_` / `minVolume_`: discard faces / cells below these thresholds.
 
 ## Modeling Guide
 
