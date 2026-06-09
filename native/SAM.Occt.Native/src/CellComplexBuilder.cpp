@@ -9,6 +9,7 @@
 #include <BOPAlgo_MakerVolume.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
@@ -20,6 +21,7 @@
 #include <Poly_Triangle.hxx>
 #include <Poly_Triangulation.hxx>
 #include <ShapeFix_Shape.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <TopAbs.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
@@ -928,6 +930,103 @@ int sam_occt_triangulate(
             if (make_meshable_face(coordinates, loop_point_counts, point_offset, loop_offset, face_loop_counts[face_index], face))
             {
                 append_triangles(face, linear_deflection, angular_deflection, relative_deflection, cell, *result, tolerance);
+            }
+        }
+
+        if (cell.faces.empty())
+        {
+            return 40;
+        }
+
+        result->cells.push_back(cell);
+        *result_handle = result.release();
+        return 0;
+    }
+    catch (...)
+    {
+        return 99;
+    }
+}
+
+int sam_occt_merge_coplanar(
+    const double* coordinates,
+    int point_count,
+    const int* loop_point_counts,
+    int loop_count,
+    const int* face_loop_counts,
+    int face_count,
+    double tolerance,
+    double angular_tolerance,
+    void** result_handle)
+{
+    if (result_handle != nullptr)
+    {
+        *result_handle = nullptr;
+    }
+
+    if (coordinates == nullptr || loop_point_counts == nullptr || face_loop_counts == nullptr || result_handle == nullptr)
+    {
+        return 10;
+    }
+
+    if (point_count <= 0 || loop_count <= 0 || face_count <= 0)
+    {
+        return 11;
+    }
+
+    const double sewing_tolerance = tolerance > 0 ? tolerance : 1e-6;
+
+    try
+    {
+        // Sew the input faces so coincident edges become shared topology; only then can
+        // ShapeUpgrade_UnifySameDomain recognise and merge adjacent coplanar faces.
+        BRepBuilderAPI_Sewing sewing(sewing_tolerance);
+        int point_offset = 0;
+        int loop_offset = 0;
+        int added = 0;
+
+        for (int face_index = 0; face_index < face_count; ++face_index)
+        {
+            TopoDS_Face face;
+            if (make_face(coordinates, loop_point_counts, point_offset, loop_offset, face_loop_counts[face_index], face))
+            {
+                sewing.Add(face);
+                ++added;
+            }
+        }
+
+        if (added == 0)
+        {
+            return 20;
+        }
+
+        sewing.Perform();
+        TopoDS_Shape sewn = sewing.SewedShape();
+        if (sewn.IsNull())
+        {
+            return 21;
+        }
+
+        ShapeUpgrade_UnifySameDomain unify(sewn, Standard_True, Standard_True, Standard_False);
+        unify.SetLinearTolerance(sewing_tolerance);
+        unify.SetAngularTolerance(angular_tolerance > 0 ? angular_tolerance : 1e-4);
+        unify.Build();
+
+        TopoDS_Shape merged = unify.Shape();
+        if (merged.IsNull())
+        {
+            return 30;
+        }
+
+        std::unique_ptr<Result> result(new Result());
+        Cell cell;
+        cell.volume = 0;
+        for (TopExp_Explorer face_explorer(merged, TopAbs_FACE); face_explorer.More(); face_explorer.Next())
+        {
+            Face face = extract_face(TopoDS::Face(face_explorer.Current()), *result, tolerance);
+            if (!face.loops.empty())
+            {
+                cell.faces.push_back(face);
             }
         }
 

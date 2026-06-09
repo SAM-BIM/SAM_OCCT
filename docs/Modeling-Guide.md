@@ -496,6 +496,34 @@ If the shells still do not close:
 - Run `SAMOCCT.ShellsRepair` on the chunks that fail.
 - Pre-split neighbouring surfaces so they share exact edges before triangulating.
 
+## Merging Coplanar Faces
+
+`SAMOCCT.MergeCoplanarFace3Ds` and `SAMOCCT.MergeCoplanarShells` are the inverse
+of panelling: they collapse adjacent faces that lie on the same plane back into
+fewer, larger faces using OCCT `ShapeUpgrade_UnifySameDomain`. Use them to clean
+up over-segmented geometry (for example after sectioning, boolean operations, or
+imported meshes) before creating shells or analytical models, which keeps face
+counts and downstream solve times down.
+
+How it works:
+
+1. Input faces are sewn with `tolerance_` so coincident edges become shared.
+2. Neighbours whose normals agree within `angleTolerance_` are unified, and the
+   now-redundant edges between them are removed.
+3. Disjoint faces, and faces on different planes, are left untouched.
+
+`SAMOCCT.MergeCoplanarShells` runs the same operation per shell and rebuilds each
+closed volume, so only the face count changes - the geometry of the volume is
+preserved. If a shell cannot be merged it is passed through unchanged.
+
+Notes:
+
+- Increase `angleTolerance_` to merge faces that are only approximately coplanar;
+  keep it small to avoid flattening intentional creases.
+- This is geometry-level only. Coplanar merging for analytical `Panels` and
+  `AdjacencyCluster`s (which must also respect panel type, construction, shared
+  apertures, and space adjacency) is a separate, forthcoming step.
+
 ## Rule Of Thumb
 
 If the goal is an analytical building model, start with `Panel` or `Face3D`.

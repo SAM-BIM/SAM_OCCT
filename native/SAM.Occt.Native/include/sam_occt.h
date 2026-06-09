@@ -101,6 +101,17 @@ SAM_OCCT_API int sam_occt_triangulate(
     double tolerance,
     void** result_handle);
 
+SAM_OCCT_API int sam_occt_merge_coplanar(
+    const double* coordinates,
+    int point_count,
+    const int* loop_point_counts,
+    int loop_count,
+    const int* face_loop_counts,
+    int face_count,
+    double tolerance,
+    double angular_tolerance,
+    void** result_handle);
+
 SAM_OCCT_API void sam_occt_free_result(void* result_handle);
 
 SAM_OCCT_API int sam_occt_result_cell_count(void* result_handle);

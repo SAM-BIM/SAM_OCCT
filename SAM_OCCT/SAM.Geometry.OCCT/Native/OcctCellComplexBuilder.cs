@@ -375,6 +375,91 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
+        public static bool TryMergeCoplanar(IEnumerable<Face3D> face3Ds, OcctBuildOptions options, double angularTolerance, OcctCellComplexResult result, out List<Face3D> merged)
+        {
+            merged = new List<Face3D>();
+
+            if (!OcctNativeInputBuilder.TryBuild(face3Ds, options, result, out OcctNativeInput input))
+            {
+                return false;
+            }
+
+            IntPtr resultHandle = IntPtr.Zero;
+            try
+            {
+                int status = NativeMethods.sam_occt_merge_coplanar(
+                    input.Coordinates,
+                    input.Coordinates.Length / 3,
+                    input.LoopPointCounts,
+                    input.LoopPointCounts.Length,
+                    input.FaceLoopCounts,
+                    input.FaceCount,
+                    options.Tolerance,
+                    angularTolerance,
+                    out resultHandle);
+
+                result.NativeAvailable = true;
+
+                if (status != 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_MERGE_COPLANAR_NATIVE_FAILED", string.Format("Native OCCT coplanar merge returned status {0}.", status));
+                    return false;
+                }
+
+                int cellCount = NativeMethods.sam_occt_result_cell_count(resultHandle);
+                for (int cellIndex = 0; cellIndex < cellCount; cellIndex++)
+                {
+                    List<OcctCellFace> faces = DecodeFaces(resultHandle, cellIndex, result);
+                    if (faces == null)
+                    {
+                        continue;
+                    }
+
+                    foreach (OcctCellFace face in faces)
+                    {
+                        if (face?.Face3D != null)
+                        {
+                            merged.Add(face.Face3D);
+                        }
+                    }
+                }
+
+                if (merged.Count == 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_MERGE_COPLANAR_NO_FACES", "Native OCCT coplanar merge did not return any faces.");
+                    return false;
+                }
+
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_MERGE_COPLANAR_SUCCESS", string.Format("Merged into {0} face(s).", merged.Count));
+                return true;
+            }
+            catch (DllNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_MISSING", string.Format("Native OCCT library '{0}' was not found. {1}", global::SAM.Core.OCCT.Query.NativeLibraryName(), exception.Message));
+                return false;
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                result.NativeAvailable = false;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_ENTRYPOINT_MISSING", exception.Message);
+                return false;
+            }
+            finally
+            {
+                if (resultHandle != IntPtr.Zero)
+                {
+                    try
+                    {
+                        NativeMethods.sam_occt_free_result(resultHandle);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+
         private static class NativeMethods
         {
             [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
@@ -464,6 +549,18 @@ namespace SAM.Geometry.OCCT.Native
                 double angularDeflection,
                 int relativeDeflection,
                 double tolerance,
+                out IntPtr resultHandle);
+
+            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+            public static extern int sam_occt_merge_coplanar(
+                [In] double[] coordinates,
+                int pointCount,
+                [In] int[] loopPointCounts,
+                int loopCount,
+                [In] int[] faceLoopCounts,
+                int faceCount,
+                double tolerance,
+                double angularTolerance,
                 out IntPtr resultHandle);
 
             [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
