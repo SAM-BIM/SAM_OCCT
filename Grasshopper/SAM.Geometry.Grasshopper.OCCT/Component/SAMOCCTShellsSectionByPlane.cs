@@ -39,7 +39,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
                 global::Grasshopper.Kernel.Parameters.Param_GenericObject planes = new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "planes_", NickName = "planes_", Description = "One or more SAM/Rhino planes to section by. Supply many level planes to cut a shell into many levels in one go. Uses the shell centroid XY plane if none are supplied.", Access = GH_ParamAccess.list, Optional = true };
                 planes.DataMapping = GH_DataMapping.Flatten;
-                result.Add(new GH_SAMParam(planes, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(planes, ParamVisibility.Binding));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "Tolerance", Access = GH_ParamAccess.item };
                 tolerance.SetPersistentData(Tolerance.Distance);
