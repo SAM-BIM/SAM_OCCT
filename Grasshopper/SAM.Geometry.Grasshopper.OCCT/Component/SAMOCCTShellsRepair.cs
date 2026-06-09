@@ -18,7 +18,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("6bc5378d-8759-43ae-93f7-e89c652fbf91");
 
-        public override string LatestComponentVersion => "0.1.0";
+        public override string LatestComponentVersion => "0.2.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -44,6 +44,10 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Number fuzzyTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "fuzzyTolerance_", NickName = "fuzzyTolerance_", Description = "OCCT fuzzy tolerance", Access = GH_ParamAccess.item };
                 fuzzyTolerance.SetPersistentData(Tolerance.MacroDistance);
                 result.Add(new GH_SAMParam(fuzzyTolerance, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number minArea = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "minArea_", NickName = "minArea_", Description = "Minimum acceptable face area in m². Tiny sliver faces below this (e.g. those left by SAMOCCT.ShellsSectionByPlane) are removed and the shell is rebuilt so it stays closed. Set to 0 to keep every face.", Access = GH_ParamAccess.item };
+                minArea.SetPersistentData(0.01);
+                result.Add(new GH_SAMParam(minArea, ParamVisibility.Binding));
 
                 global::Grasshopper.Kernel.Parameters.Param_Boolean run = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "_run", NickName = "_run", Description = "Run", Access = GH_ParamAccess.item };
                 run.SetPersistentData(false);
@@ -104,6 +108,13 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 dataAccess.GetData(index, ref fuzzyTolerance);
             }
 
+            double minArea = 0.01;
+            index = Params.IndexOfInputParam("minArea_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref minArea);
+            }
+
             List<Shell> shells = new List<Shell>();
             foreach (GH_ObjectWrapper objectWrapper in shellWrappers)
             {
@@ -113,7 +124,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 }
             }
 
-            List<Shell> resultShells = Geometry.OCCT.Query.ShellsRepair(shells, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance });
+            List<Shell> resultShells = Geometry.OCCT.Query.ShellsRepair(shells, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance }, minArea);
             List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList();
 
             index = Params.IndexOfOutputParam("Shells");

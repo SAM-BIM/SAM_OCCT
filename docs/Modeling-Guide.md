@@ -44,6 +44,16 @@ room box shells
 This is a good workflow for conceptual massing, roof-shaped spaces, atrium
 division, shafts, and other volume-first modeling.
 
+### Cleaning Up Tiny Faces After Sectioning
+
+`SAMOCCT.ShellsSectionByPlane` can leave very small sliver faces on the level
+shells it produces (e.g. a stray face of `0.000079` m²). Feed those shells into
+`SAMOCCT.ShellsRepair` with `minArea_` set to remove them: any face below
+`minArea_` (in m²) is dropped and the shell is rebuilt through OCCT so the
+volume stays closed. The default `minArea_` is `0.01` m²; set it to `0` to keep
+every face. Removed/kept faces are reported on the `Diagnostics` output
+(`SAM_OCCT_REPAIR_SMALL_FACES_REMOVED` / `SAM_OCCT_REPAIR_SMALL_FACES_KEPT`).
+
 Do not union adjacent room shells before creating an adjacency cluster if each
 room should remain a separate space. Union is for merging volumes into a larger
 solid, not for preserving individual rooms.

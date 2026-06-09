@@ -135,7 +135,7 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | `SAMOCCT.ShellsUnion` | Merges touching or overlapping closed shells into combined solids. | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsDifference` | Subtracts closed cutter volumes from target shells. | `_shells`, `_cutterShells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsIntersection` | Keeps only the volume where target shells overlap tool shells. | `_shells`, `_toolShells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
-| `SAMOCCT.ShellsRepair` | Rebuilds/repairs each closed shell through OCCT (heals gaps, bad faces). | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ShellsRepair` | Rebuilds/repairs each closed shell through OCCT (heals gaps, bad faces) and drops tiny sliver faces below `minArea_` left by sectioning. | `_shells`, `tolerance_`, `fuzzyTolerance_`, `minArea_` | `Shells` |
 | `SAMOCCT.ShellsSplit` | Splits overlapping/touching shells into cleaner adjacent pieces. | `_shells`, `silverSpacing_`, `tolerance_` | `Shells` |
 | `SAMOCCT.ShellsSectionByPlane` | Sections shells by one or more planes (supply many level planes to cut many levels at once), returning the cut faces and the split shells. | `_shells`, `planes_`, `tolerance_` | `Face3Ds`, `Shells` |
 | `SAMOCCT.MergeSmallShells` | Fuses tiny closed shells into their best face-adjacent neighbour via OCCT cell topology. | `_shells`, `minArea_`, `minVolume_`, `mergeMode_`, `protectedShells_`, `fuzzyTolerance_`, `tolerance_` | `Shells` (+ `mergedSmallShells`, `unmergedSmallShells`, `report`) |
