@@ -134,31 +134,37 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
                 List<Plane> planes_Temp = planes.Count != 0 ? planes : new List<Plane> { new Plane(boundingBox3D.GetCentroid(), Vector3D.WorldZ) };
 
-                // Collect the section faces from every plane, then split the shell by all of them at
-                // once so a stack of level planes carves the shell into many levels in a single pass.
-                List<Face3D> sectionFace3Ds = new List<Face3D>();
+                // Split iteratively, one plane at a time, re-splitting the pieces produced so far.
+                // Splitting by every section face at once can drop interior slabs that are bounded
+                // by two planes (e.g. the level between 6 m and 9 m); cutting plane by plane forms
+                // each slab as the upper piece of one cut and the lower piece of the next.
+                List<Shell> pieces = new List<Shell> { new Shell(shell) };
                 foreach (Plane plane_Temp in planes_Temp)
                 {
-                    List<Face3D> face3Ds_Temp = shell.Section(plane_Temp, true, Tolerance.Angle, tolerance, Tolerance.MacroDistance);
-                    if (face3Ds_Temp != null)
+                    List<Shell> nextPieces = new List<Shell>();
+                    foreach (Shell piece in pieces)
                     {
-                        sectionFace3Ds.AddRange(face3Ds_Temp.Where(x => x != null));
+                        List<Face3D> face3Ds_Temp = piece.Section(plane_Temp, true, Tolerance.Angle, tolerance, Tolerance.MacroDistance);
+                        if (face3Ds_Temp != null && face3Ds_Temp.Count != 0)
+                        {
+                            face3Ds.AddRange(face3Ds_Temp.Where(x => x != null));
+
+                            List<Shell> shells_Split_Temp = piece.Split(face3Ds_Temp, Tolerance.MacroDistance, Tolerance.Angle, tolerance);
+                            if (shells_Split_Temp != null && shells_Split_Temp.Count != 0)
+                            {
+                                nextPieces.AddRange(shells_Split_Temp);
+                                continue;
+                            }
+                        }
+
+                        // This plane does not cross this piece (or the split produced nothing); keep it.
+                        nextPieces.Add(piece);
                     }
+
+                    pieces = nextPieces;
                 }
 
-                if (sectionFace3Ds.Count != 0)
-                {
-                    face3Ds.AddRange(sectionFace3Ds);
-
-                    List<Shell> shells_Split_Temp = shell.Split(sectionFace3Ds, Tolerance.MacroDistance, Tolerance.Angle, tolerance);
-                    if (shells_Split_Temp != null && shells_Split_Temp.Count != 0)
-                    {
-                        shells_Split.AddRange(shells_Split_Temp);
-                        continue;
-                    }
-                }
-
-                shells_Split.Add(new Shell(shell));
+                shells_Split.AddRange(pieces);
             }
 
             List<string> diagnostics = new List<string>
