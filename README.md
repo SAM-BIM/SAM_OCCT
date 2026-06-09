@@ -65,7 +65,11 @@ and meshed with `BRepMesh_IncrementalMesh`, so every output triangle is
 guaranteed planar. `linearDeflection_` is the maximum distance a panel may
 deviate from the true surface — larger values give fewer, bigger panels —
 while `minArea_` discards too-tiny panels. The resulting `Face3D`s feed straight
-into `SAMOCCT.CreateShells` / `SAMOCCT.PanelsFromShells`.
+into `SAMOCCT.CreateShells` / `SAMOCCT.PanelsFromShells`. To turn the triangulated
+panels into **watertight** shells you must use one consistent `linearDeflection_`
+across all surfaces and a matching downstream `fuzzyTolerance_`; see the
+"Triangulating Non-Planar Surfaces Into Planar Panels" section of
+[`docs/Modeling-Guide.md`](docs/Modeling-Guide.md) for the full recipe.
 
 Both adjacency components expose `tolerance_` and `fuzzyTolerance_` as the main
 OCCT controls. `SAMOCCT.CreateAdjacencyClusterByShells` also retains advanced
