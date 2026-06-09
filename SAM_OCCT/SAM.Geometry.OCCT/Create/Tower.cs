@@ -10,23 +10,31 @@ namespace SAM.Geometry.OCCT
     public static partial class Create
     {
         /// <summary>
-        /// Builds the closed shells of a zoned, optionally twisted tower. Each floor is a
-        /// square ring (outer perimeter minus a square core inset) split into four perimeter
-        /// prisms plus one central core prism, so every floor contributes five closed shells.
-        /// The whole storey is rotated about the vertical axis by an angle that grows linearly
-        /// with height, producing the twist. The shells are returned floor-major; within each
-        /// floor the order is the four perimeter prisms (one per base edge) followed by the
-        /// core. Pure SAM.Geometry - no OCCT/native call - so it is unit-testable without the
-        /// native runtime. Feed the result to <c>SAM.Geometry.OCCT.Create.Shells</c>
-        /// or <c>SAM.Analytical.OCCT.Create.Tower</c> to obtain a watertight cell complex.
+        /// Builds the bounding faces of a zoned, optionally twisted tower, ready for the OCCT
+        /// cell-complex build (<c>BOPAlgo_MakerVolume</c> splits them into one cell per zone).
+        /// Each floor is a square ring (outer perimeter minus a square core inset) partitioned
+        /// into four perimeter zones plus a central core. Only the facade twists: the outer
+        /// walls loft from the floor's bottom rotation to its top rotation, while the core
+        /// walls and the diagonal partition walls are strictly VERTICAL, fixed at the floor's
+        /// bottom rotation - internal separations stay plumb the way a BEMS model expects.
+        /// Per floor the faces are: four facade walls (two planar triangles each when twisted,
+        /// planar quads when not), four vertical core walls, and four vertical diagonal
+        /// partitions spanning core corner to outer corner; plus one full floor plate per level.
+        /// The vertical partitions seal exactly at the floor's bottom profile and poke through
+        /// the receding twisted facade above it - MakerVolume trims the excess and drops the
+        /// unbounded outside fragments, so the cells still close. Pure SAM.Geometry - no
+        /// native call - so it is unit-testable without the native runtime. Note: with a large
+        /// per-floor twist and a shallow core inset (core corner radius exceeding the outer
+        /// apothem) the rotated facade can clip the core; the default 20 m / 5 m profile is
+        /// safe for any twist.
         /// </summary>
         /// <param name="height">Total tower height (m). Must be positive.</param>
-        /// <param name="twistAngle">Total twist over the full height (radians). Applied linearly per floor; 0 gives an untwisted prism.</param>
+        /// <param name="twistAngle">Total facade twist over the full height (radians). Applied linearly per floor; 0 gives an untwisted prism.</param>
         /// <param name="floors">Number of storeys. Must be at least 1.</param>
         /// <param name="width">Outer square plan dimension (m). Defaults to 20 m (the issue #12 profile).</param>
         /// <param name="coreInset">Inward offset of the core from the perimeter (m). Defaults to 5 m. Must be greater than 0 and less than half the width.</param>
-        /// <returns>The closed tower shells, or <c>null</c> when the arguments are invalid.</returns>
-        public static List<Shell> Tower(double height, double twistAngle, int floors, double width = 20.0, double coreInset = 5.0)
+        /// <returns>The tower bounding faces, or <c>null</c> when the arguments are invalid.</returns>
+        public static List<Face3D> Tower(double height, double twistAngle, int floors, double width = 20.0, double coreInset = 5.0)
         {
             if (double.IsNaN(height) || height <= 0 || double.IsNaN(twistAngle) || floors < 1)
             {
@@ -42,12 +50,21 @@ namespace SAM.Geometry.OCCT
 
             double heightStep = height / floors;
             double angleStep = twistAngle / floors;
+            bool twisted = angleStep != 0;
 
             // Plan corners, counter-clockwise, matching the issue #12 base profile order.
             double[][] outerPlan = { new[] { -halfWidth, halfWidth }, new[] { halfWidth, halfWidth }, new[] { halfWidth, -halfWidth }, new[] { -halfWidth, -halfWidth } };
             double[][] corePlan = { new[] { -halfCore, halfCore }, new[] { halfCore, halfCore }, new[] { halfCore, -halfCore }, new[] { -halfCore, -halfCore } };
 
-            List<Shell> result = new List<Shell>();
+            List<Face3D> result = new List<Face3D>();
+
+            // One full floor plate per level; MakerVolume splits it into per-zone pieces.
+            for (int level = 0; level <= floors; level++)
+            {
+                Point3D[] corners = PlanPoints(outerPlan, level * angleStep, level * heightStep);
+                result.Add(Polygon(corners[0], corners[1], corners[2], corners[3]));
+            }
+
             for (int floor = 0; floor < floors; floor++)
             {
                 double zBottom = floor * heightStep;
@@ -57,36 +74,37 @@ namespace SAM.Geometry.OCCT
 
                 Point3D[] outerBottom = PlanPoints(outerPlan, angleBottom, zBottom);
                 Point3D[] outerTop = PlanPoints(outerPlan, angleTop, zTop);
+
+                // Vertical internals: top corners reuse the BOTTOM rotation, so the core and
+                // partition walls are plumb regardless of the facade twist.
+                Point3D[] outerBottomRaised = PlanPoints(outerPlan, angleBottom, zTop);
                 Point3D[] coreBottom = PlanPoints(corePlan, angleBottom, zBottom);
-                Point3D[] coreTop = PlanPoints(corePlan, angleTop, zTop);
+                Point3D[] coreBottomRaised = PlanPoints(corePlan, angleBottom, zTop);
 
-                // Four perimeter prisms: the square ring between the outer and core profiles,
-                // partitioned along the corner-to-corner diagonals into one prism per base edge.
                 for (int edge = 0; edge < 4; edge++)
                 {
                     int next = (edge + 1) % 4;
-                    List<Face3D> face3Ds = new List<Face3D>();
-                    AddQuad(face3Ds, outerBottom[edge], outerBottom[next], coreBottom[next], coreBottom[edge]); // bottom
-                    AddQuad(face3Ds, outerTop[edge], outerTop[next], coreTop[next], coreTop[edge]);             // top
-                    AddQuad(face3Ds, outerBottom[edge], outerBottom[next], outerTop[next], outerTop[edge]);     // outer facade
-                    AddQuad(face3Ds, coreBottom[edge], coreBottom[next], coreTop[next], coreTop[edge]);         // inner (core-facing) wall
-                    AddQuad(face3Ds, outerBottom[edge], coreBottom[edge], coreTop[edge], outerTop[edge]);       // diagonal end wall
-                    AddQuad(face3Ds, outerBottom[next], coreBottom[next], coreTop[next], outerTop[next]);       // diagonal end wall
 
-                    result.Add(new Shell(face3Ds));
+                    // Facade: lofted between the floor's bottom and top rotations. A twisted
+                    // facade quad is non-planar, and the native make_face requires planar
+                    // wires, so it is emitted as two planar triangles.
+                    if (twisted)
+                    {
+                        result.Add(Polygon(outerBottom[edge], outerBottom[next], outerTop[next]));
+                        result.Add(Polygon(outerBottom[edge], outerTop[next], outerTop[edge]));
+                    }
+                    else
+                    {
+                        result.Add(Polygon(outerBottom[edge], outerBottom[next], outerTop[next], outerTop[edge]));
+                    }
+
+                    // Core wall: vertical.
+                    result.Add(Polygon(coreBottom[edge], coreBottom[next], coreBottomRaised[next], coreBottomRaised[edge]));
+
+                    // Diagonal partition: vertical plane through the plan diagonal, spanning
+                    // core corner to outer corner for the full floor height.
+                    result.Add(Polygon(coreBottom[edge], outerBottom[edge], outerBottomRaised[edge], coreBottomRaised[edge]));
                 }
-
-                // Central core prism.
-                List<Face3D> coreFace3Ds = new List<Face3D>();
-                AddQuad(coreFace3Ds, coreBottom[0], coreBottom[1], coreBottom[2], coreBottom[3]); // bottom
-                AddQuad(coreFace3Ds, coreTop[0], coreTop[1], coreTop[2], coreTop[3]);             // top
-                for (int edge = 0; edge < 4; edge++)
-                {
-                    int next = (edge + 1) % 4;
-                    AddQuad(coreFace3Ds, coreBottom[edge], coreBottom[next], coreTop[next], coreTop[edge]);
-                }
-
-                result.Add(new Shell(coreFace3Ds));
             }
 
             return result;
@@ -108,20 +126,9 @@ namespace SAM.Geometry.OCCT
             return result;
         }
 
-        // Splits a (possibly non-planar, when twisted) quad into two triangles along the
-        // point_1-point_3 diagonal. Triangles are always planar, so the native make_face -
-        // which requires a planar wire - never rejects them. Callers that share a wall pass
-        // its corners in the same order, so adjacent cells split it identically and the
-        // triangulated interface coincides exactly.
-        private static void AddQuad(List<Face3D> face3Ds, Point3D point3D_1, Point3D point3D_2, Point3D point3D_3, Point3D point3D_4)
+        private static Face3D Polygon(params Point3D[] point3Ds)
         {
-            face3Ds.Add(Triangle(point3D_1, point3D_2, point3D_3));
-            face3Ds.Add(Triangle(point3D_1, point3D_3, point3D_4));
-        }
-
-        private static Face3D Triangle(Point3D point3D_1, Point3D point3D_2, Point3D point3D_3)
-        {
-            return new Polygon3D(new List<Point3D> { point3D_1, point3D_2, point3D_3 }).ToFace3D();
+            return new Polygon3D(new List<Point3D>(point3Ds)).ToFace3D();
         }
     }
 }

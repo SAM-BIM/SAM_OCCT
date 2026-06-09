@@ -4,7 +4,7 @@
 using SAM.Analytical;
 using SAM.Core.OCCT;
 using SAM.Geometry.OCCT;
-using System;
+using SAM.Geometry.Spatial;
 using System.Collections.Generic;
 using System.Linq;
 using Xunit;
@@ -18,10 +18,14 @@ namespace SAM.OCCT.IntegrationTests
     /// real OCCT cell-complex pipeline (BOPAlgo_MakerVolume over the generated tower faces),
     /// so each auto-skips when SAM.Occt.Native is unavailable. They assert the watertight,
     /// five-zone, multi-level AdjacencyCluster the issue calls for: one space per zone per
-    /// floor, shared internal boundaries between zones, and orientation/floor zone naming.
+    /// floor, shared internal boundaries between zones, orientation/floor zone naming, and -
+    /// even when the facade twists - strictly vertical internal separations typed
+    /// WallInternal (or Air).
     /// </summary>
     public class TowerIntegrationTests
     {
+        private const double VerticalityTolerance = 1e-6;
+
         private readonly ITestOutputHelper output;
 
         public TowerIntegrationTests(ITestOutputHelper output)
@@ -68,6 +72,35 @@ namespace SAM.OCCT.IntegrationTests
                 string prefix = string.Format("Floor_{0}_", floor);
                 Assert.Contains(names, x => x.StartsWith(prefix));
             }
+
+            // Internal separations (panels shared by two spaces) must never tilt with the
+            // facade: vertical separation walls typed WallInternal (or Air), horizontal
+            // ones are the internal floor plates.
+            int internalWallCount = 0;
+            foreach (Panel panel in panels)
+            {
+                List<Space> relatedSpaces = adjacencyCluster.GetRelatedObjects<Space>(panel);
+                if (relatedSpaces == null || relatedSpaces.Count < 2)
+                {
+                    continue;
+                }
+
+                Vector3D normal = panel.GetFace3D()?.GetPlane()?.Normal?.Unit;
+                Assert.NotNull(normal);
+
+                double z = System.Math.Abs(normal.Z);
+                bool vertical = z < VerticalityTolerance;
+                bool horizontal = z > 1 - VerticalityTolerance;
+                Assert.True(vertical || horizontal, string.Format("Internal panel {0} must be vertical or horizontal, but |normal.Z| = {1}.", panel.Name, z));
+
+                if (vertical)
+                {
+                    internalWallCount++;
+                    Assert.True(panel.PanelType == PanelType.WallInternal || panel.PanelType == PanelType.Air, string.Format("Internal separation wall {0} must be WallInternal or Air, but is {1}.", panel.Name, panel.PanelType));
+                }
+            }
+
+            Assert.True(internalWallCount > 0, "Expected vertical internal separation walls between the tower zones.");
         }
 
         private void WriteDiagnostics(OcctCellComplexResult result)
