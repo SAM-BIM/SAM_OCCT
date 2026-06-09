@@ -49,12 +49,14 @@ Geometry:
 - `SAMOCCT.ShellsRepair`
 - `SAMOCCT.ShellsSplit`
 - `SAMOCCT.ShellsSectionByPlane`
+- `SAMOCCT.MergeSmallShells`
 - `SAMOCCT.TriangulateSurface`
 
 Analytical:
 
 - `SAMOCCT.CreateAdjacencyCluster`
 - `SAMOCCT.CreateAdjacencyClusterByShells`
+- `SAMOCCT.MergeSmallSpaces`
 - `SAMOCCT.PanelsFromShells`
 
 `SAMOCCT.TriangulateSurface` takes possibly non-planar surfaces and
@@ -91,10 +93,33 @@ directly from this OCCT topology first. If successful, diagnostics include
 `SAM_OCCT_ANALYTICAL_DIRECT_SUCCESS`; if not, the component falls back to the
 older SAM geometric rebuild and reports `SAM_OCCT_ANALYTICAL_DIRECT_FALLBACK`.
 
+`SAMOCCT.MergeSmallSpaces` is a clean-up step that runs on an existing
+`AdjacencyCluster`. It finds spaces whose floor area is below `minArea_` (or
+volume below `minVolume_`) and merges each into the best adjacent larger space
+across a shared internal boundary. The now-internal shared panels are dropped,
+the surviving space inherits the small space's remaining panels, volume, and
+adjacency, and panel types and constructions are recalculated. `mergeMode_`
+chooses the merge target (`LongestSharedBoundary`, `LargestNeighbour`, or
+`SameTypeFirst`), `protectedSpaces_` keeps shafts/risers intact, and
+vertically stacked neighbours on a different level are never used as targets.
+The component reports merged and unmerged spaces and a coded `report` of every
+decision (`SAM_OCCT_MERGE_*`).
+
+`SAMOCCT.MergeSmallShells` is the shell/Brep counterpart of the same clean-up.
+It runs before any analytical model exists. The supplied shells are decoded into
+an OCCT cell complex, so merging uses real per-cell volumes and real shared-face
+adjacency (not bounding-box estimates). It finds tiny cells (floor footprint
+below `minArea_` or volume below `minVolume_`), groups each with its best
+face-adjacent neighbour (`LongestSharedBoundary` or `LargestNeighbour`), and
+fuses each group with OCCT `ShellsUnion`. Cells that are large, isolated, or
+listed in `protectedShells_` pass through unchanged. The component reports merged
+and unmerged cells and a coded `report` (`SAM_OCCT_MERGE_SHELLS_*`).
+
 ## Component Reference
 
 Every component shares the `_run` boolean (nothing happens until it is `true`)
-and a `Diagnostics` (codes/messages) plus `Successful` output. Inputs starting
+and a `Successful` output. Most also expose a `Diagnostics` (codes/messages)
+output; the clean-up components instead emit a coded `report`. Inputs starting
 with `_` are required; inputs ending with `_` are optional. Tolerance inputs are
 covered under [Tolerances](#tolerances-and-key-inputs) below.
 
@@ -109,6 +134,7 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | `SAMOCCT.ShellsRepair` | Rebuilds/repairs each closed shell through OCCT (heals gaps, bad faces). | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsSplit` | Splits overlapping/touching shells into cleaner adjacent pieces. | `_shells`, `silverSpacing_`, `tolerance_` | `Shells` |
 | `SAMOCCT.ShellsSectionByPlane` | Sections shells by a plane, returning the cut faces and the split shells. | `_shells`, `plane_`, `tolerance_` | `Face3Ds`, `Shells` |
+| `SAMOCCT.MergeSmallShells` | Fuses tiny closed shells into their best face-adjacent neighbour via OCCT cell topology. | `_shells`, `minArea_`, `minVolume_`, `mergeMode_`, `protectedShells_`, `fuzzyTolerance_`, `tolerance_` | `Shells` (+ `mergedSmallShells`, `unmergedSmallShells`, `report`) |
 | `SAMOCCT.TriangulateSurface` | Triangulates possibly non-planar surfaces into planar `Face3D` panels via OCCT meshing. | `_surfaces`, `linearDeflection_`, `angularDeflection_`, `minArea_`, `tolerance_` | `Face3Ds` |
 
 ### Analytical (`SAM.Analytical.Grasshopper.OCCT`)
@@ -117,6 +143,7 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | --- | --- | --- | --- |
 | `SAMOCCT.CreateAdjacencyCluster` | Builds a SAM `AdjacencyCluster` from analytical `Panels` via OCCT cell building. | `_panels`, `spaces_`, `tolerance_`, `fuzzyTolerance_` | `AdjacencyCluster` |
 | `SAMOCCT.CreateAdjacencyClusterByShells` | Builds an `AdjacencyCluster` from closed shell space volumes, reusing space metadata. | `_shells`, `spaces_`, `names_`, `elevationGround_`, `fuzzyTolerance_`, `maxDistance_`, `maxAngle_`, `minArea_`, `tolerance_` | `AdjacencyCluster` |
+| `SAMOCCT.MergeSmallSpaces` | Merges tiny spaces of an `AdjacencyCluster` into the best adjacent larger space. | `_adjacencyCluster`, `minArea_`, `minVolume_`, `mergeMode_`, `allowMergeExternal_`, `protectedSpaces_`, `tolerance_` | `adjacencyCluster` (+ `mergedSpaces`, `unmergedSmallSpaces`, `report`) |
 | `SAMOCCT.PanelsFromShells` | Creates analytical SAM `Panels` from the faces of closed shells. | `_shells`, `silverSpacing_`, `tolerance_` | `Panels` |
 
 For full input/output descriptions, hover the component parameters in
@@ -130,7 +157,7 @@ watertight panelling) see `docs/Modeling-Guide.md`.
 - `silverSpacing_`: snap distance used to remove sliver geometry.
 - `linearDeflection_` / `angularDeflection_`: OCCT meshing deflection used by
   `SAMOCCT.TriangulateSurface` (panel size / curvature control).
-- `minArea_`: discards faces below this area.
+- `minArea_` / `minVolume_`: discard faces / cells below these thresholds.
 
 ## Modeling Guide
 

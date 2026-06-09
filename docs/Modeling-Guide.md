@@ -112,6 +112,123 @@ Useful diagnostics:
   updating panel types, and assigning default constructions.
 - `SAM_OCCT_TIMING_TOTAL`: total component time.
 
+## Cleaning Small Spaces
+
+Cell-complex and shell workflows can produce unwanted tiny cells: slivers
+between near-coincident faces, leftover voids, or modelling offcuts. Use
+`SAMOCCT.MergeSmallSpaces` to fold these into the best adjacent larger space.
+
+```text
+Panels / Shells
+-> SAMOCCT.CreateAdjacencyCluster / SAMOCCT.CreateAdjacencyClusterByShells
+-> SAMOCCT.MergeSmallSpaces
+-> cleaned AdjacencyCluster
+```
+
+What it does:
+
+1. Finds spaces with floor area below `minArea_` or volume below `minVolume_`.
+2. For each small space, looks at the spaces it shares an internal boundary
+   with.
+3. Rejects unsafe targets: protected spaces (`protectedSpaces_`, such as shafts
+   and risers), volumeless/void external cells (unless `allowMergeExternal_`),
+   and vertically stacked neighbours on a different level.
+4. Picks the best remaining target according to `mergeMode_`:
+   - `LongestSharedBoundary`: largest shared panel/boundary area (default).
+   - `LargestNeighbour`: largest neighbouring floor area, then volume.
+   - `SameTypeFirst`: same space type first, then largest shared boundary.
+5. Merges the small space into the target, dropping the now-internal shared
+   panels and re-relating the small space's remaining panels to the target.
+6. Recalculates volume, panel types, and constructions on the cleaned cluster.
+
+Inputs:
+
+- `_adjacencyCluster`: the cluster to clean.
+- `minArea_`: minimum acceptable floor area in m² (default `0.3`).
+- `minVolume_`: optional minimum acceptable volume in m³ (default `0.5`; leave
+  unset to ignore volume).
+- `tolerance_`: distance tolerance for geometry and level comparisons.
+- `mergeMode_`: target selection strategy.
+- `allowMergeExternal_`: allow merging into volumeless/void external cells
+  (default `false`).
+- `protectedSpaces_`: spaces that must never be merged away or used as a target.
+
+Outputs:
+
+- `adjacencyCluster`: the cleaned cluster.
+- `mergedSpaces`: small spaces that were merged away.
+- `unmergedSmallSpaces`: small spaces that could not be merged.
+- `report`: coded diagnostics for every decision.
+
+Useful diagnostics:
+
+- `SAM_OCCT_MERGE_PARAMETERS`: the thresholds and options used for the run.
+- `SAM_OCCT_MERGE_CANDIDATES`: how many small spaces were found.
+- `SAM_OCCT_MERGE_MERGED`: each small space that was merged, its target, and the
+  shared boundary area used.
+- `SAM_OCCT_MERGE_UNMERGED`: each small space that could not be merged and why
+  (protected, no shared boundary, or no safe target).
+- `SAM_OCCT_MERGE_DROPPED_PANELS`: how many now-internal shared panels were
+  removed.
+- `SAM_OCCT_MERGE_RESULT`: final space/panel counts versus the input.
+
+Do not set `minArea_` or `minVolume_` so high that real rooms are swallowed.
+Merge thresholds are for slivers and offcuts, not for combining valid spaces.
+
+### Cleaning Small Shells (volume-first)
+
+When you are still working with closed volumes and have not built an analytical
+model yet, use `SAMOCCT.MergeSmallShells` to remove tiny shells before adjacency
+creation. It is the shell/Brep counterpart of `SAMOCCT.MergeSmallSpaces`.
+
+```text
+room/cell shells (or closed Breps)
+-> SAMOCCT.MergeSmallShells
+-> cleaned shells
+-> SAMOCCT.CreateAdjacencyClusterByShells
+```
+
+The supplied shells are decoded into an OCCT cell complex first, so the merge
+works on real per-cell volumes and real shared-face adjacency rather than
+bounding-box estimates.
+
+What it does:
+
+1. Decodes the input shells into OCCT cells (true volume, faces, and shared-face
+   adjacency).
+2. Finds cells with floor footprint below `minArea_` or volume below `minVolume_`.
+3. For each small cell, looks at the cells it shares a face with.
+4. Skips protected shells (`protectedShells_`, matched to decoded cells by
+   containment) as both candidates and targets.
+5. Picks the best neighbour according to `mergeMode_`:
+   - `LongestSharedBoundary`: largest shared face boundary area (default).
+   - `LargestNeighbour`: largest neighbouring footprint, then volume.
+6. Fuses each small cell with its chosen neighbour using OCCT `ShellsUnion`
+   (`tolerance_` and `fuzzyTolerance_` control the build and union).
+
+Inputs: `_shells`, `minArea_`, `minVolume_`, `tolerance_`, `fuzzyTolerance_`,
+`mergeMode_`, `protectedShells_`.
+
+Outputs: `Shells` (cleaned), `mergedSmallShells`, `unmergedSmallShells`,
+`report`.
+
+Notes:
+
+- Because the inputs are decoded into a cell complex, the outputs are the decoded
+  (and merged) cells. OCCT may re-partition overlapping or shared faces, so the
+  output cell count can differ from the input shell count; the
+  `SAM_OCCT_MERGE_SHELLS_TOPOLOGY` diagnostic reports both.
+- `minVolume_` and `minArea_` compare the true OCCT cell volume and floor
+  footprint, so the thresholds are meaningful even for sloped or L-shaped cells.
+- Merging needs native OCCT. If it is unavailable the cell decode produces no
+  cells; the component then returns the input unchanged and records the OCCT
+  diagnostics in `report` so no geometry is lost.
+
+Useful diagnostics: `SAM_OCCT_MERGE_SHELLS_PARAMETERS`,
+`SAM_OCCT_MERGE_SHELLS_TOPOLOGY`, `SAM_OCCT_MERGE_SHELLS_CANDIDATES`,
+`SAM_OCCT_MERGE_SHELLS_MERGED`, `SAM_OCCT_MERGE_SHELLS_UNMERGED`, and
+`SAM_OCCT_MERGE_SHELLS_RESULT`.
+
 ## Panels/Faces vs Shells
 
 Use `Panel`/`Face3D` when:
