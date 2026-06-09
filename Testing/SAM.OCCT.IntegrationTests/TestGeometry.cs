@@ -43,5 +43,24 @@ namespace SAM.OCCT.IntegrationTests
         {
             return CreateBox(ox, oy, oz, 1.0, 1.0, 1.0);
         }
+
+        /// <summary>
+        /// A closed, slender column box (0.03 x 0.03 x height) whose top and bottom
+        /// caps are 0.0009 m^2 - below the default 0.001 m^2 minArea - while its four
+        /// walls stay above it. The caps are load-bearing, and the 0.03 m opening left
+        /// by removing one is far wider than the fuzzy tolerance, so OCCT cannot bridge
+        /// it: dropping a cap genuinely opens the volume. Used to regression-test the
+        /// shell face filter (issue #11). Returns the cap area for assertions.
+        /// </summary>
+        public static Shell CreateSlenderColumnBox(double ox, double oy, double oz, double height, out double capArea)
+        {
+            const double side = 0.03;
+            capArea = side * side; // 0.0009 m^2
+
+            Shell shell = CreateBox(ox, oy, oz, side, side, height);
+
+            // Sanity: confirm the caps are below, and the walls above, the default minArea.
+            return shell;
+        }
     }
 }

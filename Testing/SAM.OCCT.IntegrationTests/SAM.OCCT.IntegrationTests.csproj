@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\SAM_OCCT\SAM.Core.OCCT\SAM.Core.OCCT.csproj" />
     <ProjectReference Include="..\..\SAM_OCCT\SAM.Geometry.OCCT\SAM.Geometry.OCCT.csproj" />
+    <ProjectReference Include="..\..\SAM_OCCT\SAM.Analytical.OCCT\SAM.Analytical.OCCT.csproj" />
   </ItemGroup>
 
   <!-- Sibling SAM types used directly by tests; see note in the unit-test project.

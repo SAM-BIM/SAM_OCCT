@@ -77,10 +77,14 @@ across all surfaces and a matching downstream `fuzzyTolerance_`; see the
 
 Both adjacency components expose `tolerance_` and `fuzzyTolerance_` as the main
 OCCT controls. `SAMOCCT.CreateAdjacencyClusterByShells` also retains advanced
-SAM rebuild inputs such as `maxDistance_`, `maxAngle_`, and `minArea_` for
-compatibility with older Grasshopper definitions and fallback rebuilds.
-The shell-native direct topology path normally uses `maxAngle_` and `minArea_`,
-but not `maxDistance_`.
+SAM rebuild inputs such as `maxDistance_` and `maxAngle_` for compatibility with
+older Grasshopper definitions and fallback rebuilds. The shell-native direct
+topology path normally uses `maxAngle_` but not `maxDistance_`. `minArea_` is a
+**post-build panel filter** (issue #11): every shell face is kept for the OCCT
+volume build so the cell never opens, then faces below `minArea_` are simply not
+turned into SAM panels (e.g. tiny triangulation slivers). It cannot reopen a
+shell, so it is safe to raise - e.g. `0.01` drops sub-0.01 m² sliver panels while
+all spaces still build.
 
 The current analytical workflow uses OCCT to create closed cells, decodes
 cell-face ownership into SAM geometry, and builds the analytical
