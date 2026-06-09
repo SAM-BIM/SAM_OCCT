@@ -77,10 +77,12 @@ across all surfaces and a matching downstream `fuzzyTolerance_`; see the
 
 Both adjacency components expose `tolerance_` and `fuzzyTolerance_` as the main
 OCCT controls. `SAMOCCT.CreateAdjacencyClusterByShells` also retains advanced
-SAM rebuild inputs such as `maxDistance_`, `maxAngle_`, and `minArea_` for
-compatibility with older Grasshopper definitions and fallback rebuilds.
-The shell-native direct topology path normally uses `maxAngle_` and `minArea_`,
-but not `maxDistance_`.
+SAM rebuild inputs such as `maxDistance_` and `maxAngle_` for compatibility with
+older Grasshopper definitions and fallback rebuilds. The shell-native direct
+topology path normally uses `maxAngle_` but not `maxDistance_`. The `minArea_`
+input was removed in 0.3.2: these shells are already closed volumes, so dropping
+small faces opened them - use `SAMOCCT.ShellsRepair` to defeature slivers while
+keeping the shell closed.
 
 The current analytical workflow uses OCCT to create closed cells, decodes
 cell-face ownership into SAM geometry, and builds the analytical
@@ -146,7 +148,7 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | Component | What it does | Key inputs | Main output |
 | --- | --- | --- | --- |
 | `SAMOCCT.CreateAdjacencyCluster` | Builds a SAM `AdjacencyCluster` from analytical `Panels` via OCCT cell building. | `_panels`, `spaces_`, `tolerance_`, `fuzzyTolerance_` | `AdjacencyCluster` |
-| `SAMOCCT.CreateAdjacencyClusterByShells` | Builds an `AdjacencyCluster` from closed shell space volumes, reusing space metadata. | `_shells`, `spaces_`, `names_`, `elevationGround_`, `fuzzyTolerance_`, `maxDistance_`, `maxAngle_`, `minArea_`, `tolerance_` | `AdjacencyCluster` |
+| `SAMOCCT.CreateAdjacencyClusterByShells` | Builds an `AdjacencyCluster` from closed shell space volumes, reusing space metadata. | `_shells`, `spaces_`, `names_`, `elevationGround_`, `fuzzyTolerance_`, `maxDistance_`, `maxAngle_`, `tolerance_` | `AdjacencyCluster` |
 | `SAMOCCT.MergeSmallSpaces` | Merges tiny spaces of an `AdjacencyCluster` into the best adjacent larger space. | `_adjacencyCluster`, `minArea_`, `minVolume_`, `mergeMode_`, `allowMergeExternal_`, `protectedSpaces_`, `tolerance_` | `adjacencyCluster` (+ `mergedSpaces`, `unmergedSmallSpaces`, `report`) |
 | `SAMOCCT.PanelsFromShells` | Creates analytical SAM `Panels` from the faces of closed shells. | `_shells`, `silverSpacing_`, `tolerance_` | `Panels` |
 
