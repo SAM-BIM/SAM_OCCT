@@ -201,7 +201,7 @@ namespace SAM.Analytical.OCCT
             // reproduced so the dropped levels can be identified. See issue #11.
             if (shells_Temp.Count != occtShells.Count)
             {
-                LogUncoveredInputShells(shells_Temp, occtShells, options, cellComplexResult);
+                LogShellRebuildAttribution(shells_Temp, occtShells, options, cellComplexResult);
             }
 
             stopwatch.Restart();
@@ -220,21 +220,30 @@ namespace SAM.Analytical.OCCT
         }
 
         /// <summary>
-        /// Logs each input shell whose interior is not contained by any rebuilt
-        /// OCCT cell, i.e. shells that the combined MakerVolume rebuild failed to
-        /// reproduce. Each is reported with its Z range, centroid and face count so
-        /// the dropped levels can be located. Runs only when there is a cell/shell
-        /// count delta, so the point-in-solid tests are not paid for the common
-        /// case where everything closed.
+        /// Logs why a combined MakerVolume rebuild produced a different number of
+        /// cells than the input shells, by mapping each input shell's interior to
+        /// the rebuilt cell that contains it:
+        /// <list type="bullet">
+        /// <item>shells whose interior is contained by no cell were dropped
+        /// (<c>SAM_OCCT_ANALYTICAL_SHELL_NOT_REBUILT</c>); and</item>
+        /// <item>two or more shells sharing one cell were merged into a single
+        /// space (<c>SAM_OCCT_ANALYTICAL_SHELLS_MERGED</c>).</item>
+        /// </list>
+        /// Runs only when there is a cell/shell count delta, so the point-in-solid
+        /// tests are not paid for the common case where everything closed.
         /// </summary>
-        private static void LogUncoveredInputShells(List<Shell> inputShells, List<Shell> occtShells, OcctBuildOptions options, OcctCellComplexResult cellComplexResult)
+        private static void LogShellRebuildAttribution(List<Shell> inputShells, List<Shell> occtShells, OcctBuildOptions options, OcctCellComplexResult cellComplexResult)
         {
             if (inputShells == null || occtShells == null || cellComplexResult == null)
             {
                 return;
             }
 
+            // Map each input shell to the index of the rebuilt cell containing its
+            // interior point (-1 when no cell contains it).
+            Dictionary<int, List<int>> inputsByCell = new Dictionary<int, List<int>>();
             int uncovered = 0;
+
             for (int i = 0; i < inputShells.Count; i++)
             {
                 Shell inputShell = inputShells[i];
@@ -245,47 +254,86 @@ namespace SAM.Analytical.OCCT
 
                 Point3D internalPoint = inputShell.InternalPoint3D(options.FuzzyTolerance, options.Tolerance);
 
-                bool covered = false;
+                int cellIndex = -1;
                 if (internalPoint != null)
                 {
-                    foreach (Shell occtShell in occtShells)
+                    for (int j = 0; j < occtShells.Count; j++)
                     {
+                        Shell occtShell = occtShells[j];
                         if (occtShell != null && (occtShell.Inside(internalPoint, options.FuzzyTolerance, options.Tolerance) || occtShell.On(internalPoint, options.Tolerance)))
                         {
-                            covered = true;
+                            cellIndex = j;
                             break;
                         }
                     }
                 }
 
-                if (covered)
+                if (cellIndex < 0)
+                {
+                    uncovered++;
+
+                    BoundingBox3D boundingBox3D = inputShell.GetBoundingBox();
+                    Point3D centroid = boundingBox3D?.GetCentroid();
+                    cellComplexResult.AddDiagnostic(
+                        OcctDiagnosticSeverity.Warning,
+                        "SAM_OCCT_ANALYTICAL_SHELL_NOT_REBUILT",
+                        string.Format(
+                            "Input shell [{0}] was not reproduced as an OCCT cell (no rebuilt cell contains its interior{1}). Z range {2:0.###}..{3:0.###} m, centroid ({4:0.###}, {5:0.###}, {6:0.###}), {7} face(s). The combined MakerVolume rebuild could not close this volume - often a mismatched shared face with an adjacent shell.",
+                            i,
+                            internalPoint == null ? "; no interior point could be sampled" : string.Empty,
+                            boundingBox3D == null ? double.NaN : boundingBox3D.Min.Z,
+                            boundingBox3D == null ? double.NaN : boundingBox3D.Max.Z,
+                            centroid == null ? double.NaN : centroid.X,
+                            centroid == null ? double.NaN : centroid.Y,
+                            centroid == null ? double.NaN : centroid.Z,
+                            inputShell.Face3Ds?.Count ?? 0),
+                        i);
+                    continue;
+                }
+
+                if (!inputsByCell.TryGetValue(cellIndex, out List<int> members))
+                {
+                    members = new List<int>();
+                    inputsByCell[cellIndex] = members;
+                }
+
+                members.Add(i);
+            }
+
+            // Cells that contain the interior of more than one input shell: those
+            // input shells were merged and only one space results for them.
+            int mergedShells = 0;
+            foreach (KeyValuePair<int, List<int>> keyValuePair in inputsByCell)
+            {
+                List<int> members = keyValuePair.Value;
+                if (members.Count < 2)
                 {
                     continue;
                 }
 
-                uncovered++;
+                mergedShells += members.Count;
 
-                BoundingBox3D boundingBox3D = inputShell.GetBoundingBox();
-                Point3D centroid = boundingBox3D?.GetCentroid();
+                string memberText = string.Join(", ", members.Select(index =>
+                {
+                    Point3D memberCentroid = inputShells[index]?.GetBoundingBox()?.GetCentroid();
+                    return string.Format("{0} (Z~{1:0.###})", index, memberCentroid == null ? double.NaN : memberCentroid.Z);
+                }));
+
+                BoundingBox3D cellBoundingBox3D = occtShells[keyValuePair.Key]?.GetBoundingBox();
                 cellComplexResult.AddDiagnostic(
                     OcctDiagnosticSeverity.Warning,
-                    "SAM_OCCT_ANALYTICAL_SHELL_NOT_REBUILT",
+                    "SAM_OCCT_ANALYTICAL_SHELLS_MERGED",
                     string.Format(
-                        "Input shell [{0}] was not reproduced as an OCCT cell (no rebuilt cell contains its interior{1}). Z range {2:0.###}..{3:0.###} m, centroid ({4:0.###}, {5:0.###}, {6:0.###}), {7} face(s). The combined MakerVolume rebuild could not close this volume - often a mismatched shared face with an adjacent shell.",
-                        i,
-                        internalPoint == null ? "; no interior point could be sampled" : string.Empty,
-                        boundingBox3D == null ? double.NaN : boundingBox3D.Min.Z,
-                        boundingBox3D == null ? double.NaN : boundingBox3D.Max.Z,
-                        centroid == null ? double.NaN : centroid.X,
-                        centroid == null ? double.NaN : centroid.Y,
-                        centroid == null ? double.NaN : centroid.Z,
-                        inputShell.Face3Ds?.Count ?? 0),
-                    i);
+                        "Input shells [{0}] were merged into a single rebuilt cell #{1} (Z range {2:0.###}..{3:0.###} m); only one space is produced for them. This often follows defeaturing dissolving the shared interface between adjacent shells.",
+                        memberText,
+                        keyValuePair.Key,
+                        cellBoundingBox3D == null ? double.NaN : cellBoundingBox3D.Min.Z,
+                        cellBoundingBox3D == null ? double.NaN : cellBoundingBox3D.Max.Z));
             }
 
-            if (uncovered > 0)
+            if (uncovered > 0 || mergedShells > 0)
             {
-                cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_SHELL_NOT_REBUILT_SUMMARY", string.Format("{0} of {1} input shell(s) were not reproduced as OCCT cells.", uncovered, inputShells.Count));
+                cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_SHELL_NOT_REBUILT_SUMMARY", string.Format("{0} input shell(s) dropped and {1} input shell(s) merged into shared cells, out of {2} input shell(s).", uncovered, mergedShells, inputShells.Count));
             }
         }
 
