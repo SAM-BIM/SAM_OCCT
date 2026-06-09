@@ -5,6 +5,8 @@ using Grasshopper.Kernel;
 using Grasshopper.Kernel.Types;
 using SAM.Core;
 using SAM.Core.Grasshopper;
+using SAM.Core.OCCT;
+using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
 using System;
 using System.Collections.Generic;
@@ -124,6 +126,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
             List<Face3D> face3Ds = new List<Face3D>();
             List<Shell> shells_Split = new List<Shell>();
+            List<string> occtDiagnostics = new List<string>();
             foreach (Shell shell in shells)
             {
                 BoundingBox3D boundingBox3D = shell?.GetBoundingBox();
@@ -134,43 +137,60 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
                 List<Plane> planes_Temp = planes.Count != 0 ? planes : new List<Plane> { new Plane(boundingBox3D.GetCentroid(), Vector3D.WorldZ) };
 
-                // Split iteratively, one plane at a time, re-splitting the pieces produced so far.
-                // Splitting by every section face at once can drop interior slabs that are bounded
-                // by two planes (e.g. the level between 6 m and 9 m); cutting plane by plane forms
-                // each slab as the upper piece of one cut and the lower piece of the next.
-                List<Shell> pieces = new List<Shell> { new Shell(shell) };
+                // Cross-section the shell at each plane.
+                List<Face3D> sectionFace3Ds = new List<Face3D>();
                 foreach (Plane plane_Temp in planes_Temp)
                 {
-                    List<Shell> nextPieces = new List<Shell>();
-                    foreach (Shell piece in pieces)
+                    List<Face3D> face3Ds_Temp = shell.Section(plane_Temp, true, Tolerance.Angle, tolerance, Tolerance.MacroDistance);
+                    if (face3Ds_Temp != null)
                     {
-                        List<Face3D> face3Ds_Temp = piece.Section(plane_Temp, true, Tolerance.Angle, tolerance, Tolerance.MacroDistance);
-                        if (face3Ds_Temp != null && face3Ds_Temp.Count != 0)
-                        {
-                            face3Ds.AddRange(face3Ds_Temp.Where(x => x != null));
-
-                            List<Shell> shells_Split_Temp = piece.Split(face3Ds_Temp, Tolerance.MacroDistance, Tolerance.Angle, tolerance);
-                            if (shells_Split_Temp != null && shells_Split_Temp.Count != 0)
-                            {
-                                nextPieces.AddRange(shells_Split_Temp);
-                                continue;
-                            }
-                        }
-
-                        // This plane does not cross this piece (or the split produced nothing); keep it.
-                        nextPieces.Add(piece);
+                        sectionFace3Ds.AddRange(face3Ds_Temp.Where(x => x != null));
                     }
-
-                    pieces = nextPieces;
                 }
 
-                shells_Split.AddRange(pieces);
+                face3Ds.AddRange(sectionFace3Ds);
+
+                if (sectionFace3Ds.Count == 0)
+                {
+                    shells_Split.Add(new Shell(shell));
+                    continue;
+                }
+
+                // Build the level cells with the OCCT engine: the shell's boundary faces plus the
+                // horizontal section faces are fed to BOPAlgo_MakerVolume, which reliably partitions
+                // the volume into every closed level cell in one pass - including interior slabs
+                // bounded by two planes that managed Section/Split can drop.
+                List<Face3D> allFace3Ds = new List<Face3D>();
+                List<Face3D> shellFace3Ds = shell.Face3Ds;
+                if (shellFace3Ds != null)
+                {
+                    allFace3Ds.AddRange(shellFace3Ds.Where(x => x != null));
+                }
+
+                allFace3Ds.AddRange(sectionFace3Ds);
+
+                List<Shell> levels = Geometry.OCCT.Create.Shells(allFace3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance });
+                if (result?.Diagnostics != null)
+                {
+                    occtDiagnostics.AddRange(result.Diagnostics.Select(x => x.ToString()));
+                }
+
+                if (levels != null && levels.Count != 0)
+                {
+                    shells_Split.AddRange(levels);
+                }
+                else
+                {
+                    // OCCT could not build cells (e.g. native unavailable); keep the original shell.
+                    shells_Split.Add(new Shell(shell));
+                }
             }
 
             List<string> diagnostics = new List<string>
             {
-                string.Format("SAM_OCCT_SECTION_SUCCESS: Created {0} section Face3D(s) and {1} split shell(s).", face3Ds.Count, shells_Split.Count)
+                string.Format("SAM_OCCT_SECTION_SUCCESS: Created {0} section Face3D(s) and {1} level shell(s).", face3Ds.Count, shells_Split.Count)
             };
+            diagnostics.AddRange(occtDiagnostics);
 
             index = Params.IndexOfOutputParam("Face3Ds");
             if (index != -1)
