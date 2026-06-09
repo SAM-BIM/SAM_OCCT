@@ -49,7 +49,11 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 minArea.SetPersistentData(0.01);
                 result.Add(new GH_SAMParam(minArea, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "Tolerance", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Boolean nonPlanarOnly = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "nonPlanarOnly_", NickName = "nonPlanarOnly_", Description = "When true, only non-planar (warped) surfaces are triangulated; planar surfaces pass through unchanged as a single Face3D. This keeps the face count down by not splitting flat surfaces into triangles. A surface counts as planar when every boundary point lies within tolerance_ of its best-fit plane.", Access = GH_ParamAccess.item };
+                nonPlanarOnly.SetPersistentData(false);
+                result.Add(new GH_SAMParam(nonPlanarOnly, ParamVisibility.Binding));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "Tolerance, also used as the planarity threshold for nonPlanarOnly_.", Access = GH_ParamAccess.item };
                 tolerance.SetPersistentData(Tolerance.Distance);
                 result.Add(new GH_SAMParam(tolerance, ParamVisibility.Voluntary));
 
@@ -126,14 +130,21 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 dataAccess.GetData(index, ref tolerance);
             }
 
+            bool nonPlanarOnly = false;
+            index = Params.IndexOfInputParam("nonPlanarOnly_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref nonPlanarOnly);
+            }
+
             // Extract each surface's outer boundary as raw 3D points. We deliberately avoid
             // converting to a SAM Face3D first: Face3D is planar, so a warped/non-planar surface
             // would be flattened (or fail) before OCCT could span and mesh it. Keeping the true
             // corners lets OCCT triangulate the real surface.
-            List<IReadOnlyList<Point3D>> boundaryLoops = new List<IReadOnlyList<Point3D>>();
+            List<IReadOnlyList<Point3D>> allLoops = new List<IReadOnlyList<Point3D>>();
             foreach (GH_ObjectWrapper objectWrapper in objectWrappers)
             {
-                if (AppendBoundaryLoops(objectWrapper?.Value, boundaryLoops) > 0)
+                if (AppendBoundaryLoops(objectWrapper?.Value, allLoops) > 0)
                 {
                     continue;
                 }
@@ -146,22 +157,44 @@ namespace SAM.Geometry.Grasshopper.OCCT
                         List<Point3D> external = ExternalLoopPoints(face3D);
                         if (external != null && external.Count >= 3)
                         {
-                            boundaryLoops.Add(external);
+                            allLoops.Add(external);
                         }
                     }
                 }
             }
 
-            if (boundaryLoops.Count == 0)
+            if (allLoops.Count == 0)
             {
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Could not extract any surface boundary loops from the input");
                 return;
             }
 
-            List<Triangle3D> triangles = Geometry.OCCT.Create.Triangulate(boundaryLoops, out OcctCellComplexResult result, linearDeflection, angularDeflection, false, new OcctBuildOptions { Tolerance = tolerance });
+            // When nonPlanarOnly_ is set, planar boundaries pass straight through as one Face3D
+            // each, so flat surfaces are not split into triangles and the face count stays low.
+            List<IReadOnlyList<Point3D>> loopsToTriangulate = new List<IReadOnlyList<Point3D>>();
+            List<Face3D> planarPanels = new List<Face3D>();
+            foreach (IReadOnlyList<Point3D> loop in allLoops)
+            {
+                if (nonPlanarOnly && TryGetPlanarFace3D(loop, tolerance, out Face3D planarFace))
+                {
+                    planarPanels.Add(planarFace);
+                }
+                else
+                {
+                    loopsToTriangulate.Add(loop);
+                }
+            }
+
+            OcctCellComplexResult result = null;
+            List<Triangle3D> triangles = null;
+            if (loopsToTriangulate.Count != 0)
+            {
+                triangles = Geometry.OCCT.Create.Triangulate(loopsToTriangulate, out result, linearDeflection, angularDeflection, false, new OcctBuildOptions { Tolerance = tolerance });
+            }
 
             int skippedSmall = 0;
             List<Face3D> panels = new List<Face3D>();
+
             if (triangles != null)
             {
                 foreach (Triangle3D triangle in triangles)
@@ -181,8 +214,19 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 }
             }
 
+            foreach (Face3D planarFace in planarPanels)
+            {
+                if (minArea > 0 && planarFace.GetArea() < minArea)
+                {
+                    skippedSmall++;
+                    continue;
+                }
+
+                panels.Add(planarFace);
+            }
+
             List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList() ?? new List<string>();
-            diagnostics.Add(string.Format("SAM_OCCT_TRIANGULATE_SURFACE: Produced {0} planar Face3D(s) from {1} surface boundary loop(s); skipped {2} below minArea.", panels.Count, boundaryLoops.Count, skippedSmall));
+            diagnostics.Add(string.Format("SAM_OCCT_TRIANGULATE_SURFACE: Produced {0} planar Face3D(s) from {1} surface boundary loop(s) ({2} passed through as planar, {3} triangulated); skipped {4} below minArea.", panels.Count, allLoops.Count, planarPanels.Count, loopsToTriangulate.Count, skippedSmall));
 
             index = Params.IndexOfOutputParam("Face3Ds");
             if (index != -1)
@@ -303,6 +347,80 @@ namespace SAM.Geometry.Grasshopper.OCCT
             }
 
             return null;
+        }
+
+        private static bool TryGetPlanarFace3D(IReadOnlyList<Point3D> boundaryLoop, double tolerance, out Face3D face3D)
+        {
+            face3D = null;
+            if (boundaryLoop == null || boundaryLoop.Count < 3 || !IsPlanar(boundaryLoop, tolerance))
+            {
+                return false;
+            }
+
+            try
+            {
+                face3D = new Face3D(new Polygon3D(new List<Point3D>(boundaryLoop)));
+            }
+            catch
+            {
+                return false;
+            }
+
+            return face3D != null;
+        }
+
+        private static bool IsPlanar(IReadOnlyList<Point3D> points, double tolerance)
+        {
+            int count = points.Count;
+            if (count < 3)
+            {
+                return false;
+            }
+
+            // Newell's method gives a robust average normal even for slightly non-convex loops.
+            double normalX = 0;
+            double normalY = 0;
+            double normalZ = 0;
+            double centroidX = 0;
+            double centroidY = 0;
+            double centroidZ = 0;
+            for (int i = 0; i < count; i++)
+            {
+                Point3D current = points[i];
+                Point3D next = points[(i + 1) % count];
+                normalX += (current.Y - next.Y) * (current.Z + next.Z);
+                normalY += (current.Z - next.Z) * (current.X + next.X);
+                normalZ += (current.X - next.X) * (current.Y + next.Y);
+                centroidX += current.X;
+                centroidY += current.Y;
+                centroidZ += current.Z;
+            }
+
+            double normalLength = System.Math.Sqrt((normalX * normalX) + (normalY * normalY) + (normalZ * normalZ));
+            if (normalLength <= 1e-12)
+            {
+                // Degenerate / collinear loop: nothing to triangulate, treat as planar.
+                return true;
+            }
+
+            normalX /= normalLength;
+            normalY /= normalLength;
+            normalZ /= normalLength;
+            centroidX /= count;
+            centroidY /= count;
+            centroidZ /= count;
+
+            double safeTolerance = tolerance > 0 ? tolerance : Tolerance.Distance;
+            foreach (Point3D point in points)
+            {
+                double distance = ((point.X - centroidX) * normalX) + ((point.Y - centroidY) * normalY) + ((point.Z - centroidZ) * normalZ);
+                if (System.Math.Abs(distance) > safeTolerance)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
     }
 }

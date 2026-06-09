@@ -135,7 +135,7 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | `SAMOCCT.ShellsSplit` | Splits overlapping/touching shells into cleaner adjacent pieces. | `_shells`, `silverSpacing_`, `tolerance_` | `Shells` |
 | `SAMOCCT.ShellsSectionByPlane` | Sections shells by a plane, returning the cut faces and the split shells. | `_shells`, `plane_`, `tolerance_` | `Face3Ds`, `Shells` |
 | `SAMOCCT.MergeSmallShells` | Fuses tiny closed shells into their best face-adjacent neighbour via OCCT cell topology. | `_shells`, `minArea_`, `minVolume_`, `mergeMode_`, `protectedShells_`, `fuzzyTolerance_`, `tolerance_` | `Shells` (+ `mergedSmallShells`, `unmergedSmallShells`, `report`) |
-| `SAMOCCT.TriangulateSurface` | Triangulates possibly non-planar surfaces into planar `Face3D` panels via OCCT meshing. | `_surfaces`, `linearDeflection_`, `angularDeflection_`, `minArea_`, `tolerance_` | `Face3Ds` |
+| `SAMOCCT.TriangulateSurface` | Triangulates possibly non-planar surfaces into planar `Face3D` panels via OCCT meshing. `nonPlanarOnly_` passes flat surfaces through as a single face to save face count. | `_surfaces`, `linearDeflection_`, `angularDeflection_`, `minArea_`, `nonPlanarOnly_`, `tolerance_` | `Face3Ds` |
 
 ### Analytical (`SAM.Analytical.Grasshopper.OCCT`)
 

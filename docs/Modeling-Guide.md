@@ -415,6 +415,13 @@ surface bends, large panels where it is flat.
 boundaries. `minArea_` discards triangles below an area so seams do not produce
 slivers.
 
+`nonPlanarOnly_` keeps the face count down: when set, a surface whose boundary
+is already planar (every point within `tolerance_` of its best-fit plane) passes
+straight through as a single `Face3D` instead of being split into triangles.
+Only genuinely warped surfaces are triangulated. Leave it off to triangulate
+every surface uniformly; turn it on for mixed models where most surfaces are
+flat and you only want the warped ones panelled.
+
 ### Settings For Watertight Shells (the hard part)
 
 This is the difficult step. Each surface is triangulated **independently**, so
