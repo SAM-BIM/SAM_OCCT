@@ -135,6 +135,7 @@ namespace SAM.Analytical.OCCT
 
             Stopwatch stopwatch = Stopwatch.StartNew();
             List<Face3D> face3Ds = new List<Face3D>();
+            int smallFacesKept = 0;
             foreach (Shell shell in shells_Temp)
             {
                 List<Face3D> face3Ds_Temp = shell.Face3Ds;
@@ -150,10 +151,21 @@ namespace SAM.Analytical.OCCT
                         continue;
                     }
 
+                    // These shells are already closed volumes, so every face is load-bearing:
+                    // dropping a small-but-valid face punches a hole and OCCT can no longer
+                    // build the cell (issue #11). Only skip genuinely degenerate faces that
+                    // OCCT could not turn into a face anyway. Sliver removal that preserves
+                    // closure is ShellsRepair's job (OCCT defeaturing extends the neighbours),
+                    // never a naive area filter here.
                     double area = face3D.GetArea();
-                    if (!double.IsNaN(area) && area < minArea)
+                    if (double.IsNaN(area) || area <= options.Tolerance)
                     {
                         continue;
+                    }
+
+                    if (area < minArea)
+                    {
+                        smallFacesKept++;
                     }
 
                     face3Ds.Add(face3D);
@@ -161,6 +173,10 @@ namespace SAM.Analytical.OCCT
             }
             cellComplexResult = new OcctCellComplexResult();
             cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_SHELL_FACES", string.Format("Extracted {0} face(s) directly from {1} shell(s).", face3Ds.Count, shells_Temp.Count));
+            if (smallFacesKept > 0)
+            {
+                cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_SHELL_SMALL_FACES_KEPT", string.Format("Kept {0} face(s) below minArea ({1:0.######} m^2): removing faces from an already-closed shell would open it. Use ShellsRepair to defeature slivers while preserving closure.", smallFacesKept, minArea));
+            }
             cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_SHELL_FACE_EXTRACTION", string.Format("Shell face extraction took {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
 
             if (face3Ds.Count == 0)
