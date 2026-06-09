@@ -17,7 +17,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("1b63ad05-61c6-4d7b-b4eb-525c9abceac2");
 
-        public override string LatestComponentVersion => "0.1.0";
+        public override string LatestComponentVersion => "0.2.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -112,13 +112,38 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 }
             }
 
+            // Build one analytical Panel per OCCT shell face. The faces already come from the
+            // OCCT cell build, so we only classify each face (type from its normal) and construct
+            // the Panel object - no managed SAM panelling/geometry operation is used.
+            const double maxAngle = 0.0872664626; // ~5 degrees, matching the OCCT adjacency rebuild.
             List<Panel> panels = new List<Panel>();
             foreach (Shell shell in shells)
             {
-                List<Panel> panels_Temp = global::SAM.Analytical.Create.Panels(shell, silverSpacing, tolerance);
-                if (panels_Temp != null)
+                List<Face3D> face3Ds = shell?.Face3Ds;
+                if (face3Ds == null)
                 {
-                    panels.AddRange(panels_Temp);
+                    continue;
+                }
+
+                foreach (Face3D face3D in face3Ds)
+                {
+                    if (face3D == null)
+                    {
+                        continue;
+                    }
+
+                    PanelType panelType = global::SAM.Analytical.Query.PanelType(face3D.GetPlane()?.Normal, maxAngle);
+                    if (panelType == PanelType.Undefined)
+                    {
+                        panelType = PanelType.Air;
+                    }
+
+                    Construction construction = global::SAM.Analytical.Query.DefaultConstruction(panelType);
+                    Panel panel = global::SAM.Analytical.Create.Panel(construction, panelType, face3D);
+                    if (panel != null)
+                    {
+                        panels.Add(panel);
+                    }
                 }
             }
 
