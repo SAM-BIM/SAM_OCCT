@@ -142,6 +142,26 @@ namespace SAM.Geometry.OCCT.Native
             out IntPtr resultHandle);
 
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_export_step(
+            OcctTopology shapeHandle,
+            [MarshalAs(UnmanagedType.LPStr)] string path);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_export_iges(
+            OcctTopology shapeHandle,
+            [MarshalAs(UnmanagedType.LPStr)] string path);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_import_step(
+            [MarshalAs(UnmanagedType.LPStr)] string path,
+            out OcctTopology shapeHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_import_iges(
+            [MarshalAs(UnmanagedType.LPStr)] string path,
+            out OcctTopology shapeHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sam_occt_build_cell_complex(
             [In] double[] coordinates,
             int pointCount,

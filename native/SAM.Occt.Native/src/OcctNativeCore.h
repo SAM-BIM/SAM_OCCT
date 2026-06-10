@@ -124,4 +124,15 @@ namespace sam_occt
     void append_shape_solids_to_result(const TopoDS_Shape& shape, Result& result, double tolerance);
 
     TopoDS_Shape remove_small_faces(const TopoDS_Shape& solid, double min_area, int run_parallel);
+
+    // True when the named delay-loaded Data Exchange DLL (issue #20) can be
+    // resolved - looking next to SAM.Occt.Native.dll first, because the host
+    // process (e.g. Rhino) does not have that directory on its DLL search
+    // path. On success the module is left loaded so the delay-load helper
+    // binds to it by name. Lets the STEP/IGES entry points fail with a clean
+    // status 64 instead of faulting on the delay-load thunk when the Data
+    // Exchange runtime is not deployed. Implemented in DataExchangeRuntime.cpp
+    // (the only translation unit that includes windows.h); always true off
+    // Windows (no delay-loading there).
+    bool data_exchange_runtime_available(const char* dll_name);
 }

@@ -55,6 +55,16 @@ if ([string]::IsNullOrWhiteSpace($OpenCascadeRuntimeBin) -and (Test-Path -Litera
     $OpenCascadeRuntimeBin = Join-Path $defaultOpenCascadeSdkRoot "win64\vc14\bin"
 }
 
+# The runtime bin is normally the sibling of the lib folder we link against.
+# Deriving it keeps the runtime copy working when the SDK is not at the default
+# root (linking would succeed but the DLL copy used to skip silently).
+if ([string]::IsNullOrWhiteSpace($OpenCascadeRuntimeBin) -and -not [string]::IsNullOrWhiteSpace($OpenCascadeLibraryDir)) {
+    $siblingBin = Join-Path (Split-Path -Parent $OpenCascadeLibraryDir) "bin"
+    if (Test-Path -LiteralPath $siblingBin) {
+        $OpenCascadeRuntimeBin = $siblingBin
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($ThirdPartyRuntimeRoot) -and (Test-Path -LiteralPath (Join-Path $defaultOpenCascadeRoot "3rdparty-vc14-64"))) {
     $ThirdPartyRuntimeRoot = Join-Path $defaultOpenCascadeRoot "3rdparty-vc14-64"
 }
@@ -131,6 +141,23 @@ if (Test-Path -LiteralPath $vcpkgBin) {
 if (-not [string]::IsNullOrWhiteSpace($OpenCascadeRuntimeBin)) {
     Test-FileExists $OpenCascadeRuntimeBin "OpenCascadeRuntimeBin"
     Get-ChildItem -LiteralPath $OpenCascadeRuntimeBin -Filter "*.dll" | Copy-Item -Destination $nativeOutput -Force
+} else {
+    Write-Warning "OpenCascadeRuntimeBin was not detected and was not passed - the OCCT runtime DLLs were NOT copied to $nativeOutput. Pass -OpenCascadeRuntimeBin <folder containing TKernel.dll>."
+}
+
+# STEP/IGES (issue #20): SAM.Occt.Native delay-loads the Data Exchange
+# toolkits, so a missing DLL no longer breaks loading - but import/export then
+# reports status 64 at runtime. Verify they were deployed and say so clearly.
+$dataExchangeDlls = @("TKDESTEP.dll", "TKDEIGES.dll", "TKXSBase.dll")
+$missingDataExchange = @($dataExchangeDlls | Where-Object { -not (Test-Path -LiteralPath (Join-Path $nativeOutput $_)) })
+if ($missingDataExchange.Count -gt 0) {
+    Write-Warning ("STEP/IGES Data Exchange DLLs missing from {0}: {1}" -f $nativeOutput, ($missingDataExchange -join ", "))
+    if (-not [string]::IsNullOrWhiteSpace($OpenCascadeRuntimeBin)) {
+        Write-Warning ("They were also not found in OpenCascadeRuntimeBin '{0}' - that OCCT runtime does not include the Data Exchange toolkits. Point -OpenCascadeRuntimeBin at a full OCCT bin folder (the one containing TKDESTEP.dll) or copy TKDESTEP.dll/TKDEIGES.dll/TKXSBase.dll and the XCAF/CAF DLLs into {1} manually." -f $OpenCascadeRuntimeBin, $nativeOutput)
+    }
+    Write-Warning "Everything except STEP/IGES import/export keeps working; those nodes will report native status 64 until the DLLs above are deployed."
+} else {
+    Write-Host "STEP/IGES Data Exchange runtime verified in $nativeOutput (TKDESTEP/TKDEIGES/TKXSBase)."
 }
 
 if (-not [string]::IsNullOrWhiteSpace($ThirdPartyRuntimeRoot)) {
@@ -141,10 +168,15 @@ if (-not [string]::IsNullOrWhiteSpace($ThirdPartyRuntimeRoot)) {
         $thirdPartyRoot = $nestedThirdPartyRoot
     }
 
+    # Copy every third-party runtime DLL that ships with a bin\ folder, not just
+    # tbb/jemalloc. The Data Exchange + XCAF stack (issue #20) transitively pulls
+    # the OCCT visualization toolkits (TKV3d -> TKService), which need
+    # freetype.dll / FreeImage.dll - DLLs the core modeling stack never required,
+    # so a "msvc/tbb/jemalloc only" copy left TKDESTEP.dll unloadable (status 64).
     $thirdPartyRuntimePatterns = @(
         "msvc-*\*.dll",
-        "tbb-*\bin\*.dll",
-        "jemalloc-*\bin\*.dll"
+        "*\bin\*.dll",
+        "*\bin\vc14\*.dll"
     )
 
     foreach ($pattern in $thirdPartyRuntimePatterns) {
@@ -155,7 +187,23 @@ if (-not [string]::IsNullOrWhiteSpace($ThirdPartyRuntimeRoot)) {
 
 $samDir = Join-Path $env:APPDATA "SAM"
 New-Item -ItemType Directory -Force -Path $samDir | Out-Null
-Get-ChildItem -LiteralPath $nativeOutput -Filter "*.dll" | Copy-Item -Destination $samDir -Force
+
+# Rhino/Grasshopper locks the DLLs it has loaded from %APPDATA%\SAM, which
+# makes this deployment copy fail half-way and leaves a stale runtime that
+# Rhino keeps loading. Copy file-by-file so one locked DLL does not abort the
+# rest, and fail with an actionable message listing what could not be updated.
+$lockedDlls = @()
+foreach ($dll in Get-ChildItem -LiteralPath $nativeOutput -Filter "*.dll") {
+    try {
+        Copy-Item -LiteralPath $dll.FullName -Destination $samDir -Force
+    } catch {
+        $lockedDlls += $dll.Name
+    }
+}
+
+if ($lockedDlls.Count -gt 0) {
+    throw ("Could not update {0} DLL(s) in {1} (most likely locked by a running Rhino/Grasshopper): {2}. Close Rhino and rebuild (or re-run build-native.ps1) so the deployed runtime matches the build output." -f $lockedDlls.Count, $samDir, ($lockedDlls -join ", "))
+}
 
 Write-Host "Native OCCT build copied to $nativeOutput"
 Write-Host "Native OCCT runtime copied to $samDir"

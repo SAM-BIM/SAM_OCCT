@@ -146,6 +146,39 @@ SAM_OCCT_API int sam_occt_shape_decode(
     double tolerance,
     void** result_handle);
 
+/* ---- STEP / IGES file import & export (issue #20) ----
+   File round-trip through OCCT's Data Exchange module, operating on the
+   persistent sam_occt_shape handle. Paths are UTF-8 const char*.
+
+   Export serialises the shape (its solids/shells) to an open-format file. STEP
+   preserves the BRep solids; IGES is written in BRep mode so closed solids
+   round-trip rather than degrading to bare surfaces. Input handles stay valid
+   and caller-owned.
+
+   Import reads the file, transfers the roots and wraps the resulting
+   TopoDS_Shape into a NEW caller-owned handle (release with
+   sam_occt_shape_release). The imported shape is whatever the file describes
+   (a compound of solids for a BRep STEP/IGES); decode it with
+   sam_occt_shape_decode like any other handle.
+
+   The Data Exchange toolkits (TKDESTEP.dll / TKDEIGES.dll) are delay-loaded, so
+   this library keeps loading and every other operation keeps working even when
+   those DLLs are not deployed; the STEP/IGES calls below probe for them first
+   and return status 64 instead of faulting when they are absent.
+
+   Status: 0 ok, 50 invalid shape handle, 60 null/empty path,
+   61 file open/read failed (missing or unreadable), 62 write/transfer failed
+   (IFSelect status not RetDone), 63 read/transfer produced no shape (empty or
+   unsupported file), 64 Data Exchange runtime (TKDESTEP/TKDEIGES) not available,
+   99 exception. */
+SAM_OCCT_API int sam_occt_shape_export_step(void* shape_handle, const char* path);
+
+SAM_OCCT_API int sam_occt_shape_export_iges(void* shape_handle, const char* path);
+
+SAM_OCCT_API int sam_occt_shape_import_step(const char* path, void** shape_handle);
+
+SAM_OCCT_API int sam_occt_shape_import_iges(const char* path, void** shape_handle);
+
 SAM_OCCT_API int sam_occt_build_cell_complex(
     const double* coordinates,
     int point_count,

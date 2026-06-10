@@ -553,6 +553,39 @@ shell-to-panel conversion or cell-complex creation produced many small coplanar
 panels per wall - without changing the spaces, panel types, constructions, or
 glazing.
 
+## STEP / IGES Import And Export
+
+Closed SAM `Shell` volumes round-trip to the open STEP and IGES interchange
+formats through OCCT's Data Exchange module. Four Grasshopper nodes cover both
+directions:
+
+- `SAMOCCT.ExportSTEP` / `SAMOCCT.ExportIGES` - take `_shells` and a `_path` and
+  write the volumes to a file. Outputs `Successful` and `Diagnostics`.
+- `SAMOCCT.ImportSTEP` / `SAMOCCT.ImportIGES` - take a `_path` and return
+  `Shells`, with `Diagnostics` and `Successful`.
+
+Managed callers use `SAM.Geometry.OCCT.Export.ToFile(...)` and
+`SAM.Geometry.OCCT.Create.Shells(path, format, ...)` /
+`Create.Topology(path, format, ...)`. Diagnostics are coded `SAM_OCCT_EXPORT_*`
+and `SAM_OCCT_IMPORT_*`.
+
+**STEP is exact, IGES is lossy.** STEP (ISO 10303) preserves the BRep solids, so
+a round-trip returns the same cell count and volumes. IGES is written in BRep
+mode so closed solids still round-trip, but it is a surface-oriented format -
+treat an imported IGES leniently (the closed volume survives within tolerance,
+but exact solid counts are not guaranteed). Prefer STEP whenever the consumer
+supports it.
+
+Both formats are open and royalty-free. STL/OBJ/glTF/BREP and others are planned
+for later phases using the same node pattern.
+
+**Runtime DLLs.** STEP/IGES needs more OCCT DLLs than the core modeling nodes:
+the Data Exchange + XDE/CAF + visualization stack and the third-party
+`freetype.dll` / `FreeImage.dll`. These are delay-loaded, so if they are not
+deployed the other nodes keep working and only STEP/IGES reports
+`status 64`. Running `build-native.ps1` deploys the full set; see
+`THIRD_PARTY.md` for the exact list.
+
 ## Rule Of Thumb
 
 If the goal is an analytical building model, start with `Panel` or `Face3D`.

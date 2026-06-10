@@ -261,6 +261,138 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
+        /// <summary>
+        /// Exports the live topology to a STEP or IGES file (issue #20). The
+        /// handle stays valid and caller-owned. Guard paths (null/disposed
+        /// handle, null/empty path) never touch the native library.
+        /// </summary>
+        public static bool TryExport(OcctTopology topology, string path, OcctExchangeFormat format, OcctCellComplexResult result)
+        {
+            if (topology == null || topology.IsInvalid || topology.IsClosed)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_EXPORT_TOPOLOGY_DISPOSED", "The OCCT topology handle is null, invalid or disposed.");
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_EXPORT_INPUT", "No export file path was supplied.");
+                return false;
+            }
+
+            try
+            {
+                int status = format == OcctExchangeFormat.Iges
+                    ? OcctNativeMethods.sam_occt_shape_export_iges(topology, path)
+                    : OcctNativeMethods.sam_occt_shape_export_step(topology, path);
+
+                result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                if (status != 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_EXPORT_NATIVE_FAILED", string.Format("Native OCCT {0} export returned status {1} ({2}).", format, status, DescribeExchangeStatus(status)));
+                    return false;
+                }
+
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_EXPORT_SUCCESS", string.Format("Exported OCCT topology to {0} file '{1}'.", format, path));
+                return true;
+            }
+            catch (DllNotFoundException exception)
+            {
+                return HandleNativeMissing(exception, result);
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                return HandleEntryPointMissing(exception, result);
+            }
+            catch (ObjectDisposedException)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_EXPORT_TOPOLOGY_DISPOSED", "The OCCT topology handle was disposed while in use.");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Imports a STEP or IGES file into a new caller-owned topology handle
+        /// (issue #20). The managed File.Exists pre-check keeps the missing-file
+        /// path off the native library; everything else maps native status.
+        /// </summary>
+        public static bool TryImport(string path, OcctExchangeFormat format, OcctCellComplexResult result, out OcctTopology topology)
+        {
+            topology = null;
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_IMPORT_INPUT", "No import file path was supplied.");
+                return false;
+            }
+
+            if (!System.IO.File.Exists(path))
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_IMPORT_FILE_MISSING", string.Format("Import file '{0}' was not found.", path));
+                return false;
+            }
+
+            try
+            {
+                int status;
+                OcctTopology topology_Temp;
+                if (format == OcctExchangeFormat.Iges)
+                {
+                    status = OcctNativeMethods.sam_occt_shape_import_iges(path, out topology_Temp);
+                }
+                else
+                {
+                    status = OcctNativeMethods.sam_occt_shape_import_step(path, out topology_Temp);
+                }
+
+                result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                if (status != 0)
+                {
+                    topology_Temp?.Dispose();
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_IMPORT_NATIVE_FAILED", string.Format("Native OCCT {0} import returned status {1} ({2}).", format, status, DescribeExchangeStatus(status)));
+                    return false;
+                }
+
+                if (topology_Temp == null || topology_Temp.IsInvalid)
+                {
+                    topology_Temp?.Dispose();
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_IMPORT_NATIVE_FAILED", "Native OCCT import did not return a handle.");
+                    return false;
+                }
+
+                topology = topology_Temp;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_IMPORT_SUCCESS", string.Format("Imported OCCT topology with {0} solid(s) from {1} file.", topology.SolidCount, format));
+                return true;
+            }
+            catch (DllNotFoundException exception)
+            {
+                return HandleNativeMissing(exception, result);
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                return HandleEntryPointMissing(exception, result);
+            }
+        }
+
+        private static string DescribeExchangeStatus(int status)
+        {
+            switch (status)
+            {
+                case 50: return "the OCCT shape handle was invalid";
+                case 60: return "a null or empty file path was supplied";
+                case 61: return "the file could not be opened or read";
+                case 62: return "the OCCT writer/transfer did not complete";
+                case 63: return "the file contained no transferable shape";
+                case 64: return "the OCCT Data Exchange runtime (TKDESTEP/TKDEIGES) was not found - deploy the Data Exchange DLLs (e.g. run build-native.ps1)";
+                case 99: return "an unexpected native exception was thrown";
+                default: return "unrecognised native status";
+            }
+        }
+
         private static bool HandleCreateStatus(int status, OcctTopology topology_Temp, OcctCellComplexResult result, out OcctTopology topology)
         {
             topology = null;
