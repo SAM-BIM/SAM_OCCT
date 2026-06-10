@@ -226,6 +226,11 @@ namespace SAM.Geometry.OCCT
             horizontalFace3Ds = new List<Face3D>();
             HashSet<int> topologyKeys = new HashSet<int>();
             double minDotProduct = Math.Cos(angleTolerance);
+            // MakerVolume welds vertices up to fuzzyTolerance, so a cell face that came
+            // from an input wall/cap can end up that far off the original plane. Match
+            // against the larger of the two tolerances, otherwise a high fuzzyTolerance
+            // makes welded walls look "newly generated" and pollutes horizontalFace3Ds.
+            double inputPlaneTolerance = Math.Max(distanceTolerance, options.FuzzyTolerance);
             foreach (OcctCell cell in cells)
             {
                 if (cell?.Faces == null)
@@ -249,7 +254,7 @@ namespace SAM.Geometry.OCCT
                         continue;
                     }
 
-                    if (CoplanarWithAny(facePlane, planes_All, minDotProduct, distanceTolerance))
+                    if (CoplanarWithAny(facePlane, planes_All, minDotProduct, inputPlaneTolerance))
                     {
                         continue;
                     }
