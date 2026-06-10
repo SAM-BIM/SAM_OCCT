@@ -344,5 +344,83 @@ namespace SAM.OCCT.IntegrationTests
             Assert.Single(shells);
             Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_POINT_DUPLICATE" && x.Severity == OcctDiagnosticSeverity.Warning);
         }
+
+        /// <summary>A horizontal cap (floor or roof) spanning the unit footprint at the given elevation.</summary>
+        private static Face3D CreateHorizontalCap(double x0, double y0, double x1, double y1, double z)
+        {
+            return TestGeometry.CreatePlanarFace(
+                new Point3D(x0, y0, z),
+                new Point3D(x1, y0, z),
+                new Point3D(x1, y1, z),
+                new Point3D(x0, y1, z));
+        }
+
+        [SkippableFact]
+        public void ShellsFromVerticalFace3Ds_WallsPlusSuppliedRoof_GeneratesOnlyFloor()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - four walls of a 1 x 1 x 2 room plus a supplied roof at z = 2.
+            // Only the missing floor should be generated; the roof is the user's.
+            List<Face3D> face3Ds = CreateRoomWalls(0, 0, 1, 1, 0, 2);
+            face3Ds.Add(CreateHorizontalCap(0, 0, 1, 1, 2));
+
+            // Act
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(face3Ds, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result);
+
+            // Assert
+            Assert.True(result.Success);
+            Assert.NotNull(shells);
+            Assert.Single(shells);
+            Assert.Equal(2.0, result.Cells[0].Volume, 2);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_USER_CAP");
+            // Only the floor (z = 0) is reported as newly created; the supplied roof is not.
+            Assert.NotNull(horizontalFace3Ds);
+            Assert.Single(horizontalFace3Ds);
+            Assert.Equal(0.0, horizontalFace3Ds[0].GetBoundingBox().Min.Z, 2);
+        }
+
+        [SkippableFact]
+        public void ShellsFromVerticalFace3Ds_WallsPlusSuppliedFloor_GeneratesOnlyRoof()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - four walls plus a supplied floor at z = 0; only the roof is missing.
+            List<Face3D> face3Ds = CreateRoomWalls(0, 0, 1, 1, 0, 2);
+            face3Ds.Add(CreateHorizontalCap(0, 0, 1, 1, 0));
+
+            // Act
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(face3Ds, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result);
+
+            // Assert
+            Assert.True(result.Success);
+            Assert.Single(shells);
+            Assert.Equal(2.0, result.Cells[0].Volume, 2);
+            // Only the roof (z = 2) is reported as newly created; the supplied floor is not.
+            Assert.NotNull(horizontalFace3Ds);
+            Assert.Single(horizontalFace3Ds);
+            Assert.Equal(2.0, horizontalFace3Ds[0].GetBoundingBox().Min.Z, 2);
+        }
+
+        [SkippableFact]
+        public void ShellsFromVerticalFace3Ds_SlopedModeSuppliedRoof_SkipsGeneratedRoof()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - four walls plus a supplied roof at the wall top; in Sloped mode
+            // the supplied cap must be used instead of generating a wall-top roof.
+            List<Face3D> face3Ds = CreateRoomWalls(0, 0, 1, 1, 0, 2);
+            face3Ds.Add(CreateHorizontalCap(0, 0, 1, 1, 2));
+
+            // Act
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(face3Ds, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result, roofMode: OcctRoofMode.Sloped);
+
+            // Assert
+            Assert.True(result.Success);
+            Assert.Single(shells);
+            Assert.Equal(2.0, result.Cells[0].Volume, 2);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_ROOF_SUPPLIED");
+            Assert.DoesNotContain(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_ROOF_PLANAR" || x.Code == "SAM_OCCT_VERTICAL_SHELLS_ROOF_TRIANGULATED");
+        }
     }
 }

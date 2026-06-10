@@ -70,10 +70,11 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
-        public void ShellsFromVerticalFace3Ds_HorizontalFaceInput_AddsNonVerticalWarning()
+        public void ShellsFromVerticalFace3Ds_HorizontalFaceInput_TreatedAsUserCap()
         {
-            // Arrange - a horizontal face plus a single elevation override, so the
-            // verticality check runs but the call returns before any native build.
+            // Arrange - a horizontal face is a supplied cap (mixed input), not a wall.
+            // With a single elevation override and no walls the call returns before any
+            // native build, but the cap is recognised.
             List<Face3D> face3Ds = new List<Face3D> { TestGeometry.CreateUnitQuadFace() };
 
             // Act
@@ -82,7 +83,7 @@ namespace SAM.OCCT.UnitTests
             // Assert
             Assert.Null(shells);
             Assert.Null(horizontalFace3Ds);
-            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_NON_VERTICAL_FACE" && x.Severity == OcctDiagnosticSeverity.Warning && x.SourceIndex == 0);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_USER_CAP" && x.Severity == OcctDiagnosticSeverity.Info);
         }
 
         [Fact]
