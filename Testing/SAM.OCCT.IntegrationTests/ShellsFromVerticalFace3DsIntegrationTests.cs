@@ -252,7 +252,7 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         [SkippableFact]
-        public void ShellsFromVerticalFace3Ds_OpenWalls_ReturnsNoShells()
+        public void ShellsFromVerticalFace3Ds_OpenWalls_ReturnsNoShellsAndReportsOpenBoundary()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
 
@@ -267,10 +267,82 @@ namespace SAM.OCCT.IntegrationTests
             // Act
             List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(walls, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result);
 
-            // Assert
+            // Assert - no shells, and the open boundary is reported so the gap is actionable.
             Assert.True(result.NativeAvailable);
             Assert.True(shells == null || shells.Count == 0);
             Assert.True(horizontalFace3Ds == null || horizontalFace3Ds.Count == 0);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_OPEN" && x.Severity == OcctDiagnosticSeverity.Warning);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_OPEN_SHELL_ANALYSIS");
+        }
+
+        [SkippableFact]
+        public void ShellsFromVerticalFace3Ds_PointInOneRoom_KeepsOnlyThatShell()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - two rooms sharing a wall; one selection point inside room A.
+            List<Face3D> walls = new List<Face3D>
+            {
+                CreateWallFace(0, 0, 1, 0, 0, 2),
+                CreateWallFace(1, 0, 2, 0, 0, 2),
+                CreateWallFace(2, 0, 2, 1, 0, 2),
+                CreateWallFace(2, 1, 1, 1, 0, 2),
+                CreateWallFace(1, 1, 0, 1, 0, 2),
+                CreateWallFace(0, 1, 0, 0, 0, 2),
+                CreateWallFace(1, 0, 1, 1, 0, 2)
+            };
+            List<Point3D> points = new List<Point3D> { new Point3D(0.5, 0.5, 1) };
+
+            // Act
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(walls, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result, roofMode: OcctRoofMode.Flat, point3Ds: points);
+
+            // Assert - only room A survives, with its own floor and roof.
+            Assert.True(result.Success);
+            Assert.NotNull(shells);
+            Assert.Single(shells);
+            Assert.Equal(1.0, shells[0].GetBoundingBox().Max.X, 2); // room A is x:0..1, room B (x:1..2) was dropped
+            Assert.True(shells[0].Inside(new Point3D(0.5, 0.5, 1)));
+            Assert.Equal(2, horizontalFace3Ds.Count);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_POINT_SELECTION");
+        }
+
+        [SkippableFact]
+        public void ShellsFromVerticalFace3Ds_PointOutsideAllRooms_ReturnsEmptyWithDiagnostic()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - a single closed room and a point well outside it.
+            List<Face3D> walls = CreateRoomWalls(0, 0, 1, 1, 0, 2);
+            List<Point3D> points = new List<Point3D> { new Point3D(10, 10, 1) };
+
+            // Act
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(walls, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result, point3Ds: points);
+
+            // Assert - build succeeded but nothing matched, so an empty (not null) result.
+            Assert.NotNull(shells);
+            Assert.Empty(shells);
+            Assert.NotNull(horizontalFace3Ds);
+            Assert.Empty(horizontalFace3Ds);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_POINT_NONE" && x.Severity == OcctDiagnosticSeverity.Warning);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_POINT_UNMATCHED");
+        }
+
+        [SkippableFact]
+        public void ShellsFromVerticalFace3Ds_TwoPointsInOneRoom_WarnsDuplicate()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - one room, two selection points both inside it.
+            List<Face3D> walls = CreateRoomWalls(0, 0, 1, 1, 0, 2);
+            List<Point3D> points = new List<Point3D> { new Point3D(0.3, 0.3, 1), new Point3D(0.7, 0.7, 1) };
+
+            // Act
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(walls, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result, point3Ds: points);
+
+            // Assert
+            Assert.NotNull(shells);
+            Assert.Single(shells);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_POINT_DUPLICATE" && x.Severity == OcctDiagnosticSeverity.Warning);
         }
     }
 }

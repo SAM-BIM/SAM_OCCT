@@ -18,7 +18,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("b772f03a-b4ff-42e3-ab7c-4acd08162de2");
 
-        public override string LatestComponentVersion => "0.1.1";
+        public override string LatestComponentVersion => "0.1.2";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -40,6 +40,10 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_String roofMode = new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "roofMode_", NickName = "roofMode_", Description = "How to cap the walls on top: Flat (horizontal floors/roofs at every wall level, the default) or Sloped (horizontal floors, but one roof that follows the wall tops - planar when the tops are coplanar, triangulated for gable/hip/stepped tops).", Access = GH_ParamAccess.item };
                 roofMode.SetPersistentData(OcctRoofMode.Flat.ToString());
                 result.Add(new GH_SAMParam(roofMode, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_GenericObject points = new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "points_", NickName = "points_", Description = "Optional selection points - one per room. When supplied, only shells that contain a point are kept (point-in-solid classified by OCCT), discarding courtyards and other plan-enclosed voids.", Access = GH_ParamAccess.list, Optional = true };
+                points.DataMapping = GH_DataMapping.Flatten;
+                result.Add(new GH_SAMParam(points, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number elevations = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "elevations_", NickName = "elevations_", Description = "Optional floor/roof elevations. When supplied they override the auto-detected levels (in Sloped mode they set the floor levels; the roof still follows the wall tops).", Access = GH_ParamAccess.list, Optional = true };
                 elevations.DataMapping = GH_DataMapping.Flatten;
@@ -143,12 +147,28 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 dataAccess.GetData(index, ref fuzzyTolerance);
             }
 
+            List<GH_ObjectWrapper> pointWrappers = new List<GH_ObjectWrapper>();
+            index = Params.IndexOfInputParam("points_");
+            if (index != -1)
+            {
+                dataAccess.GetDataList(index, pointWrappers);
+            }
+
             List<Face3D> face3Ds = new List<Face3D>();
             foreach (GH_ObjectWrapper objectWrapper in objectWrappers)
             {
                 if (Query.TryGetSAMGeometries(objectWrapper, out List<Face3D> face3Ds_Temp) && face3Ds_Temp != null)
                 {
                     face3Ds.AddRange(face3Ds_Temp);
+                }
+            }
+
+            List<Point3D> point3Ds = new List<Point3D>();
+            foreach (GH_ObjectWrapper pointWrapper in pointWrappers)
+            {
+                if (Query.TryGetSAMGeometries(pointWrapper, out List<Point3D> point3Ds_Temp) && point3Ds_Temp != null)
+                {
+                    point3Ds.AddRange(point3Ds_Temp);
                 }
             }
 
@@ -161,7 +181,8 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance },
                 Tolerance.Angle,
                 Tolerance.MacroDistance,
-                roofMode);
+                roofMode,
+                point3Ds.Count == 0 ? null : point3Ds);
 
             List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList();
 

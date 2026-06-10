@@ -35,6 +35,14 @@ namespace SAM.Geometry.OCCT
         /// <paramref name="horizontalFace3Ds"/> returns the newly created floor/roof
         /// faces (horizontal floors plus the generated roof), deduplicated by OCCT
         /// topology key so an interior floor shared by two cells appears once.
+        /// <para>
+        /// When <paramref name="point3Ds"/> are supplied, only shells that contain a
+        /// point are kept (point-in-solid is classified by the OCCT kernel, with a
+        /// managed ray-cast fallback) - drop one marker per room to discard courtyards
+        /// and other plan-enclosed voids. When the walls do not enclose a volume the
+        /// open boundary is reported (SAM_OCCT_OPEN_SHELL_ANALYSIS) so the gap is
+        /// actionable instead of an empty result.
+        /// </para>
         /// Non-planar input is not supported by the native make_face - triangulate
         /// such faces first (SAMOCCT.TriangulateSurface). Returns null on failure -
         /// inspect result diagnostics (SAM_OCCT_VERTICAL_SHELLS_*).
@@ -48,7 +56,8 @@ namespace SAM.Geometry.OCCT
             OcctBuildOptions options = null,
             double angleTolerance = Tolerance.Angle,
             double distanceTolerance = Tolerance.MacroDistance,
-            OcctRoofMode roofMode = OcctRoofMode.Flat)
+            OcctRoofMode roofMode = OcctRoofMode.Flat,
+            IEnumerable<Point3D> point3Ds = null)
         {
             horizontalFace3Ds = null;
             result = new OcctCellComplexResult();
@@ -139,14 +148,36 @@ namespace SAM.Geometry.OCCT
                 allFace3Ds.AddRange(HorizontalPatches(elevations_Temp, boundingBox3D, margin));
             }
 
-            if (!Native.OcctCellComplexBuilder.TryBuild(allFace3Ds, options, result))
+            bool built = Native.OcctCellComplexBuilder.TryBuild(allFace3Ds, options, result);
+            if (!built || result.Cells == null || result.Cells.Count == 0)
             {
+                // No enclosed volume. When the kernel ran (so this is a real geometry
+                // gap, not a missing native library), report where the boundary is open
+                // - naked edges, the gap bounding box and the longest gap location - so
+                // the user can fix the drawing. TryBuild already runs this on a hard
+                // failure; add it for the "built but zero cells" case too.
+                if (result.NativeAvailable)
+                {
+                    if (!result.Diagnostics.Any(x => x.Code == "SAM_OCCT_OPEN_SHELL_ANALYSIS"))
+                    {
+                        Native.OcctOpenShellAnalysis.Report(face3Ds_Wall, options, result);
+                    }
+
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_VERTICAL_SHELLS_OPEN", "The walls do not enclose a volume, so no shells were created. See SAM_OCCT_OPEN_SHELL_ANALYSIS for the open-boundary location (note: wall tops and bottoms are expected to be open).");
+                }
+
                 return null;
             }
 
-            if (result.Cells == null || result.Cells.Count == 0)
+            // Point selection: keep only the shells that contain a supplied point (one
+            // marker per room), discarding courtyards and other plan-enclosed voids.
+            List<OcctCell> cells = SelectCells(result.Cells, point3Ds, options, distanceTolerance, result);
+            if (cells.Count == 0)
             {
-                return null;
+                // The build succeeded but the points matched nothing; return an empty
+                // (not null) result - the diagnostics explain why.
+                horizontalFace3Ds = new List<Face3D>();
+                return new List<Shell>();
             }
 
             // The generated floor/roof faces are the cell faces that did not come from
@@ -157,7 +188,7 @@ namespace SAM.Geometry.OCCT
             horizontalFace3Ds = new List<Face3D>();
             HashSet<int> topologyKeys = new HashSet<int>();
             double minDotProduct = Math.Cos(angleTolerance);
-            foreach (OcctCell cell in result.Cells)
+            foreach (OcctCell cell in cells)
             {
                 if (cell?.Faces == null)
                 {
@@ -194,8 +225,8 @@ namespace SAM.Geometry.OCCT
                 }
             }
 
-            result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_BUILD_SUCCESS", string.Format("OCCT created {0} shell(s) and {1} floor/roof face(s) from {2} vertical face(s).", result.Cells.Count, horizontalFace3Ds.Count, face3Ds_Wall.Count));
-            return result.Shells?.ToList();
+            result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_BUILD_SUCCESS", string.Format("OCCT created {0} shell(s) and {1} floor/roof face(s) from {2} vertical face(s).", cells.Count, horizontalFace3Ds.Count, face3Ds_Wall.Count));
+            return cells.ConvertAll(x => x.Shell).FindAll(x => x != null);
         }
 
         /// <summary>Padded horizontal rectangular patches (one per elevation) covering the footprint.</summary>
@@ -449,6 +480,118 @@ namespace SAM.Geometry.OCCT
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Keeps the cells whose shell contains at least one of <paramref name="point3Ds"/>
+        /// (one marker per room), discarding courtyards and other plan-enclosed voids.
+        /// Returns every cell unchanged when no points are supplied. Records selection,
+        /// duplicate (more than one point in a shell) and unmatched-point diagnostics.
+        /// </summary>
+        private static List<OcctCell> SelectCells(IReadOnlyList<OcctCell> cells, IEnumerable<Point3D> point3Ds, OcctBuildOptions options, double tolerance, OcctCellComplexResult result)
+        {
+            List<OcctCell> cells_All = new List<OcctCell>();
+            foreach (OcctCell cell in cells)
+            {
+                if (cell != null)
+                {
+                    cells_All.Add(cell);
+                }
+            }
+
+            List<Point3D> point3Ds_Temp = point3Ds?.Where(x => x != null).ToList();
+            if (point3Ds_Temp == null || point3Ds_Temp.Count == 0)
+            {
+                return cells_All;
+            }
+
+            List<OcctCell> cells_Kept = new List<OcctCell>();
+            int[] matchCount = new int[point3Ds_Temp.Count];
+            bool duplicate = false;
+            foreach (OcctCell cell in cells_All)
+            {
+                List<int> insideIndices = PointsInsideShell(cell.Shell, point3Ds_Temp, options, tolerance);
+                if (insideIndices.Count == 0)
+                {
+                    continue;
+                }
+
+                cells_Kept.Add(cell);
+                if (insideIndices.Count > 1)
+                {
+                    duplicate = true;
+                }
+
+                foreach (int index in insideIndices)
+                {
+                    matchCount[index]++;
+                }
+            }
+
+            int unmatched = matchCount.Count(x => x == 0);
+
+            result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_POINT_SELECTION", string.Format("Point selection kept {0} of {1} shell(s) using {2} point(s).", cells_Kept.Count, cells_All.Count, point3Ds_Temp.Count));
+            if (duplicate)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_VERTICAL_SHELLS_POINT_DUPLICATE", "One or more shells contain more than one selection point.");
+            }
+
+            if (unmatched > 0)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_VERTICAL_SHELLS_POINT_UNMATCHED", string.Format("{0} selection point(s) were not inside any shell.", unmatched));
+            }
+
+            if (cells_Kept.Count == 0)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_VERTICAL_SHELLS_POINT_NONE", "No shells contained any of the supplied selection points.");
+            }
+
+            return cells_Kept;
+        }
+
+        /// <summary>
+        /// Indices of the points inside <paramref name="shell"/>. Classification runs on
+        /// the OCCT kernel: the shell's own faces are rebuilt once into a retained native
+        /// topology and each point is tested with the solid classifier. Falls back to the
+        /// managed ray-cast (same test as SAMAnalytical.CreateShells) when the native
+        /// library is unavailable or a point cannot be classified.
+        /// </summary>
+        private static List<int> PointsInsideShell(Shell shell, List<Point3D> point3Ds, OcctBuildOptions options, double tolerance)
+        {
+            List<int> indices = new List<int>();
+            if (shell == null)
+            {
+                return indices;
+            }
+
+            List<Face3D> face3Ds = shell.Face3Ds?.FindAll(x => x != null);
+            OcctCellComplexResult result_Shell = null;
+            OcctTopology topology = null;
+            if (face3Ds != null && face3Ds.Count != 0)
+            {
+                OcctBuildOptions options_Retain = new OcctBuildOptions(options) { RetainTopology = true };
+                Shells(face3Ds, out result_Shell, options_Retain);
+                topology = result_Shell?.Topology;
+            }
+
+            using (result_Shell)
+            {
+                for (int i = 0; i < point3Ds.Count; i++)
+                {
+                    bool? inside = topology != null ? Query.IsPointInside(topology, point3Ds[i], tolerance) : null;
+                    if (inside == null)
+                    {
+                        inside = shell.InRange(point3Ds[i], tolerance) || shell.Inside(point3Ds[i], tolerance: tolerance);
+                    }
+
+                    if (inside == true)
+                    {
+                        indices.Add(i);
+                    }
+                }
+            }
+
+            return indices;
         }
     }
 }
