@@ -242,53 +242,13 @@ namespace SAM.Geometry.OCCT
                 return null;
             }
 
-            // Triangulate the wall-top envelope in plan; each Delaunay vertex maps back
-            // to a real (true-height) envelope point, so lifting gives the roof terrain.
-            Plane planeXY = new Plane(new Point3D(0, 0, 0), new Vector3D(0, 0, 1));
-            List<Point2D> sites = envelope.ConvertAll(x => planeXY.Convert(x));
-            List<Triangle2D> triangle2Ds = SAM.Geometry.Planar.Query.Triangulate(sites, tolerance);
-            if (triangle2Ds == null || triangle2Ds.Count == 0)
+            // Coplanar wall tops (flat, mono-pitch, any single tilt): the roof is one
+            // planar face built straight from the fitted plane and handed to OCCT - no
+            // managed meshing. The plane is fit from three spread, non-collinear top
+            // points, so it is independent of the (arbitrary) envelope order.
+            Plane plane = RoofPlane(envelope, tolerance);
+            if (plane != null && Math.Abs(plane.Normal.Z) > maxNormalZ && envelope.TrueForAll(x => Math.Abs(plane.Distance(x)) <= distanceTolerance))
             {
-                return null;
-            }
-
-            List<Triangle3D> triangle3Ds = new List<Triangle3D>();
-            foreach (Triangle2D triangle2D in triangle2Ds)
-            {
-                List<Point2D> point2Ds = triangle2D?.GetPoints();
-                if (point2Ds == null || point2Ds.Count != 3)
-                {
-                    continue;
-                }
-
-                triangle3Ds.Add(new Triangle3D(
-                    envelope[NearestSite(sites, point2Ds[0])],
-                    envelope[NearestSite(sites, point2Ds[1])],
-                    envelope[NearestSite(sites, point2Ds[2])]));
-            }
-
-            if (triangle3Ds.Count == 0)
-            {
-                return null;
-            }
-
-            // Coplanar wall tops (flat, mono-pitch, any single tilt): if a real triangle's
-            // non-vertical plane contains every envelope point, the roof is that one plane.
-            // The plane comes from a Delaunay triangle, so its normal is order-independent
-            // and well-defined (unlike a polygon normal over arbitrarily ordered points).
-            foreach (Triangle3D triangle3D in triangle3Ds)
-            {
-                Plane plane = triangle3D.GetPlane();
-                if (plane == null || Math.Abs(plane.Normal.Z) <= maxNormalZ)
-                {
-                    continue;
-                }
-
-                if (!envelope.TrueForAll(x => Math.Abs(plane.Distance(x)) <= distanceTolerance))
-                {
-                    continue;
-                }
-
                 List<Point2D> point2Ds = boundingBox3D.GetPoints().ConvertAll(x => plane.Convert(x)).FindAll(x => x != null);
                 if (point2Ds != null && point2Ds.Count != 0)
                 {
@@ -300,14 +260,38 @@ namespace SAM.Geometry.OCCT
                         return new List<Face3D> { patch };
                     }
                 }
-
-                break;
             }
 
-            // Non-coplanar tops (gable, hip, stepped): emit the lifted triangles.
-            List<Face3D> result = new List<Face3D>();
-            foreach (Triangle3D triangle3D in triangle3Ds)
+            // Non-coplanar tops (gable, hip, stepped) over a possibly multi-room plan:
+            // OCCT has no point-set/terrain triangulation - its native triangulator meshes
+            // a single boundary loop, which would bulge a roof and cannot span several
+            // rooms - so the wall-top envelope is Delaunay-triangulated in plan and lifted
+            // to the true heights. These flat triangles are only candidate faces; the
+            // shells themselves are still built by the OCCT MakerVolume pass.
+            Plane planeXY = new Plane(new Point3D(0, 0, 0), new Vector3D(0, 0, 1));
+            List<Point2D> sites = envelope.ConvertAll(x => planeXY.Convert(x));
+            List<Triangle2D> triangle2Ds = SAM.Geometry.Planar.Query.Triangulate(sites, tolerance);
+            if (triangle2Ds == null || triangle2Ds.Count == 0)
             {
+                return null;
+            }
+
+            List<Face3D> result = new List<Face3D>();
+            foreach (Triangle2D triangle2D in triangle2Ds)
+            {
+                List<Point2D> point2Ds = triangle2D?.GetPoints();
+                if (point2Ds == null || point2Ds.Count != 3)
+                {
+                    continue;
+                }
+
+                // Delaunay sites are the projected envelope points, so each triangle
+                // vertex maps back to a real (true-height) envelope point.
+                Triangle3D triangle3D = new Triangle3D(
+                    envelope[NearestSite(sites, point2Ds[0])],
+                    envelope[NearestSite(sites, point2Ds[1])],
+                    envelope[NearestSite(sites, point2Ds[2])]);
+
                 Face3D face3D = new Face3D(triangle3D);
                 if (face3D != null)
                 {
@@ -371,6 +355,54 @@ namespace SAM.Geometry.OCCT
             }
 
             return envelope;
+        }
+
+        /// <summary>
+        /// Plane fit through the wall-top envelope from three spread, non-collinear
+        /// points (the farthest pair, then the point farthest from their line). Being
+        /// built from a real triangle it is order-independent, unlike a polygon normal
+        /// over arbitrarily ordered points. Returns null for coincident/collinear input.
+        /// </summary>
+        private static Plane RoofPlane(List<Point3D> point3Ds, double tolerance)
+        {
+            Point3D point3D_A = point3Ds[0];
+
+            Point3D point3D_B = null;
+            double maxDistance = tolerance;
+            foreach (Point3D point3D in point3Ds)
+            {
+                double distance = point3D_A.Distance(point3D);
+                if (distance > maxDistance)
+                {
+                    maxDistance = distance;
+                    point3D_B = point3D;
+                }
+            }
+
+            if (point3D_B == null)
+            {
+                return null;
+            }
+
+            Vector3D vector3D_AB = new Vector3D(point3D_A, point3D_B);
+            Vector3D normal = null;
+            double maxLength = tolerance;
+            foreach (Point3D point3D in point3Ds)
+            {
+                Vector3D cross = vector3D_AB.CrossProduct(new Vector3D(point3D_A, point3D));
+                if (cross.Length > maxLength)
+                {
+                    maxLength = cross.Length;
+                    normal = cross;
+                }
+            }
+
+            if (normal == null)
+            {
+                return null;
+            }
+
+            return new Plane(point3D_A, normal.Unit);
         }
 
         /// <summary>Index of the site nearest to <paramref name="point2D"/> (the source envelope point of a Delaunay vertex).</summary>
