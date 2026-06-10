@@ -537,7 +537,7 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
-        private static bool DecodeResult(IntPtr resultHandle, OcctCellComplexResult result)
+        internal static bool DecodeResult(IntPtr resultHandle, OcctCellComplexResult result)
         {
             int cellCount = OcctNativeMethods.sam_occt_result_cell_count(resultHandle);
             if (cellCount <= 0)

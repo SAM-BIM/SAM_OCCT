@@ -50,6 +50,45 @@ namespace SAM.Geometry.OCCT.Native
         public static extern int sam_occt_abi_version();
 
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void sam_occt_shape_release(IntPtr shapeHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_create_cell_complex(
+            [In] double[] coordinates,
+            int pointCount,
+            [In] int[] loopPointCounts,
+            int loopCount,
+            [In] int[] faceLoopCounts,
+            int faceCount,
+            double fuzzyTolerance,
+            int runParallel,
+            int avoidInternalShapes,
+            out OcctTopology shapeHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_create_shells(
+            [In] double[] coordinates,
+            int pointCount,
+            [In] int[] loopPointCounts,
+            int loopCount,
+            [In] int[] faceLoopCounts,
+            int faceCount,
+            [In] int[] shellFaceCounts,
+            int shellCount,
+            double fuzzyTolerance,
+            int runParallel,
+            out OcctTopology shapeHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_solid_count(OcctTopology shapeHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_decode(
+            OcctTopology shapeHandle,
+            double tolerance,
+            out IntPtr resultHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sam_occt_build_cell_complex(
             [In] double[] coordinates,
             int pointCount,

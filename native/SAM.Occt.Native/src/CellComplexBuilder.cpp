@@ -2,6 +2,7 @@
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
 #include "sam_occt.h"
+#include "OcctNativeCore.h"
 
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
@@ -48,39 +49,11 @@
 #include <utility>
 #include <vector>
 
-namespace
+// The decoded-result data model (Point/Loop/Face/Cell/Result), the persistent
+// Shape handle and the declarations of the helpers shared with ShapeHandle.cpp
+// live in OcctNativeCore.h.
+namespace sam_occt
 {
-    struct Point
-    {
-        double x = 0;
-        double y = 0;
-        double z = 0;
-    };
-
-    struct Loop
-    {
-        std::vector<Point> points;
-    };
-
-    struct Face
-    {
-        std::vector<Loop> loops;
-        int key = 0;
-    };
-
-    struct Cell
-    {
-        std::vector<Face> faces;
-        double volume = 0;
-    };
-
-    struct Result
-    {
-        std::vector<Cell> cells;
-        std::map<std::string, int> face_keys;
-        int next_face_key = 1;
-    };
-
     bool is_valid_index(int index, int count)
     {
         return index >= 0 && index < count;
@@ -508,7 +481,57 @@ namespace
         TopoDS_Shape unified = unify.Shape();
         return unified.IsNull() ? shape : unified;
     }
+
+    bool make_faces_from_arrays(
+        const double* coordinates,
+        const int* loop_point_counts,
+        const int* face_loop_counts,
+        int face_count,
+        TopTools_ListOfShape& faces)
+    {
+        int point_offset = 0;
+        int loop_offset = 0;
+
+        for (int face_index = 0; face_index < face_count; ++face_index)
+        {
+            TopoDS_Face face;
+            if (make_face(coordinates, loop_point_counts, point_offset, loop_offset, face_loop_counts[face_index], face))
+            {
+                faces.Append(face);
+            }
+        }
+
+        return !faces.IsEmpty();
+    }
+
+    int make_volume_from_faces(
+        const TopTools_ListOfShape& faces,
+        double fuzzy_tolerance,
+        int run_parallel,
+        int avoid_internal_shapes,
+        TopoDS_Shape& out_shape)
+    {
+        BOPAlgo_MakerVolume maker;
+        maker.SetArguments(faces);
+        maker.SetIntersect(true);
+        maker.SetFuzzyValue(fuzzy_tolerance);
+        maker.SetRunParallel(run_parallel != 0);
+        maker.SetAvoidInternalShapes(avoid_internal_shapes != 0);
+        maker.Perform();
+
+        if (maker.HasErrors())
+        {
+            return 30;
+        }
+
+        ShapeFix_Shape shape_fix(maker.Shape());
+        shape_fix.Perform();
+        out_shape = shape_fix.Shape();
+        return 0;
+    }
 }
+
+using namespace sam_occt;
 
 int sam_occt_build_cell_complex(
     const double* coordinates,
@@ -541,63 +564,22 @@ int sam_occt_build_cell_complex(
     try
     {
         TopTools_ListOfShape arguments;
-        int point_offset = 0;
-        int loop_offset = 0;
-
-        for (int face_index = 0; face_index < face_count; ++face_index)
-        {
-            TopoDS_Face face;
-            if (make_face(coordinates, loop_point_counts, point_offset, loop_offset, face_loop_counts[face_index], face))
-            {
-                arguments.Append(face);
-            }
-        }
-
-        if (arguments.IsEmpty())
+        if (!make_faces_from_arrays(coordinates, loop_point_counts, face_loop_counts, face_count, arguments))
         {
             return 20;
         }
 
-        BOPAlgo_MakerVolume maker;
-        maker.SetArguments(arguments);
-        maker.SetIntersect(true);
-        maker.SetFuzzyValue(fuzzy_tolerance);
-        maker.SetRunParallel(run_parallel != 0);
-        maker.SetAvoidInternalShapes(avoid_internal_shapes != 0);
-        maker.Perform();
-
-        if (maker.HasErrors())
+        TopoDS_Shape shape;
+        const int volume_status = make_volume_from_faces(arguments, fuzzy_tolerance, run_parallel, avoid_internal_shapes, shape);
+        if (volume_status != 0)
         {
-            return 30;
+            return volume_status;
         }
 
         std::unique_ptr<Result> result(new Result());
-        ShapeFix_Shape shape_fix(maker.Shape());
-        shape_fix.Perform();
-        TopoDS_Shape shape = shape_fix.Shape();
-
         for (TopExp_Explorer solid_explorer(shape, TopAbs_SOLID); solid_explorer.More(); solid_explorer.Next())
         {
-            TopoDS_Solid solid = TopoDS::Solid(solid_explorer.Current());
-            Cell cell;
-
-            GProp_GProps properties;
-            BRepGProp::VolumeProperties(solid, properties);
-            cell.volume = properties.Mass();
-
-            for (TopExp_Explorer face_explorer(solid, TopAbs_FACE); face_explorer.More(); face_explorer.Next())
-            {
-                Face face = extract_face(TopoDS::Face(face_explorer.Current()), *result, tolerance);
-                if (!face.loops.empty())
-                {
-                    cell.faces.push_back(face);
-                }
-            }
-
-            if (!cell.faces.empty() && std::abs(cell.volume) > tolerance)
-            {
-                result->cells.push_back(cell);
-            }
+            append_solid_to_result(TopoDS::Solid(solid_explorer.Current()), *result, tolerance);
         }
 
         if (result->cells.empty())
