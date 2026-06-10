@@ -161,10 +161,16 @@ SAM_OCCT_API int sam_occt_shape_decode(
    (a compound of solids for a BRep STEP/IGES); decode it with
    sam_occt_shape_decode like any other handle.
 
+   The Data Exchange toolkits (TKDESTEP.dll / TKDEIGES.dll) are delay-loaded, so
+   this library keeps loading and every other operation keeps working even when
+   those DLLs are not deployed; the STEP/IGES calls below probe for them first
+   and return status 64 instead of faulting when they are absent.
+
    Status: 0 ok, 50 invalid shape handle, 60 null/empty path,
    61 file open/read failed (missing or unreadable), 62 write/transfer failed
    (IFSelect status not RetDone), 63 read/transfer produced no shape (empty or
-   unsupported file), 99 exception. */
+   unsupported file), 64 Data Exchange runtime (TKDESTEP/TKDEIGES) not available,
+   99 exception. */
 SAM_OCCT_API int sam_occt_shape_export_step(void* shape_handle, const char* path);
 
 SAM_OCCT_API int sam_occt_shape_export_iges(void* shape_handle, const char* path);

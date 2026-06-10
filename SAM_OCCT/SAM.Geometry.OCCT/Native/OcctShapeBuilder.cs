@@ -387,6 +387,7 @@ namespace SAM.Geometry.OCCT.Native
                 case 61: return "the file could not be opened or read";
                 case 62: return "the OCCT writer/transfer did not complete";
                 case 63: return "the file contained no transferable shape";
+                case 64: return "the OCCT Data Exchange runtime (TKDESTEP/TKDEIGES) was not found - deploy the Data Exchange DLLs (e.g. run build-native.ps1)";
                 case 99: return "an unexpected native exception was thrown";
                 default: return "unrecognised native status";
             }

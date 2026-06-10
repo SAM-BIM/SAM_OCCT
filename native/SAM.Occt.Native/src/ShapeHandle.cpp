@@ -36,8 +36,38 @@
 
 using namespace sam_occt;
 
+#ifdef _WIN32
+// Declared here to avoid pulling <windows.h> (and its macros) into a translation
+// unit full of OCCT headers. Used only to probe a delay-loaded Data Exchange DLL
+// before the first call into it.
+extern "C" __declspec(dllimport) void* __stdcall LoadLibraryA(const char* lpLibFileName);
+extern "C" __declspec(dllimport) int __stdcall FreeLibrary(void* hLibModule);
+#endif
+
 namespace
 {
+    // True when the named delay-loaded Data Exchange DLL (and its load-time
+    // dependencies) can be resolved. Lets the STEP/IGES entry points fail with a
+    // clean status 64 instead of faulting on the delay-load thunk when the
+    // Data Exchange runtime is not deployed. Always true off Windows (no
+    // delay-loading there).
+    bool data_exchange_runtime_available(const char* dll_name)
+    {
+#ifdef _WIN32
+        void* module = LoadLibraryA(dll_name);
+        if (module == nullptr)
+        {
+            return false;
+        }
+
+        FreeLibrary(module);
+        return true;
+#else
+        (void)dll_name;
+        return true;
+#endif
+    }
+
     int wrap_shape(const TopoDS_Shape& shape, void** shape_handle)
     {
         TopExp_Explorer solid_explorer(shape, TopAbs_SOLID);
@@ -673,6 +703,11 @@ int sam_occt_shape_export_step(void* shape_handle, const char* path)
         return 50;
     }
 
+    if (!data_exchange_runtime_available("TKDESTEP.dll"))
+    {
+        return 64;
+    }
+
     try
     {
         STEPControl_Writer writer;
@@ -705,6 +740,11 @@ int sam_occt_shape_export_iges(void* shape_handle, const char* path)
     if (shape == nullptr)
     {
         return 50;
+    }
+
+    if (!data_exchange_runtime_available("TKDEIGES.dll"))
+    {
+        return 64;
     }
 
     try
@@ -749,6 +789,11 @@ int sam_occt_shape_import_step(const char* path, void** shape_handle)
         return 60;
     }
 
+    if (!data_exchange_runtime_available("TKDESTEP.dll"))
+    {
+        return 64;
+    }
+
     try
     {
         STEPControl_Reader reader;
@@ -781,6 +826,11 @@ int sam_occt_shape_import_iges(const char* path, void** shape_handle)
     if (shape_handle == nullptr)
     {
         return 60;
+    }
+
+    if (!data_exchange_runtime_available("TKDEIGES.dll"))
+    {
+        return 64;
     }
 
     try
