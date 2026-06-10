@@ -345,6 +345,34 @@ namespace SAM.OCCT.IntegrationTests
             Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_POINT_DUPLICATE" && x.Severity == OcctDiagnosticSeverity.Warning);
         }
 
+        [SkippableFact]
+        public void ShellsFromVerticalFace3Ds_BatteredWalls_TreatedAsWallsNotCaps()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - a frustum: four inward-leaning (battered) walls, each tilted ~18
+            // degrees from vertical (normal Z ~ 0.316). They must be classified as walls,
+            // not caps - otherwise the floor and roof are wrongly suppressed.
+            List<Face3D> walls = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(3, 1, 3), new Point3D(1, 1, 3)),
+                TestGeometry.CreatePlanarFace(new Point3D(4, 4, 0), new Point3D(0, 4, 0), new Point3D(1, 3, 3), new Point3D(3, 3, 3)),
+                TestGeometry.CreatePlanarFace(new Point3D(0, 4, 0), new Point3D(0, 0, 0), new Point3D(1, 1, 3), new Point3D(1, 3, 3)),
+                TestGeometry.CreatePlanarFace(new Point3D(4, 0, 0), new Point3D(4, 4, 0), new Point3D(3, 3, 3), new Point3D(3, 1, 3))
+            };
+
+            // Act
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(walls, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result);
+
+            // Assert - the battered walls are walls, so the floor and roof are generated.
+            Assert.True(result.Success);
+            Assert.NotNull(shells);
+            Assert.Single(shells);
+            Assert.DoesNotContain(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_USER_CAP");
+            Assert.NotNull(horizontalFace3Ds);
+            Assert.Equal(2, horizontalFace3Ds.Count);
+        }
+
         /// <summary>A horizontal cap (floor or roof) spanning the unit footprint at the given elevation.</summary>
         private static Face3D CreateHorizontalCap(double x0, double y0, double x1, double y1, double z)
         {

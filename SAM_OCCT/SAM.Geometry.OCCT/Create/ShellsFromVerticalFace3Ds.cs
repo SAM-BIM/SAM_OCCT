@@ -75,6 +75,13 @@ namespace SAM.Geometry.OCCT
             // so only the missing caps are generated. Every plane is remembered so a
             // result face lying on an input face is not reported as newly created.
             double maxNormalZ = Math.Sin(angleTolerance);
+            // A face is a cap (floor/roof) when it is substantially horizontal and a wall
+            // otherwise. The split must use a generous angle, NOT the near-zero angle
+            // tolerance: a battered or drooped wall (tilted a few degrees) is still a wall,
+            // and misreading it as a cap would wrongly suppress the floor/roof under it.
+            // |normal.Z| > 0.5 keeps walls within ~30 deg of vertical as walls and treats
+            // roofs up to ~60 deg of pitch as caps.
+            const double capNormalZ = 0.5;
             List<Plane> planes_All = new List<Plane>();
             List<Face3D> walls = new List<Face3D>();
             List<Face3D> caps = new List<Face3D>();
@@ -88,7 +95,7 @@ namespace SAM.Geometry.OCCT
                 }
 
                 planes_All.Add(plane);
-                if (Math.Abs(plane.Normal.Z) > maxNormalZ)
+                if (Math.Abs(plane.Normal.Z) > capNormalZ)
                 {
                     caps.Add(face3Ds_All[i]);
                 }
