@@ -220,7 +220,7 @@ namespace SAM.Geometry.OCCT
                         Native.OcctOpenShellAnalysis.Report(walls, options, result);
                     }
 
-                    result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_VERTICAL_SHELLS_OPEN", "The walls do not enclose a volume, so no shells were created. See SAM_OCCT_OPEN_SHELL_ANALYSIS for the open-boundary location (note: wall tops and bottoms are expected to be open).");
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_VERTICAL_SHELLS_OPEN", "The walls do not enclose a volume, so no shells were created. If the faces are meant to meet but the input has small gaps (imported/auto-generated geometry), raise fuzzyTolerance_ (e.g. 0.05) and/or weldTolerance_ (e.g. 0.1). See SAM_OCCT_OPEN_SHELL_ANALYSIS for the open-boundary location (note: wall tops and bottoms are expected to be open).");
                 }
 
                 return null;
