@@ -182,7 +182,23 @@ if (-not [string]::IsNullOrWhiteSpace($ThirdPartyRuntimeRoot)) {
 
 $samDir = Join-Path $env:APPDATA "SAM"
 New-Item -ItemType Directory -Force -Path $samDir | Out-Null
-Get-ChildItem -LiteralPath $nativeOutput -Filter "*.dll" | Copy-Item -Destination $samDir -Force
+
+# Rhino/Grasshopper locks the DLLs it has loaded from %APPDATA%\SAM, which
+# makes this deployment copy fail half-way and leaves a stale runtime that
+# Rhino keeps loading. Copy file-by-file so one locked DLL does not abort the
+# rest, and fail with an actionable message listing what could not be updated.
+$lockedDlls = @()
+foreach ($dll in Get-ChildItem -LiteralPath $nativeOutput -Filter "*.dll") {
+    try {
+        Copy-Item -LiteralPath $dll.FullName -Destination $samDir -Force
+    } catch {
+        $lockedDlls += $dll.Name
+    }
+}
+
+if ($lockedDlls.Count -gt 0) {
+    throw ("Could not update {0} DLL(s) in {1} (most likely locked by a running Rhino/Grasshopper): {2}. Close Rhino and rebuild (or re-run build-native.ps1) so the deployed runtime matches the build output." -f $lockedDlls.Count, $samDir, ($lockedDlls -join ", "))
+}
 
 Write-Host "Native OCCT build copied to $nativeOutput"
 Write-Host "Native OCCT runtime copied to $samDir"
