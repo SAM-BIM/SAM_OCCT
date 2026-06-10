@@ -345,6 +345,53 @@ namespace SAM.OCCT.IntegrationTests
             Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_POINT_DUPLICATE" && x.Severity == OcctDiagnosticSeverity.Warning);
         }
 
+        /// <summary>Four walls of a 1 x 1 x 2 room with the front-right corner split by ~0.05 (drifted input).</summary>
+        private static List<Face3D> CreateDriftedRoomWalls()
+        {
+            return new List<Face3D>
+            {
+                CreateWallFace(0, 0, 1, 0, 0, 2),       // front ends at (1, 0)
+                CreateWallFace(1.05, 0, 1.05, 1, 0, 2), // right starts at (1.05, 0) - 0.05 gap
+                CreateWallFace(1.05, 1, 0, 1, 0, 2),    // back
+                CreateWallFace(0, 1, 0, 0, 0, 2)        // left
+            };
+        }
+
+        [SkippableFact]
+        public void ShellsFromVerticalFace3Ds_DriftedWallsNoWeld_DoesNotClose()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - the front-right corner is split by 0.05, beyond the default weld.
+            List<Face3D> walls = CreateDriftedRoomWalls();
+
+            // Act - no weld tolerance.
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(walls, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result);
+
+            // Assert - the gap leaves the volume open.
+            Assert.True(result.NativeAvailable);
+            Assert.True(shells == null || shells.Count == 0);
+        }
+
+        [SkippableFact]
+        public void ShellsFromVerticalFace3Ds_DriftedWallsWithWeld_ProducesClosedShell()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - same drifted walls.
+            List<Face3D> walls = CreateDriftedRoomWalls();
+
+            // Act - weld the 0.05 gap with a 0.1 weld tolerance.
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(walls, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result, weldTolerance: 0.1);
+
+            // Assert - welding snaps the split corner together, so the room closes.
+            Assert.True(result.Success);
+            Assert.NotNull(shells);
+            Assert.Single(shells);
+            Assert.InRange(result.Cells[0].Volume, 1.8, 2.2);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_WELDED");
+        }
+
         [SkippableFact]
         public void ShellsFromVerticalFace3Ds_BatteredWalls_TreatedAsWallsNotCaps()
         {

@@ -18,7 +18,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("b772f03a-b4ff-42e3-ab7c-4acd08162de2");
 
-        public override string LatestComponentVersion => "0.1.2";
+        public override string LatestComponentVersion => "0.1.3";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -60,6 +60,10 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Number fuzzyTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "fuzzyTolerance_", NickName = "fuzzyTolerance_", Description = "OCCT fuzzy tolerance", Access = GH_ParamAccess.item };
                 fuzzyTolerance.SetPersistentData(Tolerance.MacroDistance);
                 result.Add(new GH_SAMParam(fuzzyTolerance, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number weldTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "weldTolerance_", NickName = "weldTolerance_", Description = "Cleanup for drifted input (model units). When greater than 0, input face corners closer together than this distance are snapped to one shared point BEFORE building, so faces that do not quite meet seal into a watertight shell. Use it when the model fails to close, or bakes with hairline gaps / a 'missing' face, because adjacent faces do not share identical vertices (common with imported or auto-generated geometry). Set it just above the largest gap between faces that should touch (typically 0.05-0.1) - too large collapses real detail. 0 (default) disables welding and leaves the input untouched.", Access = GH_ParamAccess.item };
+                weldTolerance.SetPersistentData(0.0);
+                result.Add(new GH_SAMParam(weldTolerance, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Boolean run = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "_run", NickName = "_run", Description = "Run", Access = GH_ParamAccess.item };
                 run.SetPersistentData(false);
@@ -147,6 +151,13 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 dataAccess.GetData(index, ref fuzzyTolerance);
             }
 
+            double weldTolerance = 0;
+            index = Params.IndexOfInputParam("weldTolerance_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref weldTolerance);
+            }
+
             List<GH_ObjectWrapper> pointWrappers = new List<GH_ObjectWrapper>();
             index = Params.IndexOfInputParam("points_");
             if (index != -1)
@@ -182,7 +193,8 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 Tolerance.Angle,
                 Tolerance.MacroDistance,
                 roofMode,
-                point3Ds.Count == 0 ? null : point3Ds);
+                point3Ds.Count == 0 ? null : point3Ds,
+                weldTolerance);
 
             List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList();
 

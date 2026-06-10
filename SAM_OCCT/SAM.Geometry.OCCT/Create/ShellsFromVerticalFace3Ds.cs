@@ -44,8 +44,13 @@ namespace SAM.Geometry.OCCT
         /// actionable instead of an empty result.
         /// </para>
         /// Non-planar input is not supported by the native make_face - triangulate
-        /// such faces first (SAMOCCT.TriangulateSurface). Returns null on failure -
-        /// inspect result diagnostics (SAM_OCCT_VERTICAL_SHELLS_*).
+        /// such faces first (SAMOCCT.TriangulateSurface).
+        /// <para>
+        /// <paramref name="weldTolerance"/> &gt; 0 snaps input face corners closer than
+        /// that distance to one shared point before building, so faces that almost meet
+        /// (drifted imported geometry) seal into a watertight shell. 0 disables it.
+        /// </para>
+        /// Returns null on failure - inspect result diagnostics (SAM_OCCT_VERTICAL_SHELLS_*).
         /// </summary>
         public static List<Shell> ShellsFromVerticalFace3Ds(
             IEnumerable<Face3D> face3Ds,
@@ -57,7 +62,8 @@ namespace SAM.Geometry.OCCT
             double angleTolerance = Tolerance.Angle,
             double distanceTolerance = Tolerance.MacroDistance,
             OcctRoofMode roofMode = OcctRoofMode.Flat,
-            IEnumerable<Point3D> point3Ds = null)
+            IEnumerable<Point3D> point3Ds = null,
+            double weldTolerance = 0)
         {
             horizontalFace3Ds = null;
             result = new OcctCellComplexResult();
@@ -67,6 +73,19 @@ namespace SAM.Geometry.OCCT
             {
                 result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_VERTICAL_SHELLS_INPUT_EMPTY", "No Face3D geometry was supplied.");
                 return null;
+            }
+
+            // Optional cleanup for drifted input: snap input face corners closer than
+            // weldTolerance to a single shared point so adjacent faces meet exactly. This
+            // is what lets a model whose faces do not share identical vertices (imported /
+            // auto-generated geometry) build a genuinely watertight shell.
+            if (weldTolerance > 0)
+            {
+                face3Ds_All = WeldVertices(face3Ds_All, weldTolerance, out int weldedFaceCount);
+                if (weldedFaceCount > 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_WELDED", string.Format("Welded input corners within {0:0.###}; {1} face(s) adjusted so adjacent faces share exact vertices.", weldTolerance, weldedFaceCount));
+                }
             }
 
             // Partition the input (mixed input): vertical faces are walls; non-vertical
@@ -320,6 +339,119 @@ namespace SAM.Geometry.OCCT
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Snaps input face corners that lie within <paramref name="weldTolerance"/> of
+        /// each other to one shared representative, so faces that almost meet (drifted
+        /// input) end up sharing exact vertices and can seal into a watertight shell.
+        /// Faces with holes are passed through untouched. <paramref name="weldedFaceCount"/>
+        /// reports how many faces actually moved.
+        /// </summary>
+        private static List<Face3D> WeldVertices(List<Face3D> face3Ds, double weldTolerance, out int weldedFaceCount)
+        {
+            weldedFaceCount = 0;
+
+            // Pass 1: build cluster representatives greedily over every external corner.
+            List<Point3D> representatives = new List<Point3D>();
+            foreach (Face3D face3D in face3Ds)
+            {
+                List<Point3D> point3Ds = ExternalLoopPoints(face3D);
+                if (point3Ds == null)
+                {
+                    continue;
+                }
+
+                foreach (Point3D point3D in point3Ds)
+                {
+                    if (point3D != null && Representative(representatives, point3D, weldTolerance) == null)
+                    {
+                        representatives.Add(point3D);
+                    }
+                }
+            }
+
+            // Pass 2: rebuild each (hole-free) face with its corners snapped to the reps.
+            List<Face3D> result = new List<Face3D>();
+            foreach (Face3D face3D in face3Ds)
+            {
+                List<IClosedPlanar3D> edge3Ds = face3D?.GetEdge3Ds();
+                List<Point3D> external = ExternalLoopPoints(face3D);
+                if (external == null || (edge3Ds != null && edge3Ds.Count > 1))
+                {
+                    result.Add(face3D);
+                    continue;
+                }
+
+                List<Point3D> snapped = new List<Point3D>();
+                bool changed = false;
+                foreach (Point3D point3D in external)
+                {
+                    Point3D representative = Representative(representatives, point3D, weldTolerance) ?? point3D;
+                    if (representative.Distance(point3D) > 1e-9)
+                    {
+                        changed = true;
+                    }
+
+                    // Skip a corner that collapses onto the previous one after snapping.
+                    if (snapped.Count == 0 || snapped[snapped.Count - 1].Distance(representative) > weldTolerance)
+                    {
+                        snapped.Add(representative);
+                    }
+                }
+
+                if (snapped.Count >= 2 && snapped[0].Distance(snapped[snapped.Count - 1]) <= weldTolerance)
+                {
+                    snapped.RemoveAt(snapped.Count - 1);
+                }
+
+                Face3D welded = null;
+                if (snapped.Count >= 3)
+                {
+                    try
+                    {
+                        welded = Face3D.Create(new List<IClosedPlanar3D> { new Polygon3D(snapped) });
+                    }
+                    catch
+                    {
+                        welded = null;
+                    }
+                }
+
+                if (welded == null)
+                {
+                    result.Add(face3D);
+                    continue;
+                }
+
+                result.Add(welded);
+                if (changed)
+                {
+                    weldedFaceCount++;
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>The representative in <paramref name="representatives"/> within <paramref name="weldTolerance"/> of <paramref name="point3D"/>, or null.</summary>
+        private static Point3D Representative(List<Point3D> representatives, Point3D point3D, double weldTolerance)
+        {
+            foreach (Point3D representative in representatives)
+            {
+                if (representative.Distance(point3D) <= weldTolerance)
+                {
+                    return representative;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>External boundary corners of a Face3D, or null.</summary>
+        private static List<Point3D> ExternalLoopPoints(Face3D face3D)
+        {
+            return (face3D?.GetExternalEdge3D() as ISegmentable3D)?.GetPoints();
         }
 
         /// <summary>Padded horizontal rectangular patches (one per elevation) covering the footprint.</summary>
