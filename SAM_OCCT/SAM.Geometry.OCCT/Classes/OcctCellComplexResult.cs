@@ -3,12 +3,13 @@
 
 using SAM.Core.OCCT;
 using SAM.Geometry.Spatial;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
 namespace SAM.Geometry.OCCT
 {
-    public class OcctCellComplexResult
+    public class OcctCellComplexResult : IDisposable
     {
         private class CellFaceOwner
         {
@@ -24,6 +25,15 @@ namespace SAM.Geometry.OCCT
         public bool NativeAvailable { get; internal set; }
 
         public string NativeVersion { get; internal set; }
+
+        /// <summary>
+        /// The retained native topology handle when the operation ran with
+        /// <c>OcctBuildOptions.RetainTopology</c>; null otherwise. The result
+        /// owns the handle - dispose the result (or the handle directly; both
+        /// are idempotent) when done. Legacy callers that never opt in get null
+        /// and need not dispose anything.
+        /// </summary>
+        public OcctTopology Topology { get; internal set; }
 
         public bool Success
         {
@@ -64,6 +74,11 @@ namespace SAM.Geometry.OCCT
         public void AddDiagnostic(OcctDiagnosticSeverity severity, string code, string message, int? sourceIndex = null)
         {
             diagnostics.Add(new OcctDiagnostic(severity, code, message, sourceIndex));
+        }
+
+        public void Dispose()
+        {
+            Topology?.Dispose();
         }
 
         public void BuildFaceAdjacencies()

@@ -24,7 +24,14 @@ namespace SAM.Geometry.OCCT
 
             options = options == null ? new OcctBuildOptions() : new OcctBuildOptions(options);
 
-            if (!Native.OcctCellComplexBuilder.TryUnion(shells_Temp, options, result))
+            // RetainTopology routes through the persistent shape handle so the
+            // result keeps the live OCCT topology; default keeps the legacy
+            // decode-and-free native path.
+            bool built = options.RetainTopology
+                ? Native.OcctShapeBuilder.TryOperateRetained(Native.OcctShapeBuilder.ShapeOperation.Union, shells_Temp, null, options, 0, result)
+                : Native.OcctCellComplexBuilder.TryUnion(shells_Temp, options, result);
+
+            if (!built)
             {
                 return null;
             }

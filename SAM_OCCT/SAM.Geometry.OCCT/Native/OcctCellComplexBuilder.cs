@@ -27,7 +27,7 @@ namespace SAM.Geometry.OCCT.Native
             IntPtr resultHandle = IntPtr.Zero;
             try
             {
-                int status = NativeMethods.sam_occt_shells_intersection(
+                int status = OcctNativeMethods.sam_occt_shells_intersection(
                     targetInput.Coordinates,
                     targetInput.Coordinates.Length / 3,
                     targetInput.LoopPointCounts,
@@ -50,6 +50,7 @@ namespace SAM.Geometry.OCCT.Native
                     out resultHandle);
 
                 result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
 
                 if (status != 0)
                 {
@@ -77,7 +78,7 @@ namespace SAM.Geometry.OCCT.Native
                 {
                     try
                     {
-                        NativeMethods.sam_occt_free_result(resultHandle);
+                        OcctNativeMethods.sam_occt_free_result(resultHandle);
                     }
                     catch
                     {
@@ -96,7 +97,7 @@ namespace SAM.Geometry.OCCT.Native
             IntPtr resultHandle = IntPtr.Zero;
             try
             {
-                int status = NativeMethods.sam_occt_shells_union(
+                int status = OcctNativeMethods.sam_occt_shells_union(
                     input.Coordinates,
                     input.Coordinates.Length / 3,
                     input.LoopPointCounts,
@@ -111,6 +112,7 @@ namespace SAM.Geometry.OCCT.Native
                     out resultHandle);
 
                 result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
 
                 if (status != 0)
                 {
@@ -138,7 +140,7 @@ namespace SAM.Geometry.OCCT.Native
                 {
                     try
                     {
-                        NativeMethods.sam_occt_free_result(resultHandle);
+                        OcctNativeMethods.sam_occt_free_result(resultHandle);
                     }
                     catch
                     {
@@ -157,7 +159,7 @@ namespace SAM.Geometry.OCCT.Native
             IntPtr resultHandle = IntPtr.Zero;
             try
             {
-                int status = NativeMethods.sam_occt_shells_repair(
+                int status = OcctNativeMethods.sam_occt_shells_repair(
                     input.Coordinates,
                     input.Coordinates.Length / 3,
                     input.LoopPointCounts,
@@ -173,6 +175,7 @@ namespace SAM.Geometry.OCCT.Native
                     out resultHandle);
 
                 result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
 
                 if (status != 0)
                 {
@@ -200,7 +203,7 @@ namespace SAM.Geometry.OCCT.Native
                 {
                     try
                     {
-                        NativeMethods.sam_occt_free_result(resultHandle);
+                        OcctNativeMethods.sam_occt_free_result(resultHandle);
                     }
                     catch
                     {
@@ -224,7 +227,7 @@ namespace SAM.Geometry.OCCT.Native
             IntPtr resultHandle = IntPtr.Zero;
             try
             {
-                int status = NativeMethods.sam_occt_shells_difference(
+                int status = OcctNativeMethods.sam_occt_shells_difference(
                     targetInput.Coordinates,
                     targetInput.Coordinates.Length / 3,
                     targetInput.LoopPointCounts,
@@ -247,6 +250,7 @@ namespace SAM.Geometry.OCCT.Native
                     out resultHandle);
 
                 result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
 
                 if (status != 0)
                 {
@@ -274,7 +278,7 @@ namespace SAM.Geometry.OCCT.Native
                 {
                     try
                     {
-                        NativeMethods.sam_occt_free_result(resultHandle);
+                        OcctNativeMethods.sam_occt_free_result(resultHandle);
                     }
                     catch
                     {
@@ -297,7 +301,7 @@ namespace SAM.Geometry.OCCT.Native
             IntPtr resultHandle = IntPtr.Zero;
             try
             {
-                int status = NativeMethods.sam_occt_build_cell_complex(
+                int status = OcctNativeMethods.sam_occt_build_cell_complex(
                     input.Coordinates,
                     input.Coordinates.Length / 3,
                     input.LoopPointCounts,
@@ -311,6 +315,7 @@ namespace SAM.Geometry.OCCT.Native
                     out resultHandle);
 
                 result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
 
                 if (status != 0)
                 {
@@ -342,7 +347,7 @@ namespace SAM.Geometry.OCCT.Native
                 {
                     try
                     {
-                        NativeMethods.sam_occt_free_result(resultHandle);
+                        OcctNativeMethods.sam_occt_free_result(resultHandle);
                     }
                     catch
                     {
@@ -382,7 +387,7 @@ namespace SAM.Geometry.OCCT.Native
             IntPtr resultHandle = IntPtr.Zero;
             try
             {
-                int status = NativeMethods.sam_occt_triangulate(
+                int status = OcctNativeMethods.sam_occt_triangulate(
                     input.Coordinates,
                     input.Coordinates.Length / 3,
                     input.LoopPointCounts,
@@ -396,6 +401,7 @@ namespace SAM.Geometry.OCCT.Native
                     out resultHandle);
 
                 result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
 
                 if (status != 0)
                 {
@@ -403,7 +409,7 @@ namespace SAM.Geometry.OCCT.Native
                     return false;
                 }
 
-                int cellCount = NativeMethods.sam_occt_result_cell_count(resultHandle);
+                int cellCount = OcctNativeMethods.sam_occt_result_cell_count(resultHandle);
                 for (int cellIndex = 0; cellIndex < cellCount; cellIndex++)
                 {
                     triangles.AddRange(DecodeTriangle3Ds(resultHandle, cellIndex));
@@ -436,7 +442,7 @@ namespace SAM.Geometry.OCCT.Native
                 {
                     try
                     {
-                        NativeMethods.sam_occt_free_result(resultHandle);
+                        OcctNativeMethods.sam_occt_free_result(resultHandle);
                     }
                     catch
                     {
@@ -457,7 +463,7 @@ namespace SAM.Geometry.OCCT.Native
             IntPtr resultHandle = IntPtr.Zero;
             try
             {
-                int status = NativeMethods.sam_occt_merge_coplanar(
+                int status = OcctNativeMethods.sam_occt_merge_coplanar(
                     input.Coordinates,
                     input.Coordinates.Length / 3,
                     input.LoopPointCounts,
@@ -469,6 +475,7 @@ namespace SAM.Geometry.OCCT.Native
                     out resultHandle);
 
                 result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
 
                 if (status != 0)
                 {
@@ -476,7 +483,7 @@ namespace SAM.Geometry.OCCT.Native
                     return false;
                 }
 
-                int cellCount = NativeMethods.sam_occt_result_cell_count(resultHandle);
+                int cellCount = OcctNativeMethods.sam_occt_result_cell_count(resultHandle);
                 for (int cellIndex = 0; cellIndex < cellCount; cellIndex++)
                 {
                     List<OcctCellFace> faces = DecodeFaces(resultHandle, cellIndex, result);
@@ -521,7 +528,7 @@ namespace SAM.Geometry.OCCT.Native
                 {
                     try
                     {
-                        NativeMethods.sam_occt_free_result(resultHandle);
+                        OcctNativeMethods.sam_occt_free_result(resultHandle);
                     }
                     catch
                     {
@@ -530,156 +537,9 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
-        private static class NativeMethods
+        internal static bool DecodeResult(IntPtr resultHandle, OcctCellComplexResult result)
         {
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_build_cell_complex(
-                [In] double[] coordinates,
-                int pointCount,
-                [In] int[] loopPointCounts,
-                int loopCount,
-                [In] int[] faceLoopCounts,
-                int faceCount,
-                double tolerance,
-                double fuzzyTolerance,
-                int runParallel,
-                int avoidInternalShapes,
-                out IntPtr resultHandle);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_shells_difference(
-                [In] double[] targetCoordinates,
-                int targetPointCount,
-                [In] int[] targetLoopPointCounts,
-                int targetLoopCount,
-                [In] int[] targetFaceLoopCounts,
-                int targetFaceCount,
-                [In] int[] targetShellFaceCounts,
-                int targetShellCount,
-                [In] double[] cutterCoordinates,
-                int cutterPointCount,
-                [In] int[] cutterLoopPointCounts,
-                int cutterLoopCount,
-                [In] int[] cutterFaceLoopCounts,
-                int cutterFaceCount,
-                [In] int[] cutterShellFaceCounts,
-                int cutterShellCount,
-                double tolerance,
-                double fuzzyTolerance,
-                int runParallel,
-                out IntPtr resultHandle);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_shells_intersection(
-                [In] double[] targetCoordinates,
-                int targetPointCount,
-                [In] int[] targetLoopPointCounts,
-                int targetLoopCount,
-                [In] int[] targetFaceLoopCounts,
-                int targetFaceCount,
-                [In] int[] targetShellFaceCounts,
-                int targetShellCount,
-                [In] double[] toolCoordinates,
-                int toolPointCount,
-                [In] int[] toolLoopPointCounts,
-                int toolLoopCount,
-                [In] int[] toolFaceLoopCounts,
-                int toolFaceCount,
-                [In] int[] toolShellFaceCounts,
-                int toolShellCount,
-                double tolerance,
-                double fuzzyTolerance,
-                int runParallel,
-                out IntPtr resultHandle);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_shells_union(
-                [In] double[] coordinates,
-                int pointCount,
-                [In] int[] loopPointCounts,
-                int loopCount,
-                [In] int[] faceLoopCounts,
-                int faceCount,
-                [In] int[] shellFaceCounts,
-                int shellCount,
-                double tolerance,
-                double fuzzyTolerance,
-                int runParallel,
-                out IntPtr resultHandle);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_shells_repair(
-                [In] double[] coordinates,
-                int pointCount,
-                [In] int[] loopPointCounts,
-                int loopCount,
-                [In] int[] faceLoopCounts,
-                int faceCount,
-                [In] int[] shellFaceCounts,
-                int shellCount,
-                double tolerance,
-                double fuzzyTolerance,
-                int runParallel,
-                double minArea,
-                out IntPtr resultHandle);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_triangulate(
-                [In] double[] coordinates,
-                int pointCount,
-                [In] int[] loopPointCounts,
-                int loopCount,
-                [In] int[] faceLoopCounts,
-                int faceCount,
-                double linearDeflection,
-                double angularDeflection,
-                int relativeDeflection,
-                double tolerance,
-                out IntPtr resultHandle);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_merge_coplanar(
-                [In] double[] coordinates,
-                int pointCount,
-                [In] int[] loopPointCounts,
-                int loopCount,
-                [In] int[] faceLoopCounts,
-                int faceCount,
-                double tolerance,
-                double angularTolerance,
-                out IntPtr resultHandle);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern void sam_occt_free_result(IntPtr resultHandle);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_result_cell_count(IntPtr resultHandle);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_result_cell_face_count(IntPtr resultHandle, int cellIndex);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern double sam_occt_result_cell_volume(IntPtr resultHandle, int cellIndex);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_result_cell_center(IntPtr resultHandle, int cellIndex, out double x, out double y, out double z);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_result_face_loop_count(IntPtr resultHandle, int cellIndex, int faceIndex);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_result_face_key(IntPtr resultHandle, int cellIndex, int faceIndex);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_result_loop_point_count(IntPtr resultHandle, int cellIndex, int faceIndex, int loopIndex);
-
-            [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
-            public static extern int sam_occt_result_point(IntPtr resultHandle, int cellIndex, int faceIndex, int loopIndex, int pointIndex, out double x, out double y, out double z);
-        }
-
-        private static bool DecodeResult(IntPtr resultHandle, OcctCellComplexResult result)
-        {
-            int cellCount = NativeMethods.sam_occt_result_cell_count(resultHandle);
+            int cellCount = OcctNativeMethods.sam_occt_result_cell_count(resultHandle);
             if (cellCount <= 0)
             {
                 result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NO_CELLS", "Native OCCT result did not contain any cells.");
@@ -697,7 +557,7 @@ namespace SAM.Geometry.OCCT.Native
 
                 List<Face3D> face3Ds = faces.ConvertAll(x => x.Face3D);
                 Shell shell = new Shell(face3Ds);
-                double volume = NativeMethods.sam_occt_result_cell_volume(resultHandle, cellIndex);
+                double volume = OcctNativeMethods.sam_occt_result_cell_volume(resultHandle, cellIndex);
                 Point3D center = DecodeCellCenter(resultHandle, cellIndex);
                 result.AddCell(new OcctCell(shell, volume, null, faces, center));
             }
@@ -717,7 +577,7 @@ namespace SAM.Geometry.OCCT.Native
 
         private static Point3D DecodeCellCenter(IntPtr resultHandle, int cellIndex)
         {
-            int success = NativeMethods.sam_occt_result_cell_center(resultHandle, cellIndex, out double x, out double y, out double z);
+            int success = OcctNativeMethods.sam_occt_result_cell_center(resultHandle, cellIndex, out double x, out double y, out double z);
             if (success == 0 || double.IsNaN(x) || double.IsNaN(y) || double.IsNaN(z))
             {
                 return null;
@@ -728,13 +588,13 @@ namespace SAM.Geometry.OCCT.Native
 
         private static List<Triangle3D> DecodeTriangle3Ds(IntPtr resultHandle, int cellIndex)
         {
-            int faceCount = NativeMethods.sam_occt_result_cell_face_count(resultHandle, cellIndex);
+            int faceCount = OcctNativeMethods.sam_occt_result_cell_face_count(resultHandle, cellIndex);
             List<Triangle3D> triangle3Ds = new List<Triangle3D>();
 
             for (int faceIndex = 0; faceIndex < faceCount; faceIndex++)
             {
                 // Each triangulated face is a single loop of three points.
-                int pointCount = NativeMethods.sam_occt_result_loop_point_count(resultHandle, cellIndex, faceIndex, 0);
+                int pointCount = OcctNativeMethods.sam_occt_result_loop_point_count(resultHandle, cellIndex, faceIndex, 0);
                 if (pointCount < 3)
                 {
                     continue;
@@ -743,7 +603,7 @@ namespace SAM.Geometry.OCCT.Native
                 List<Point3D> points = new List<Point3D>();
                 for (int pointIndex = 0; pointIndex < 3; pointIndex++)
                 {
-                    if (NativeMethods.sam_occt_result_point(resultHandle, cellIndex, faceIndex, 0, pointIndex, out double x, out double y, out double z) != 0)
+                    if (OcctNativeMethods.sam_occt_result_point(resultHandle, cellIndex, faceIndex, 0, pointIndex, out double x, out double y, out double z) != 0)
                     {
                         points.Add(new Point3D(x, y, z));
                     }
@@ -769,7 +629,7 @@ namespace SAM.Geometry.OCCT.Native
 
         private static List<OcctCellFace> DecodeFaces(IntPtr resultHandle, int cellIndex, OcctCellComplexResult result)
         {
-            int faceCount = NativeMethods.sam_occt_result_cell_face_count(resultHandle, cellIndex);
+            int faceCount = OcctNativeMethods.sam_occt_result_cell_face_count(resultHandle, cellIndex);
             List<OcctCellFace> faces = new List<OcctCellFace>();
 
             for (int faceIndex = 0; faceIndex < faceCount; faceIndex++)
@@ -787,7 +647,7 @@ namespace SAM.Geometry.OCCT.Native
                     continue;
                 }
 
-                int topologyKey = NativeMethods.sam_occt_result_face_key(resultHandle, cellIndex, faceIndex);
+                int topologyKey = OcctNativeMethods.sam_occt_result_face_key(resultHandle, cellIndex, faceIndex);
                 faces.Add(new OcctCellFace(face3D, topologyKey));
             }
 
@@ -796,12 +656,12 @@ namespace SAM.Geometry.OCCT.Native
 
         private static List<IClosedPlanar3D> DecodeLoops(IntPtr resultHandle, int cellIndex, int faceIndex)
         {
-            int loopCount = NativeMethods.sam_occt_result_face_loop_count(resultHandle, cellIndex, faceIndex);
+            int loopCount = OcctNativeMethods.sam_occt_result_face_loop_count(resultHandle, cellIndex, faceIndex);
             List<IClosedPlanar3D> loops = new List<IClosedPlanar3D>();
 
             for (int loopIndex = 0; loopIndex < loopCount; loopIndex++)
             {
-                int pointCount = NativeMethods.sam_occt_result_loop_point_count(resultHandle, cellIndex, faceIndex, loopIndex);
+                int pointCount = OcctNativeMethods.sam_occt_result_loop_point_count(resultHandle, cellIndex, faceIndex, loopIndex);
                 if (pointCount < 3)
                 {
                     continue;
@@ -810,7 +670,7 @@ namespace SAM.Geometry.OCCT.Native
                 List<Point3D> points = new List<Point3D>();
                 for (int pointIndex = 0; pointIndex < pointCount; pointIndex++)
                 {
-                    int success = NativeMethods.sam_occt_result_point(resultHandle, cellIndex, faceIndex, loopIndex, pointIndex, out double x, out double y, out double z);
+                    int success = OcctNativeMethods.sam_occt_result_point(resultHandle, cellIndex, faceIndex, loopIndex, pointIndex, out double x, out double y, out double z);
                     if (success == 0)
                     {
                         continue;
