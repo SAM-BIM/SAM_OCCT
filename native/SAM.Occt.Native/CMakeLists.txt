@@ -51,6 +51,7 @@ endif()
 
 add_library(SAM.Occt.Native SHARED
     src/CellComplexBuilder.cpp
+    src/ShapeHandle.cpp
 )
 
 target_compile_definitions(SAM.Occt.Native PRIVATE SAM_OCCT_NATIVE_EXPORTS)

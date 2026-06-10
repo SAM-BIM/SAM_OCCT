@@ -17,6 +17,11 @@
 extern "C" {
 #endif
 
+/* ABI revision of this library. 1 = the original decode-and-free ABI (implicit,
+   never exported); 2 = adds this probe and the persistent sam_occt_shape handle
+   family. Managed callers probe this once to detect a stale native build. */
+SAM_OCCT_API int sam_occt_abi_version(void);
+
 SAM_OCCT_API int sam_occt_build_cell_complex(
     const double* coordinates,
     int point_count,
