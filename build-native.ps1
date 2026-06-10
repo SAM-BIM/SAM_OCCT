@@ -168,10 +168,15 @@ if (-not [string]::IsNullOrWhiteSpace($ThirdPartyRuntimeRoot)) {
         $thirdPartyRoot = $nestedThirdPartyRoot
     }
 
+    # Copy every third-party runtime DLL that ships with a bin\ folder, not just
+    # tbb/jemalloc. The Data Exchange + XCAF stack (issue #20) transitively pulls
+    # the OCCT visualization toolkits (TKV3d -> TKService), which need
+    # freetype.dll / FreeImage.dll - DLLs the core modeling stack never required,
+    # so a "msvc/tbb/jemalloc only" copy left TKDESTEP.dll unloadable (status 64).
     $thirdPartyRuntimePatterns = @(
         "msvc-*\*.dll",
-        "tbb-*\bin\*.dll",
-        "jemalloc-*\bin\*.dll"
+        "*\bin\*.dll",
+        "*\bin\vc14\*.dll"
     )
 
     foreach ($pattern in $thirdPartyRuntimePatterns) {
