@@ -18,7 +18,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("b772f03a-b4ff-42e3-ab7c-4acd08162de2");
 
-        public override string LatestComponentVersion => "0.1.0";
+        public override string LatestComponentVersion => "0.1.1";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -37,7 +37,11 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 face3Ds.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(face3Ds, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number elevations = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "elevations_", NickName = "elevations_", Description = "Optional floor/roof elevations. When supplied they override the elevations derived from the wall bottom/top levels.", Access = GH_ParamAccess.list, Optional = true };
+                global::Grasshopper.Kernel.Parameters.Param_String roofMode = new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "roofMode_", NickName = "roofMode_", Description = "How to cap the walls on top: Flat (horizontal floors/roofs at every wall level, the default) or Sloped (horizontal floors, but one roof that follows the wall tops - planar when the tops are coplanar, triangulated for gable/hip/stepped tops).", Access = GH_ParamAccess.item };
+                roofMode.SetPersistentData(OcctRoofMode.Flat.ToString());
+                result.Add(new GH_SAMParam(roofMode, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number elevations = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "elevations_", NickName = "elevations_", Description = "Optional floor/roof elevations. When supplied they override the auto-detected levels (in Sloped mode they set the floor levels; the roof still follows the wall tops).", Access = GH_ParamAccess.list, Optional = true };
                 elevations.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(elevations, ParamVisibility.Voluntary));
 
@@ -99,6 +103,18 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 return;
             }
 
+            OcctRoofMode roofMode = OcctRoofMode.Flat;
+            string roofModeText = null;
+            index = Params.IndexOfInputParam("roofMode_");
+            if (index != -1 && dataAccess.GetData(index, ref roofModeText) && !string.IsNullOrWhiteSpace(roofModeText))
+            {
+                if (!Enum.TryParse(roofModeText.Trim(), true, out roofMode))
+                {
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, string.Format("Unrecognised roofMode_ '{0}'. Using {1}.", roofModeText, OcctRoofMode.Flat));
+                    roofMode = OcctRoofMode.Flat;
+                }
+            }
+
             List<double> elevations = new List<double>();
             index = Params.IndexOfInputParam("elevations_");
             if (index != -1)
@@ -142,7 +158,10 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 out OcctCellComplexResult result,
                 elevations == null || elevations.Count == 0 ? null : elevations,
                 snapTolerance,
-                new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance });
+                new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance },
+                Tolerance.Angle,
+                Tolerance.MacroDistance,
+                roofMode);
 
             List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList();
 

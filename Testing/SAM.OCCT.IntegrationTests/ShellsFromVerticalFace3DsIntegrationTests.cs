@@ -163,6 +163,95 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         [SkippableFact]
+        public void ShellsFromVerticalFace3Ds_SlopedModeEqualWalls_ProducesOnePlanarFlatRoof()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - four equal-height walls; in Sloped mode the coplanar (here flat)
+            // wall tops collapse to a single planar roof, so the result matches Flat mode.
+            List<Face3D> walls = CreateRoomWalls(0, 0, 1, 1, 0, 2);
+
+            // Act
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(walls, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result, roofMode: OcctRoofMode.Sloped);
+
+            // Assert
+            Assert.True(result.NativeAvailable);
+            Assert.True(result.Success);
+            Assert.NotNull(shells);
+            Assert.Single(shells);
+            Assert.Equal(2.0, result.Cells[0].Volume, 2);
+            Assert.NotNull(horizontalFace3Ds);
+            Assert.Equal(2, horizontalFace3Ds.Count);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_ROOF_PLANAR");
+        }
+
+        [SkippableFact]
+        public void ShellsFromVerticalFace3Ds_SlopedModeMonoPitch_ProducesOneTiltedPlanarRoof()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - a unit footprint whose four wall tops all lie on the plane
+            // z = 2 + y (a mono-pitch roof). The two y-walls are rectangles at z = 2 and
+            // z = 3; the two x-walls are trapezoids sloping between them.
+            List<Face3D> walls = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(new Point3D(0, 0, 0), new Point3D(1, 0, 0), new Point3D(1, 0, 2), new Point3D(0, 0, 2)), // y = 0, top z = 2
+                TestGeometry.CreatePlanarFace(new Point3D(0, 1, 0), new Point3D(1, 1, 0), new Point3D(1, 1, 3), new Point3D(0, 1, 3)), // y = 1, top z = 3
+                TestGeometry.CreatePlanarFace(new Point3D(0, 0, 0), new Point3D(0, 1, 0), new Point3D(0, 1, 3), new Point3D(0, 0, 2)), // x = 0 trapezoid
+                TestGeometry.CreatePlanarFace(new Point3D(1, 0, 0), new Point3D(1, 1, 0), new Point3D(1, 1, 3), new Point3D(1, 0, 2))  // x = 1 trapezoid
+            };
+
+            // Act
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(walls, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result, roofMode: OcctRoofMode.Sloped);
+
+            // Assert
+            Assert.True(result.NativeAvailable);
+            Assert.True(result.Success);
+            Assert.NotNull(shells);
+            Assert.Single(shells);
+            // Volume under z = 2 + y over the unit square is 2 + 0.5 = 2.5.
+            Assert.Equal(2.5, result.Cells[0].Volume, 2);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_ROOF_PLANAR");
+            // One floor (horizontal) plus one tilted roof face.
+            Assert.NotNull(horizontalFace3Ds);
+            Assert.Equal(2, horizontalFace3Ds.Count);
+            Assert.Contains(horizontalFace3Ds, face3D => System.Math.Abs(face3D.GetPlane().Normal.Z) < 0.99);
+        }
+
+        [SkippableFact]
+        public void ShellsFromVerticalFace3Ds_SlopedModeGable_ProducesTriangulatedRoof()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - a 2 x 1 footprint with a gable: the two long eaves walls top out
+            // at z = 2, the two short end walls are pentagons peaking at a ridge z = 3.
+            // The wall tops are not coplanar, so the roof is triangulated.
+            List<Face3D> walls = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 2), new Point3D(0, 0, 2)), // eaves y = 0
+                TestGeometry.CreatePlanarFace(new Point3D(0, 1, 0), new Point3D(2, 1, 0), new Point3D(2, 1, 2), new Point3D(0, 1, 2)), // eaves y = 1
+                TestGeometry.CreatePlanarFace(new Point3D(0, 0, 0), new Point3D(0, 1, 0), new Point3D(0, 1, 2), new Point3D(0, 0.5, 3), new Point3D(0, 0, 2)), // gable end x = 0
+                TestGeometry.CreatePlanarFace(new Point3D(2, 0, 0), new Point3D(2, 1, 0), new Point3D(2, 1, 2), new Point3D(2, 0.5, 3), new Point3D(2, 0, 2))  // gable end x = 2
+            };
+
+            // Act
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(walls, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result, roofMode: OcctRoofMode.Sloped);
+
+            // Assert
+            Assert.True(result.NativeAvailable);
+            Assert.True(result.Success);
+            Assert.NotNull(shells);
+            Assert.Single(shells);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_ROOF_TRIANGULATED");
+            // The ridge lifts the volume above the flat-eaves box (2 x 1 x 2 = 4).
+            Assert.True(result.Cells[0].Volume > 4.0);
+            Assert.True(result.Cells[0].Volume <= 6.0);
+            // At least one generated face is a tilted roof slope.
+            Assert.NotNull(horizontalFace3Ds);
+            Assert.Contains(horizontalFace3Ds, face3D => System.Math.Abs(face3D.GetPlane().Normal.Z) < 0.99);
+        }
+
+        [SkippableFact]
         public void ShellsFromVerticalFace3Ds_OpenWalls_ReturnsNoShells()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");

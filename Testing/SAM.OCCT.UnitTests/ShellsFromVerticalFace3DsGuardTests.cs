@@ -86,6 +86,23 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void ShellsFromVerticalFace3Ds_SlopedInsufficientWallTops_ReturnsNullWithRoofFailedDiagnostic()
+        {
+            // Arrange - one wall cannot define a roof (its top is a single edge, so the
+            // wall-top envelope has fewer than three plan locations). Sloped mode then
+            // returns before any native build.
+            List<Face3D> face3Ds = new List<Face3D> { CreateWallFace(0, 0, 1, 0, 0, 2) };
+
+            // Act
+            List<Shell> shells = GeometryCreate.ShellsFromVerticalFace3Ds(face3Ds, out List<Face3D> horizontalFace3Ds, out OcctCellComplexResult result, roofMode: OcctRoofMode.Sloped);
+
+            // Assert
+            Assert.Null(shells);
+            Assert.Null(horizontalFace3Ds);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_VERTICAL_SHELLS_ROOF_FAILED" && x.Severity == OcctDiagnosticSeverity.Error);
+        }
+
+        [Fact]
         public void ClusteredElevations_WallsWithNearLevels_MergesWithinSnapTolerance()
         {
             // Arrange - two walls sharing the bottom; tops 0.5 * MacroDistance apart.

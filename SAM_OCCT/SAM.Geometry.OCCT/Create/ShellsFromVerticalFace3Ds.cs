@@ -24,11 +24,20 @@ namespace SAM.Geometry.OCCT
         /// plan-enclosed voids (courtyards) become shells, matching the managed SAM
         /// CreateShells behaviour. Walls of different heights produce stacked cells
         /// per level - merge them downstream with MergeSmallShells/ShellsUnion.
-        /// <paramref name="horizontalFace3Ds"/> returns the newly created horizontal
-        /// floor/roof faces, deduplicated by OCCT topology key so an interior floor
-        /// shared by two cells appears once. Non-planar input is not supported by the
-        /// native make_face - triangulate such faces first (SAMOCCT.TriangulateSurface).
-        /// Returns null on failure - inspect result diagnostics (SAM_OCCT_VERTICAL_SHELLS_*).
+        /// <para>
+        /// With <paramref name="roofMode"/> = <see cref="OcctRoofMode.Sloped"/> the
+        /// top is capped by a single roof that follows the wall tops instead of a flat
+        /// level: when the wall tops are coplanar (flat, mono-pitch, any single tilt)
+        /// the roof is one planar face; when they are not (gable, hip, stepped tops)
+        /// the wall-top envelope is Delaunay-triangulated. Floors stay horizontal at
+        /// the clustered wall bottom elevations.
+        /// </para>
+        /// <paramref name="horizontalFace3Ds"/> returns the newly created floor/roof
+        /// faces (horizontal floors plus the generated roof), deduplicated by OCCT
+        /// topology key so an interior floor shared by two cells appears once.
+        /// Non-planar input is not supported by the native make_face - triangulate
+        /// such faces first (SAMOCCT.TriangulateSurface). Returns null on failure -
+        /// inspect result diagnostics (SAM_OCCT_VERTICAL_SHELLS_*).
         /// </summary>
         public static List<Shell> ShellsFromVerticalFace3Ds(
             IEnumerable<Face3D> face3Ds,
@@ -38,7 +47,8 @@ namespace SAM.Geometry.OCCT
             double snapTolerance = Tolerance.MacroDistance,
             OcctBuildOptions options = null,
             double angleTolerance = Tolerance.Angle,
-            double distanceTolerance = Tolerance.MacroDistance)
+            double distanceTolerance = Tolerance.MacroDistance,
+            OcctRoofMode roofMode = OcctRoofMode.Flat)
         {
             horizontalFace3Ds = null;
             result = new OcctCellComplexResult();
@@ -51,10 +61,10 @@ namespace SAM.Geometry.OCCT
             }
 
             // Non-vertical faces are kept - a sloped face still bounds cells and skipping
-            // it would silently open volumes - but flagged, and remembered so their planes
-            // are not reported as newly created horizontal faces.
+            // it would silently open volumes - but flagged, and all wall planes are
+            // remembered so the faces they produce are not reported as newly created.
             double maxNormalZ = Math.Sin(angleTolerance);
-            List<Plane> planes_NonVertical = new List<Plane>();
+            List<Plane> planes_Wall = new List<Plane>();
             for (int i = 0; i < face3Ds_Wall.Count; i++)
             {
                 Plane plane = face3Ds_Wall[i].GetPlane();
@@ -64,21 +74,13 @@ namespace SAM.Geometry.OCCT
                     continue;
                 }
 
+                planes_Wall.Add(plane);
+
                 if (Math.Abs(plane.Normal.Z) > maxNormalZ)
                 {
-                    planes_NonVertical.Add(plane);
                     result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_VERTICAL_SHELLS_NON_VERTICAL_FACE", string.Format("Face3D is not vertical (normal Z = {0:0.###}). It is kept as a boundary but no floor/roof level is derived from it.", plane.Normal.Z), i);
                 }
             }
-
-            List<double> elevations_Temp = elevations != null ? Query.ClusteredElevations(elevations, snapTolerance) : Query.ClusteredElevations(face3Ds_Wall, snapTolerance);
-            if (elevations_Temp == null || elevations_Temp.Count < 2)
-            {
-                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_VERTICAL_SHELLS_INSUFFICIENT_ELEVATIONS", "At least two distinct elevations are required to cap the walls with floors and roofs.");
-                return null;
-            }
-
-            result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_ELEVATIONS", string.Format("Creating horizontal patches at {0} elevation(s): {1}.", elevations_Temp.Count, string.Join(", ", elevations_Temp.Select(x => x.ToString("0.###")))));
 
             BoundingBox3D boundingBox3D = new BoundingBox3D(face3Ds_Wall.ConvertAll(x => x.GetBoundingBox()));
             if (boundingBox3D == null || !boundingBox3D.IsValid())
@@ -92,23 +94,49 @@ namespace SAM.Geometry.OCCT
             // Patch must overhang the walls so MakerVolume cuts cleanly through them.
             double margin = Math.Max(1.0, boundingBox3D.Min.Distance(boundingBox3D.Max) * 0.1);
 
-            List<Point3D> cornerPoint3Ds = boundingBox3D.GetPoints();
             List<Face3D> allFace3Ds = new List<Face3D>(face3Ds_Wall);
-            foreach (double elevation in elevations_Temp)
+
+            if (roofMode == OcctRoofMode.Sloped)
             {
-                Plane plane = new Plane(new Point3D(0, 0, elevation), new Vector3D(0, 0, 1));
-
-                List<Point2D> point2Ds = cornerPoint3Ds?.ConvertAll(x => plane.Convert(x)).FindAll(x => x != null);
-                if (point2Ds == null || point2Ds.Count == 0)
+                // Floors: flat patches at the clustered wall bottom elevations (or the
+                // supplied override). The top is left to the wall-top roof below.
+                List<double> floorElevations = elevations != null
+                    ? Query.ClusteredElevations(elevations, snapTolerance)
+                    : Query.ClusteredElevations(face3Ds_Wall.ConvertAll(x => x.GetBoundingBox().Min.Z), snapTolerance);
+                if (floorElevations == null || floorElevations.Count == 0)
                 {
-                    continue;
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_VERTICAL_SHELLS_INSUFFICIENT_ELEVATIONS", "At least one floor elevation is required to cap the walls.");
+                    return null;
                 }
 
-                Face3D patchFace3D = new Face3D(plane, new Rectangle2D(new BoundingBox2D(point2Ds, margin)));
-                if (patchFace3D != null)
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_ELEVATIONS", string.Format("Creating {0} floor level(s) at {1} and a sloped roof from the wall tops.", floorElevations.Count, string.Join(", ", floorElevations.Select(x => x.ToString("0.###")))));
+
+                allFace3Ds.AddRange(HorizontalPatches(floorElevations, boundingBox3D, margin));
+
+                List<Face3D> roofFace3Ds = RoofFace3Ds(face3Ds_Wall, boundingBox3D, margin, snapTolerance, distanceTolerance, maxNormalZ, options.Tolerance, out string roofKind, out int roofCount);
+                if (roofFace3Ds == null || roofFace3Ds.Count == 0)
                 {
-                    allFace3Ds.Add(patchFace3D);
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_VERTICAL_SHELLS_ROOF_FAILED", "Could not derive a roof surface from the wall tops (need at least three non-collinear top points).");
+                    return null;
                 }
+
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, roofKind == "planar" ? "SAM_OCCT_VERTICAL_SHELLS_ROOF_PLANAR" : "SAM_OCCT_VERTICAL_SHELLS_ROOF_TRIANGULATED", roofKind == "planar" ? "Wall tops are coplanar; roof created as a single planar (pitched) face." : string.Format("Wall tops are not coplanar; roof triangulated into {0} face(s) from the wall-top envelope.", roofCount));
+
+                allFace3Ds.AddRange(roofFace3Ds);
+            }
+            else
+            {
+                // Flat: a horizontal patch at every clustered bottom/top elevation.
+                List<double> elevations_Temp = elevations != null ? Query.ClusteredElevations(elevations, snapTolerance) : Query.ClusteredElevations(face3Ds_Wall, snapTolerance);
+                if (elevations_Temp == null || elevations_Temp.Count < 2)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_VERTICAL_SHELLS_INSUFFICIENT_ELEVATIONS", "At least two distinct elevations are required to cap the walls with floors and roofs.");
+                    return null;
+                }
+
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_ELEVATIONS", string.Format("Creating horizontal patches at {0} elevation(s): {1}.", elevations_Temp.Count, string.Join(", ", elevations_Temp.Select(x => x.ToString("0.###")))));
+
+                allFace3Ds.AddRange(HorizontalPatches(elevations_Temp, boundingBox3D, margin));
             }
 
             if (!Native.OcctCellComplexBuilder.TryBuild(allFace3Ds, options, result))
@@ -121,10 +149,11 @@ namespace SAM.Geometry.OCCT
                 return null;
             }
 
-            // Horizontal cell faces are the generated floors/roofs - input walls are
-            // vertical, so they are all new. Interior floors are shared by two cells
-            // and deduped by the OCCT topology key. Faces lying on the plane of a
-            // kept non-vertical input are excluded - those came from the user.
+            // The generated floor/roof faces are the cell faces that did not come from
+            // an input wall. Walls are vertical (the planar floors/roofs never coincide
+            // with them) and any kept non-vertical input is excluded the same way, so a
+            // sloped roof that aligns with a tilted wall is not double-reported. Interior
+            // floors shared by two cells are deduped by the OCCT topology key.
             horizontalFace3Ds = new List<Face3D>();
             HashSet<int> topologyKeys = new HashSet<int>();
             double minDotProduct = Math.Cos(angleTolerance);
@@ -144,29 +173,14 @@ namespace SAM.Geometry.OCCT
                         continue;
                     }
 
-                    if (Math.Abs(facePlane.Normal.Z) < minDotProduct)
+                    // Flat mode keeps only horizontal faces (a cheap guard against
+                    // stray native slivers); sloped mode keeps tilted roofs too.
+                    if (roofMode != OcctRoofMode.Sloped && Math.Abs(facePlane.Normal.Z) < minDotProduct)
                     {
                         continue;
                     }
 
-                    bool fromInput = false;
-                    foreach (Plane plane_NonVertical in planes_NonVertical)
-                    {
-                        if (Math.Abs(facePlane.Normal.DotProduct(plane_NonVertical.Normal)) < minDotProduct)
-                        {
-                            continue;
-                        }
-
-                        if (plane_NonVertical.Distance(facePlane.Origin) > distanceTolerance)
-                        {
-                            continue;
-                        }
-
-                        fromInput = true;
-                        break;
-                    }
-
-                    if (fromInput)
+                    if (CoplanarWithAny(facePlane, planes_Wall, minDotProduct, distanceTolerance))
                     {
                         continue;
                     }
@@ -180,8 +194,229 @@ namespace SAM.Geometry.OCCT
                 }
             }
 
-            result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_BUILD_SUCCESS", string.Format("OCCT created {0} shell(s) and {1} horizontal floor/roof face(s) from {2} vertical face(s).", result.Cells.Count, horizontalFace3Ds.Count, face3Ds_Wall.Count));
+            result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_BUILD_SUCCESS", string.Format("OCCT created {0} shell(s) and {1} floor/roof face(s) from {2} vertical face(s).", result.Cells.Count, horizontalFace3Ds.Count, face3Ds_Wall.Count));
             return result.Shells?.ToList();
+        }
+
+        /// <summary>Padded horizontal rectangular patches (one per elevation) covering the footprint.</summary>
+        private static List<Face3D> HorizontalPatches(IEnumerable<double> elevations, BoundingBox3D boundingBox3D, double margin)
+        {
+            List<Face3D> result = new List<Face3D>();
+            List<Point3D> cornerPoint3Ds = boundingBox3D.GetPoints();
+            foreach (double elevation in elevations)
+            {
+                Plane plane = new Plane(new Point3D(0, 0, elevation), new Vector3D(0, 0, 1));
+
+                List<Point2D> point2Ds = cornerPoint3Ds?.ConvertAll(x => plane.Convert(x)).FindAll(x => x != null);
+                if (point2Ds == null || point2Ds.Count == 0)
+                {
+                    continue;
+                }
+
+                Face3D patchFace3D = new Face3D(plane, new Rectangle2D(new BoundingBox2D(point2Ds, margin)));
+                if (patchFace3D != null)
+                {
+                    result.Add(patchFace3D);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Roof faces following the wall tops. The upper envelope of the wall boundary
+        /// vertices (the highest Z per plan location) is the roof. If those points are
+        /// coplanar the roof is a single padded planar patch on the fitted plane (flat
+        /// or any single tilt); otherwise the envelope is Delaunay-triangulated in plan
+        /// and each triangle lifted back to its true vertex heights (gable/hip/stepped).
+        /// MakerVolume trims either form to each room, like the flat patch.
+        /// </summary>
+        private static List<Face3D> RoofFace3Ds(List<Face3D> face3Ds_Wall, BoundingBox3D boundingBox3D, double margin, double snapTolerance, double distanceTolerance, double maxNormalZ, double tolerance, out string roofKind, out int roofCount)
+        {
+            roofKind = null;
+            roofCount = 0;
+
+            List<Point3D> envelope = WallTopEnvelope(face3Ds_Wall, snapTolerance);
+            if (envelope == null || envelope.Count < 3)
+            {
+                return null;
+            }
+
+            // Triangulate the wall-top envelope in plan; each Delaunay vertex maps back
+            // to a real (true-height) envelope point, so lifting gives the roof terrain.
+            Plane planeXY = new Plane(new Point3D(0, 0, 0), new Vector3D(0, 0, 1));
+            List<Point2D> sites = envelope.ConvertAll(x => planeXY.Convert(x));
+            List<Triangle2D> triangle2Ds = SAM.Geometry.Planar.Query.Triangulate(sites, tolerance);
+            if (triangle2Ds == null || triangle2Ds.Count == 0)
+            {
+                return null;
+            }
+
+            List<Triangle3D> triangle3Ds = new List<Triangle3D>();
+            foreach (Triangle2D triangle2D in triangle2Ds)
+            {
+                List<Point2D> point2Ds = triangle2D?.GetPoints();
+                if (point2Ds == null || point2Ds.Count != 3)
+                {
+                    continue;
+                }
+
+                triangle3Ds.Add(new Triangle3D(
+                    envelope[NearestSite(sites, point2Ds[0])],
+                    envelope[NearestSite(sites, point2Ds[1])],
+                    envelope[NearestSite(sites, point2Ds[2])]));
+            }
+
+            if (triangle3Ds.Count == 0)
+            {
+                return null;
+            }
+
+            // Coplanar wall tops (flat, mono-pitch, any single tilt): if a real triangle's
+            // non-vertical plane contains every envelope point, the roof is that one plane.
+            // The plane comes from a Delaunay triangle, so its normal is order-independent
+            // and well-defined (unlike a polygon normal over arbitrarily ordered points).
+            foreach (Triangle3D triangle3D in triangle3Ds)
+            {
+                Plane plane = triangle3D.GetPlane();
+                if (plane == null || Math.Abs(plane.Normal.Z) <= maxNormalZ)
+                {
+                    continue;
+                }
+
+                if (!envelope.TrueForAll(x => Math.Abs(plane.Distance(x)) <= distanceTolerance))
+                {
+                    continue;
+                }
+
+                List<Point2D> point2Ds = boundingBox3D.GetPoints().ConvertAll(x => plane.Convert(x)).FindAll(x => x != null);
+                if (point2Ds != null && point2Ds.Count != 0)
+                {
+                    Face3D patch = new Face3D(plane, new Rectangle2D(new BoundingBox2D(point2Ds, margin)));
+                    if (patch != null)
+                    {
+                        roofKind = "planar";
+                        roofCount = 1;
+                        return new List<Face3D> { patch };
+                    }
+                }
+
+                break;
+            }
+
+            // Non-coplanar tops (gable, hip, stepped): emit the lifted triangles.
+            List<Face3D> result = new List<Face3D>();
+            foreach (Triangle3D triangle3D in triangle3Ds)
+            {
+                Face3D face3D = new Face3D(triangle3D);
+                if (face3D != null)
+                {
+                    result.Add(face3D);
+                }
+            }
+
+            if (result.Count == 0)
+            {
+                return null;
+            }
+
+            roofKind = "triangulated";
+            roofCount = result.Count;
+            return result;
+        }
+
+        /// <summary>Upper envelope of the wall boundary vertices: the highest Z at each plan location (clustered in XY by <paramref name="snapTolerance"/>).</summary>
+        private static List<Point3D> WallTopEnvelope(List<Face3D> face3Ds_Wall, double snapTolerance)
+        {
+            List<Point3D> envelope = new List<Point3D>();
+            foreach (Face3D face3D in face3Ds_Wall)
+            {
+                List<Point3D> point3Ds = (face3D?.GetExternalEdge3D() as ISegmentable3D)?.GetPoints();
+                if (point3Ds == null)
+                {
+                    continue;
+                }
+
+                foreach (Point3D point3D in point3Ds)
+                {
+                    if (point3D == null)
+                    {
+                        continue;
+                    }
+
+                    bool merged = false;
+                    for (int i = 0; i < envelope.Count; i++)
+                    {
+                        double dx = envelope[i].X - point3D.X;
+                        double dy = envelope[i].Y - point3D.Y;
+                        if (Math.Sqrt((dx * dx) + (dy * dy)) > snapTolerance)
+                        {
+                            continue;
+                        }
+
+                        if (point3D.Z > envelope[i].Z)
+                        {
+                            envelope[i] = new Point3D(envelope[i].X, envelope[i].Y, point3D.Z);
+                        }
+
+                        merged = true;
+                        break;
+                    }
+
+                    if (!merged)
+                    {
+                        envelope.Add(point3D);
+                    }
+                }
+            }
+
+            return envelope;
+        }
+
+        /// <summary>Index of the site nearest to <paramref name="point2D"/> (the source envelope point of a Delaunay vertex).</summary>
+        private static int NearestSite(List<Point2D> sites, Point2D point2D)
+        {
+            int index = 0;
+            double distanceSquared = double.MaxValue;
+            for (int i = 0; i < sites.Count; i++)
+            {
+                double dx = sites[i].X - point2D.X;
+                double dy = sites[i].Y - point2D.Y;
+                double d = (dx * dx) + (dy * dy);
+                if (d < distanceSquared)
+                {
+                    distanceSquared = d;
+                    index = i;
+                }
+            }
+
+            return index;
+        }
+
+        /// <summary>True when <paramref name="plane"/> is parallel to and coincident with any plane in <paramref name="planes"/>.</summary>
+        private static bool CoplanarWithAny(Plane plane, List<Plane> planes, double minDotProduct, double distanceTolerance)
+        {
+            foreach (Plane plane_Other in planes)
+            {
+                if (plane_Other == null)
+                {
+                    continue;
+                }
+
+                if (Math.Abs(plane.Normal.DotProduct(plane_Other.Normal)) < minDotProduct)
+                {
+                    continue;
+                }
+
+                if (plane_Other.Distance(plane.Origin) > distanceTolerance)
+                {
+                    continue;
+                }
+
+                return true;
+            }
+
+            return false;
         }
     }
 }
