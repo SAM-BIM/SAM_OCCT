@@ -138,9 +138,14 @@ namespace SAM.Geometry.OCCT
                     return null;
                 }
 
-                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_ELEVATIONS", string.Format("Creating floor level(s) at {0} and a sloped roof from the wall tops.", string.Join(", ", floorElevations.Select(x => x.ToString("0.###")))));
+                List<double> floorElevations_Generated = UncappedElevations(floorElevations, caps, snapTolerance);
+                int floorElevations_Suppressed = floorElevations.Count - floorElevations_Generated.Count;
+                string floorElevations_Note = floorElevations_Suppressed > 0 ? string.Format(" {0} detected level(s) already covered by supplied caps were skipped.", floorElevations_Suppressed) : string.Empty;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_ELEVATIONS", floorElevations_Generated.Count == 0
+                    ? string.Format("All floor levels are already covered by supplied caps; generating only a sloped roof from the wall tops.{0}", floorElevations_Note)
+                    : string.Format("Generating floor level(s) at {0} and a sloped roof from the wall tops.{1}", string.Join(", ", floorElevations_Generated.Select(x => x.ToString("0.###"))), floorElevations_Note));
 
-                allFace3Ds.AddRange(HorizontalPatches(UncappedElevations(floorElevations, caps, snapTolerance), boundingBox3D, margin));
+                allFace3Ds.AddRange(HorizontalPatches(floorElevations_Generated, boundingBox3D, margin));
 
                 // Auto-roof from the wall tops, unless a user cap already covers them.
                 double wallTopElevation = walls.Count == 0 ? boundingBox3D.Max.Z : walls.Max(x => x.GetBoundingBox().Max.Z);
@@ -173,9 +178,12 @@ namespace SAM.Geometry.OCCT
                     return null;
                 }
 
-                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_ELEVATIONS", string.Format("Creating horizontal patches at {0} elevation(s): {1}.", elevations_Temp.Count, string.Join(", ", elevations_Temp.Select(x => x.ToString("0.###")))));
+                List<double> elevations_Generated = UncappedElevations(elevations_Temp, caps, snapTolerance);
+                int elevations_Suppressed = elevations_Temp.Count - elevations_Generated.Count;
+                string elevations_Note = elevations_Suppressed > 0 ? string.Format(" {0} detected level(s) already covered by supplied caps were skipped.", elevations_Suppressed) : string.Empty;
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_VERTICAL_SHELLS_ELEVATIONS", string.Format("Generating horizontal patches at {0} elevation(s){1}.{2}", elevations_Generated.Count, elevations_Generated.Count == 0 ? string.Empty : ": " + string.Join(", ", elevations_Generated.Select(x => x.ToString("0.###"))), elevations_Note));
 
-                allFace3Ds.AddRange(HorizontalPatches(UncappedElevations(elevations_Temp, caps, snapTolerance), boundingBox3D, margin));
+                allFace3Ds.AddRange(HorizontalPatches(elevations_Generated, boundingBox3D, margin));
             }
 
             bool built = Native.OcctCellComplexBuilder.TryBuild(allFace3Ds, options, result);
