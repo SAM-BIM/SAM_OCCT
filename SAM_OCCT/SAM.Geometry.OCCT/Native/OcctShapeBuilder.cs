@@ -144,6 +144,123 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
+        internal enum ShapeOperation
+        {
+            Union,
+            Difference,
+            Intersection,
+            Repair
+        }
+
+        public static bool TryOperate(ShapeOperation operation, OcctTopology topology, OcctTopology secondTopology, OcctBuildOptions options, double minArea, OcctCellComplexResult result, out OcctTopology output)
+        {
+            output = null;
+
+            if (topology == null || topology.IsInvalid || topology.IsClosed)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "The OCCT topology handle is null, invalid or disposed.");
+                return false;
+            }
+
+            bool requiresSecond = operation == ShapeOperation.Difference || operation == ShapeOperation.Intersection;
+            if (requiresSecond && (secondTopology == null || secondTopology.IsInvalid || secondTopology.IsClosed))
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "The second OCCT topology handle is null, invalid or disposed.");
+                return false;
+            }
+
+            try
+            {
+                int status;
+                OcctTopology output_Temp;
+                int runParallel = options.RunParallel ? 1 : 0;
+                switch (operation)
+                {
+                    case ShapeOperation.Union:
+                        status = OcctNativeMethods.sam_occt_shape_union(topology, options.FuzzyTolerance, runParallel, out output_Temp);
+                        break;
+
+                    case ShapeOperation.Difference:
+                        status = OcctNativeMethods.sam_occt_shape_difference(topology, secondTopology, options.FuzzyTolerance, runParallel, out output_Temp);
+                        break;
+
+                    case ShapeOperation.Intersection:
+                        status = OcctNativeMethods.sam_occt_shape_intersection(topology, secondTopology, options.FuzzyTolerance, runParallel, out output_Temp);
+                        break;
+
+                    case ShapeOperation.Repair:
+                        status = OcctNativeMethods.sam_occt_shape_repair(topology, options.FuzzyTolerance, runParallel, minArea, out output_Temp);
+                        break;
+
+                    default:
+                        return false;
+                }
+
+                result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                return HandleCreateStatus(status, output_Temp, result, out output);
+            }
+            catch (DllNotFoundException exception)
+            {
+                return HandleNativeMissing(exception, result);
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                return HandleEntryPointMissing(exception, result);
+            }
+            catch (ObjectDisposedException)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "An OCCT topology handle was disposed while in use.");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Shape-handle equivalent of the legacy shell operations, used when
+        /// OcctBuildOptions.RetainTopology is set: create the input topology
+        /// (per-shell solids), run the operation natively, decode into the
+        /// result and attach the retained output handle (owned by the result).
+        /// </summary>
+        public static bool TryOperateRetained(ShapeOperation operation, IEnumerable<Shell> shells, IEnumerable<Shell> secondShells, OcctBuildOptions options, double minArea, OcctCellComplexResult result)
+        {
+            if (!TryCreateTopology(shells, options, result, out OcctTopology input))
+            {
+                return false;
+            }
+
+            OcctTopology secondInput = null;
+            OcctTopology output = null;
+            try
+            {
+                bool requiresSecond = operation == ShapeOperation.Difference || operation == ShapeOperation.Intersection;
+                if (requiresSecond && !TryCreateTopology(secondShells, options, result, out secondInput))
+                {
+                    return false;
+                }
+
+                if (!TryOperate(operation, input, secondInput, options, minArea, result, out output))
+                {
+                    return false;
+                }
+
+                if (!TryDecode(output, options, result))
+                {
+                    return false;
+                }
+
+                result.Topology = output;
+                output = null;
+                return true;
+            }
+            finally
+            {
+                input.Dispose();
+                secondInput?.Dispose();
+                output?.Dispose();
+            }
+        }
+
         private static bool HandleCreateStatus(int status, OcctTopology topology_Temp, OcctCellComplexResult result, out OcctTopology topology)
         {
             topology = null;

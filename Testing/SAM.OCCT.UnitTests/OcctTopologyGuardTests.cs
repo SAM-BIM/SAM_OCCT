@@ -55,5 +55,75 @@ namespace SAM.OCCT.UnitTests
             Assert.False(result.Success);
             Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_TOPOLOGY_DISPOSED");
         }
+
+        [Fact]
+        public void TopologyUnion_NullTopology_ReturnsNullWithDisposedDiagnostic()
+        {
+            // Act
+            OcctTopology output = GeometryQuery.TopologyUnion(null, out OcctCellComplexResult result);
+
+            // Assert
+            Assert.Null(output);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_TOPOLOGY_DISPOSED");
+        }
+
+        [Fact]
+        public void TopologyDifference_NullTarget_ReturnsNullWithDisposedDiagnostic()
+        {
+            // Act
+            OcctTopology output = GeometryQuery.TopologyDifference(null, null, out OcctCellComplexResult result);
+
+            // Assert
+            Assert.Null(output);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_TOPOLOGY_DISPOSED");
+        }
+
+        [Fact]
+        public void TopologyIntersection_NullTarget_ReturnsNullWithDisposedDiagnostic()
+        {
+            // Act
+            OcctTopology output = GeometryQuery.TopologyIntersection(null, null, out OcctCellComplexResult result);
+
+            // Assert
+            Assert.Null(output);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_TOPOLOGY_DISPOSED");
+        }
+
+        [Fact]
+        public void TopologyRepair_NullTopology_ReturnsNullWithDisposedDiagnostic()
+        {
+            // Act
+            OcctTopology output = GeometryQuery.TopologyRepair(null, out OcctCellComplexResult result);
+
+            // Assert
+            Assert.Null(output);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_TOPOLOGY_DISPOSED");
+        }
+
+        [Fact]
+        public void OcctBuildOptions_CopyConstructor_CopiesRetainTopology()
+        {
+            // Arrange
+            SAM.Core.OCCT.OcctBuildOptions options = new SAM.Core.OCCT.OcctBuildOptions { RetainTopology = true };
+
+            // Act
+            SAM.Core.OCCT.OcctBuildOptions copy = new SAM.Core.OCCT.OcctBuildOptions(options);
+
+            // Assert
+            Assert.True(copy.RetainTopology);
+        }
+
+        [Fact]
+        public void Result_Dispose_NoTopology_DoesNotThrow()
+        {
+            // Arrange
+            OcctCellComplexResult result = new OcctCellComplexResult();
+
+            // Act + Assert - legacy results without a retained topology are
+            // safely disposable (and double-disposable).
+            result.Dispose();
+            result.Dispose();
+            Assert.Null(result.Topology);
+        }
     }
 }

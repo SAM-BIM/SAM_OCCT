@@ -80,6 +80,51 @@ namespace SAM.Geometry.OCCT.Native
             out OcctTopology shapeHandle);
 
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_union(
+            OcctTopology shapeHandle,
+            double fuzzyTolerance,
+            int runParallel,
+            out OcctTopology shapeHandleOut);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_difference(
+            OcctTopology targetShapeHandle,
+            OcctTopology cutterShapeHandle,
+            double fuzzyTolerance,
+            int runParallel,
+            out OcctTopology shapeHandleOut);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_intersection(
+            OcctTopology targetShapeHandle,
+            OcctTopology toolShapeHandle,
+            double fuzzyTolerance,
+            int runParallel,
+            out OcctTopology shapeHandleOut);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_repair(
+            OcctTopology shapeHandle,
+            double fuzzyTolerance,
+            int runParallel,
+            double minArea,
+            out OcctTopology shapeHandleOut);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_make_volume(
+            OcctTopology shapeHandle,
+            [In] double[] coordinates,
+            int pointCount,
+            [In] int[] loopPointCounts,
+            int loopCount,
+            [In] int[] faceLoopCounts,
+            int faceCount,
+            double fuzzyTolerance,
+            int runParallel,
+            int avoidInternalShapes,
+            out OcctTopology shapeHandleOut);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sam_occt_shape_solid_count(OcctTopology shapeHandle);
 
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]

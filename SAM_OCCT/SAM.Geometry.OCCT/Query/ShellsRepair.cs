@@ -38,9 +38,14 @@ namespace SAM.Geometry.OCCT
 
             options = options == null ? new OcctBuildOptions() : new OcctBuildOptions(options);
 
-            List<Shell> resultShells = minArea > 0
-                ? RepairWithDefeaturing(shells_Temp, options, minArea, result)
-                : RepairPerShell(shells_Temp, options, result);
+            // RetainTopology repairs through the persistent shape handle (native
+            // per-solid defeaturing; a no-op face removal when minArea is 0) so
+            // the result keeps the live OCCT topology.
+            List<Shell> resultShells = options.RetainTopology
+                ? (Native.OcctShapeBuilder.TryOperateRetained(Native.OcctShapeBuilder.ShapeOperation.Repair, shells_Temp, null, options, minArea, result) ? result.Shells?.ToList() : null)
+                : minArea > 0
+                    ? RepairWithDefeaturing(shells_Temp, options, minArea, result)
+                    : RepairPerShell(shells_Temp, options, result);
 
             if (resultShells == null || resultShells.Count == 0)
             {

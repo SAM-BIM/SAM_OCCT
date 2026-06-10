@@ -31,7 +31,11 @@ namespace SAM.Geometry.OCCT
 
             options = options == null ? new OcctBuildOptions() : new OcctBuildOptions(options);
 
-            if (!Native.OcctCellComplexBuilder.TryIntersection(shells_Temp, toolShells_Temp, options, result))
+            bool built = options.RetainTopology
+                ? Native.OcctShapeBuilder.TryOperateRetained(Native.OcctShapeBuilder.ShapeOperation.Intersection, shells_Temp, toolShells_Temp, options, 0, result)
+                : Native.OcctCellComplexBuilder.TryIntersection(shells_Temp, toolShells_Temp, options, result);
+
+            if (!built)
             {
                 return null;
             }

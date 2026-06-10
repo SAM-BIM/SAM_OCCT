@@ -15,6 +15,14 @@ namespace SAM.Core.OCCT
 
         public bool ValidateInput { get; set; } = true;
 
+        /// <summary>
+        /// When true, shell operations route through the persistent native
+        /// topology handle and attach it to the result, which then owns it and
+        /// must be disposed. Default false keeps the legacy decode-and-free
+        /// native path.
+        /// </summary>
+        public bool RetainTopology { get; set; } = false;
+
         public OcctBuildOptions()
         {
         }
@@ -31,6 +39,7 @@ namespace SAM.Core.OCCT
             RunParallel = occtBuildOptions.RunParallel;
             AvoidInternalShapes = occtBuildOptions.AvoidInternalShapes;
             ValidateInput = occtBuildOptions.ValidateInput;
+            RetainTopology = occtBuildOptions.RetainTopology;
         }
     }
 }

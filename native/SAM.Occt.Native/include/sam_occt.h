@@ -67,6 +67,61 @@ SAM_OCCT_API int sam_occt_shape_create_shells(
     int run_parallel,
     void** shape_handle);
 
+/* ---- shape-in / shape-out operations ----
+   All return a NEW handle via shape_handle_out; input handles stay valid and
+   caller-owned. Status: 0 ok, 10 null output pointer, 30 BOP error, 40 result
+   has no solids, 50 invalid input handle, 99 exception. */
+
+/* BRepAlgoAPI_Fuse of all solids inside the handle (sam_occt_shells_union
+   semantics, including the single-solid pass-through). */
+SAM_OCCT_API int sam_occt_shape_union(
+    void* shape_handle,
+    double fuzzy_tolerance,
+    int run_parallel,
+    void** shape_handle_out);
+
+/* BRepAlgoAPI_Cut of each target solid against all cutter solids. */
+SAM_OCCT_API int sam_occt_shape_difference(
+    void* target_shape_handle,
+    void* cutter_shape_handle,
+    double fuzzy_tolerance,
+    int run_parallel,
+    void** shape_handle_out);
+
+/* BRepAlgoAPI_Common of each target solid against all tool solids. */
+SAM_OCCT_API int sam_occt_shape_intersection(
+    void* target_shape_handle,
+    void* tool_shape_handle,
+    double fuzzy_tolerance,
+    int run_parallel,
+    void** shape_handle_out);
+
+/* Per-solid defeaturing of faces smaller than min_area + UnifySameDomain
+   (sam_occt_shells_repair semantics); solids that cannot be repaired are kept
+   unchanged rather than dropped. */
+SAM_OCCT_API int sam_occt_shape_repair(
+    void* shape_handle,
+    double fuzzy_tolerance,
+    int run_parallel,
+    double min_area,
+    void** shape_handle_out);
+
+/* BOPAlgo_MakerVolume over the faces of shape_handle plus optional extra
+   faces given as flattened arrays (coordinates may be null / face_count 0).
+   The shape-backed core of plane sectioning and of re-celling a shape. */
+SAM_OCCT_API int sam_occt_shape_make_volume(
+    void* shape_handle,
+    const double* coordinates,
+    int point_count,
+    const int* loop_point_counts,
+    int loop_count,
+    const int* face_loop_counts,
+    int face_count,
+    double fuzzy_tolerance,
+    int run_parallel,
+    int avoid_internal_shapes,
+    void** shape_handle_out);
+
 /* Number of solids in the shape; negative on an invalid handle. */
 SAM_OCCT_API int sam_occt_shape_solid_count(void* shape_handle);
 
