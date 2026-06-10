@@ -579,6 +579,13 @@ supports it.
 Both formats are open and royalty-free. STL/OBJ/glTF/BREP and others are planned
 for later phases using the same node pattern.
 
+**Runtime DLLs.** STEP/IGES needs more OCCT DLLs than the core modeling nodes:
+the Data Exchange + XDE/CAF + visualization stack and the third-party
+`freetype.dll` / `FreeImage.dll`. These are delay-loaded, so if they are not
+deployed the other nodes keep working and only STEP/IGES reports
+`status 64`. Running `build-native.ps1` deploys the full set; see
+`THIRD_PARTY.md` for the exact list.
+
 ## Rule Of Thumb
 
 If the goal is an analytical building model, start with `Panel` or `Face3D`.

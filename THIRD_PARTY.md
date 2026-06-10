@@ -13,13 +13,30 @@ and instructions for replacing the OCCT binaries.
 ### Data Exchange toolkits (STEP / IGES — issue #20)
 
 The STEP and IGES import/export bridge links the OCCT Data Exchange toolkits
-`TKDESTEP`, `TKDEIGES`, `TKDE` and `TKXSBase` (plus their transitive
-dependencies). These ship under the same OCCT LGPL-2.1-with-exception licence as
-the rest of the OCCT stack. STEP (ISO 10303) and IGES are open, published
-interchange formats. When shipping the native bundle, include
-`TKDESTEP.dll`, `TKDEIGES.dll`, `TKDE.dll` and `TKXSBase.dll` (and any
-transitive Data Exchange DLLs the loader pulls — verify with `dumpbin
-/dependents` after the native build) alongside the existing OCCT DLLs.
+`TKDESTEP`, `TKDEIGES` and `TKXSBase` (`XSControl_Reader`, the readers' base
+class, lives in `TKXSBase`). These ship under the same OCCT
+LGPL-2.1-with-exception licence as the rest of the OCCT stack. STEP (ISO 10303)
+and IGES are open, published interchange formats.
+
+**Runtime DLLs required.** `TKDESTEP.dll`/`TKDEIGES.dll` are *delay-loaded*, so
+`SAM.Occt.Native` keeps loading (and every other operation keeps working) even
+when they are absent — STEP/IGES then reports native status 64. To actually run
+import/export, the **full transitive closure** must be deployed beside the
+existing OCCT DLLs, which is broader than the core modeling set:
+
+- the Data Exchange toolkits `TKDESTEP.dll`, `TKDEIGES.dll`, `TKXSBase.dll`;
+- the XDE/CAF stack they pull in: `TKXCAF`, `TKLCAF`, `TKCAF`, `TKVCAF`,
+  `TKCDF`, `TKDE`, `TKBinXCAF`, `TKXmlXCAF`;
+- the OCCT visualization toolkits those reference: `TKV3d`, `TKService`,
+  `TKMesh`, `TKHLR`;
+- and the **third-party runtime** `TKService`/`TKV3d` need — `freetype.dll` and
+  `FreeImage.dll` — which the modeling-only runtime never required.
+
+`build-native.ps1` deploys this whole set (it copies the full OCCT `bin` and
+every `*\bin\*.dll` under the OCCT `3rdparty` root into `build/` and
+`%APPDATA%\SAM`). When packaging a SAM installer, verify the closure with
+`dumpbin /dependents` on the freshly built `SAM.Occt.Native.dll` and on
+`TKDESTEP.dll`.
 
 Project site:
 
