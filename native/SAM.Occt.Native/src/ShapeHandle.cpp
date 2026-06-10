@@ -10,6 +10,7 @@
 #include "OcctNativeCore.h"
 
 #include <BRepAlgoAPI_Common.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRep_Builder.hxx>
@@ -21,6 +22,7 @@
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Solid.hxx>
+#include <gp_Pnt.hxx>
 
 #include <cstddef>
 #include <memory>
@@ -544,6 +546,44 @@ int sam_occt_shape_solid_count(void* shape_handle)
         }
 
         return count;
+    }
+    catch (...)
+    {
+        return -99;
+    }
+}
+
+int sam_occt_shape_point_in_solid(
+    void* shape_handle,
+    double x,
+    double y,
+    double z,
+    double tolerance)
+{
+    const Shape* shape = as_shape(shape_handle);
+    if (shape == nullptr)
+    {
+        return -1;
+    }
+
+    try
+    {
+        const gp_Pnt point(x, y, z);
+        const double safe_tolerance = tolerance > 0 ? tolerance : 1e-9;
+
+        for (TopExp_Explorer solid_explorer(shape->shape, TopAbs_SOLID); solid_explorer.More(); solid_explorer.Next())
+        {
+            BRepClass3d_SolidClassifier classifier(TopoDS::Solid(solid_explorer.Current()));
+            classifier.Perform(point, safe_tolerance);
+
+            const TopAbs_State state = classifier.State();
+            if (state == TopAbs_IN || state == TopAbs_ON)
+            {
+                return 1;
+            }
+        }
+
+        return 0;
     }
     catch (...)
     {

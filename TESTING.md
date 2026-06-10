@@ -79,3 +79,32 @@ dependencies) and then runs both test projects with `dotnet test`. Unit tests
 must pass; integration tests skip without the native library. Test results
 (`.trx`) and Cobertura coverage are uploaded as the `SAM_OCCT-test-results`
 artifact. Coverage is **report-only** — there is no hard threshold gate yet.
+
+## Persistent topology handles (issue #14, native ABI v2)
+
+`OcctTopology : SafeHandle` wraps a live native `TopoDS_Shape` (`sam_occt_shape`
+handle) so operations chain natively (`Query.TopologyUnion` /
+`TopologyDifference` / `TopologyIntersection` / `TopologyRepair`,
+`Query.IsPointInside`) and decode on demand via `Query.CellComplexResult`.
+Contract:
+
+- **Ownership** - every API returning an `OcctTopology` transfers ownership to
+  the caller, who should `Dispose` it (the finalizer is only a backstop, and
+  `Dispose` is idempotent). Operations never consume their inputs.
+- **Retention** - `OcctBuildOptions.RetainTopology = true` makes the
+  `Query.Shells*` operations attach the live handle to
+  `OcctCellComplexResult.Topology`; the result then owns it and is
+  `IDisposable`. The default (`false`) keeps the legacy decode-and-free path
+  and `Topology` stays null.
+- **Threading** - create, operate and decode on a single thread; only
+  `Dispose`/finalization may occur on another thread.
+- **Topology keys** are only comparable within one decoded result.
+- **ABI probe** - `OcctCellComplexResult.NativeVersion` reports
+  `sam_occt_abi_version` ("2"); a stale native build degrades to diagnostics
+  (`SAM_OCCT_NATIVE_ENTRYPOINT_MISSING`) instead of crashing.
+
+Guard tests live in `OcctTopologyGuardTests` (unit); lifecycle, parity,
+chaining and point-in-solid coverage lives in `OcctTopologyIntegrationTests`
+and `TopologyChainingIntegrationTests` (integration, native-gated). When the
+native ABI changes, rebuild with `.\build-native.ps1` and run the full
+integration suite locally - CI does not build the native layer.

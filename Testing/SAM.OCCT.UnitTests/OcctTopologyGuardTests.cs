@@ -101,6 +101,16 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void IsPointInside_NullTopology_ReturnsNull()
+        {
+            // Act
+            bool? inside = GeometryQuery.IsPointInside(null, new SAM.Geometry.Spatial.Point3D(0, 0, 0));
+
+            // Assert
+            Assert.Null(inside);
+        }
+
+        [Fact]
         public void OcctBuildOptions_CopyConstructor_CopiesRetainTopology()
         {
             // Arrange

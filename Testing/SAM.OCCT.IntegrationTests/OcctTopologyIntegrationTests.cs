@@ -133,6 +133,51 @@ namespace SAM.OCCT.IntegrationTests
             Assert.True(result.Success);
         }
 
+        [SkippableFact]
+        public void IsPointInside_CenterOfUnitBox_ReturnsTrue()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange
+            using (OcctTopology topology = GeometryCreate.Topology(new List<Shell> { TestGeometry.CreateUnitBox(0, 0, 0) }, out _))
+            {
+                Assert.NotNull(topology);
+
+                // Act + Assert
+                Assert.True(GeometryQuery.IsPointInside(topology, new Point3D(0.5, 0.5, 0.5)));
+            }
+        }
+
+        [SkippableFact]
+        public void IsPointInside_PointOutsideBox_ReturnsFalse()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange
+            using (OcctTopology topology = GeometryCreate.Topology(new List<Shell> { TestGeometry.CreateUnitBox(0, 0, 0) }, out _))
+            {
+                Assert.NotNull(topology);
+
+                // Act + Assert
+                Assert.False(GeometryQuery.IsPointInside(topology, new Point3D(5, 5, 5)));
+            }
+        }
+
+        [SkippableFact]
+        public void IsPointInside_PointOnFaceWithinTolerance_ReturnsTrue()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange
+            using (OcctTopology topology = GeometryCreate.Topology(new List<Shell> { TestGeometry.CreateUnitBox(0, 0, 0) }, out _))
+            {
+                Assert.NotNull(topology);
+
+                // Act + Assert - a point on the x = 1 face classifies as ON.
+                Assert.True(GeometryQuery.IsPointInside(topology, new Point3D(1.0, 0.5, 0.5)));
+            }
+        }
+
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private static void CreateAndAbandonTopology()
         {

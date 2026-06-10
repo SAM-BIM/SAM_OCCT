@@ -125,6 +125,17 @@ SAM_OCCT_API int sam_occt_shape_make_volume(
 /* Number of solids in the shape; negative on an invalid handle. */
 SAM_OCCT_API int sam_occt_shape_solid_count(void* shape_handle);
 
+/* BRepClass3d_SolidClassifier against every solid in the shape.
+   Returns 1 when the point is inside or on the boundary (within tolerance) of
+   any solid, 0 when outside all solids, -1 on an invalid handle and -99 on an
+   exception. */
+SAM_OCCT_API int sam_occt_shape_point_in_solid(
+    void* shape_handle,
+    double x,
+    double y,
+    double z,
+    double tolerance);
+
 /* Decodes every solid of the shape into a regular result handle consumed by
    the sam_occt_result_* accessors and freed with sam_occt_free_result. Face
    topology keys are quantized with `tolerance` and are only comparable within

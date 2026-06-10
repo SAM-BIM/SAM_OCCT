@@ -128,6 +128,14 @@ namespace SAM.Geometry.OCCT.Native
         public static extern int sam_occt_shape_solid_count(OcctTopology shapeHandle);
 
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_point_in_solid(
+            OcctTopology shapeHandle,
+            double x,
+            double y,
+            double z,
+            double tolerance);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sam_occt_shape_decode(
             OcctTopology shapeHandle,
             double tolerance,
