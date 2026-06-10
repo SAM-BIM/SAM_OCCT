@@ -21,6 +21,7 @@ else()
     set(SAM_OCCT_OCCT_MODULES
         TKDESTEP
         TKDEIGES
+        TKXSBase
         TKOffset
         TKPrim
         TKMesh
@@ -64,7 +65,8 @@ target_include_directories(SAM.Occt.Native PRIVATE ${SAM_OCCT_OCCT_INCLUDE_DIRS}
 target_link_libraries(SAM.Occt.Native PRIVATE ${SAM_OCCT_OCCT_LIBRARIES})
 
 # Delay-load the Data Exchange toolkits (issue #20). The STEP/IGES wrappers are
-# the only code that imports from TKDESTEP.dll / TKDEIGES.dll, and those DLLs
+# the only code that imports from TKDESTEP.dll / TKDEIGES.dll / TKXSBase.dll
+# (XSControl_Reader, the readers' base class, lives in TKXSBase), and those DLLs
 # (with their XCAF/CAF transitive dependencies) are not part of the core
 # modeling runtime. Delay-loading keeps SAM.Occt.Native loadable - and every
 # pre-existing operation working - even when the Data Exchange DLLs are not
@@ -74,7 +76,8 @@ target_link_libraries(SAM.Occt.Native PRIVATE ${SAM_OCCT_OCCT_LIBRARIES})
 if(MSVC)
     target_link_options(SAM.Occt.Native PRIVATE
         /DELAYLOAD:TKDESTEP.dll
-        /DELAYLOAD:TKDEIGES.dll)
+        /DELAYLOAD:TKDEIGES.dll
+        /DELAYLOAD:TKXSBase.dll)
     target_link_libraries(SAM.Occt.Native PRIVATE delayimp)
 endif()
 
