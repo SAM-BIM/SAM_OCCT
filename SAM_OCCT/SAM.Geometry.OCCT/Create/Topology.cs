@@ -66,5 +66,26 @@ namespace SAM.Geometry.OCCT
             result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TOPOLOGY_SUCCESS", string.Format("Created OCCT topology with {0} solid(s).", topology.SolidCount));
             return topology;
         }
+
+        /// <summary>
+        /// Imports a STEP or IGES file into a persistent native OCCT topology
+        /// (issue #20). The caller owns the returned handle and should Dispose
+        /// it; see <see cref="OcctTopology"/> for the lifetime contract. Returns
+        /// null on failure - inspect <paramref name="result"/> diagnostics
+        /// (SAM_OCCT_IMPORT_*).
+        /// </summary>
+        public static OcctTopology Topology(string path, OcctExchangeFormat format, out OcctCellComplexResult result, OcctBuildOptions options = null)
+        {
+            result = new OcctCellComplexResult();
+
+            options = options == null ? new OcctBuildOptions() : new OcctBuildOptions(options);
+
+            if (!Native.OcctShapeBuilder.TryImport(path, format, result, out OcctTopology topology))
+            {
+                return null;
+            }
+
+            return topology;
+        }
     }
 }

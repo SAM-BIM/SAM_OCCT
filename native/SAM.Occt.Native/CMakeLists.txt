@@ -19,6 +19,10 @@ else()
 
     set(SAM_OCCT_OCCT_INCLUDE_DIRS ${SAM_OCCT_OCCT_INCLUDE_DIR})
     set(SAM_OCCT_OCCT_MODULES
+        TKDESTEP
+        TKDEIGES
+        TKDE
+        TKXSBase
         TKOffset
         TKPrim
         TKMesh

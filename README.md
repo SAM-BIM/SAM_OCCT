@@ -53,6 +53,10 @@ Geometry:
 - `SAMOCCT.MergeCoplanarFace3Ds`
 - `SAMOCCT.MergeCoplanarShells`
 - `SAMOCCT.TriangulateSurface`
+- `SAMOCCT.ExportSTEP`
+- `SAMOCCT.ExportIGES`
+- `SAMOCCT.ImportSTEP`
+- `SAMOCCT.ImportIGES`
 
 Analytical:
 
@@ -146,6 +150,10 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | `SAMOCCT.MergeCoplanarFace3Ds` | Merges adjacent coplanar Face3Ds into fewer, larger faces via OCCT `ShapeUpgrade_UnifySameDomain`. | `_face3Ds`, `angleTolerance_`, `tolerance_` | `Face3Ds` |
 | `SAMOCCT.MergeCoplanarShells` | Merges each shell's coplanar faces into fewer faces (volume preserved) via OCCT. | `_shells`, `angleTolerance_`, `tolerance_` | `Shells` |
 | `SAMOCCT.TriangulateSurface` | Triangulates possibly non-planar surfaces into planar `Face3D` panels via OCCT meshing. `nonPlanarOnly_` passes flat surfaces through as a single face to save face count. | `_surfaces`, `linearDeflection_`, `angularDeflection_`, `minArea_`, `nonPlanarOnly_`, `tolerance_` | `Face3Ds` |
+| `SAMOCCT.ExportSTEP` | Exports closed shells to a STEP file via OCCT (exact BRep solids). | `_shells`, `_path`, `tolerance_`, `fuzzyTolerance_` | `Successful`, `Diagnostics` |
+| `SAMOCCT.ExportIGES` | Exports closed shells to an IGES file via OCCT (BRep mode; surface-oriented). | `_shells`, `_path`, `tolerance_`, `fuzzyTolerance_` | `Successful`, `Diagnostics` |
+| `SAMOCCT.ImportSTEP` | Imports a STEP file into closed SAM `Shell` volumes via OCCT. | `_path`, `tolerance_` | `Shells`, `Diagnostics`, `Successful` |
+| `SAMOCCT.ImportIGES` | Imports an IGES file into SAM `Shell` volumes via OCCT (lenient; may decode to no shells if the file has no closed solids). | `_path`, `tolerance_` | `Shells`, `Diagnostics`, `Successful` |
 
 ### Analytical (`SAM.Analytical.Grasshopper.OCCT`)
 

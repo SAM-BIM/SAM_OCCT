@@ -14,6 +14,12 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRep_Builder.hxx>
+#include <IFSelect_ReturnStatus.hxx>
+#include <IGESControl_Reader.hxx>
+#include <IGESControl_Writer.hxx>
+#include <STEPControl_Reader.hxx>
+#include <STEPControl_StepModelType.hxx>
+#include <STEPControl_Writer.hxx>
 #include <ShapeFix_Shape.hxx>
 #include <TopAbs.hxx>
 #include <TopExp_Explorer.hxx>
@@ -38,6 +44,23 @@ namespace
         if (!solid_explorer.More())
         {
             return 40;
+        }
+
+        std::unique_ptr<Shape> result(new Shape());
+        result->shape = shape;
+        *shape_handle = result.release();
+        return 0;
+    }
+
+    // Import wrap (issue #20): unlike wrap_shape this does not require a solid -
+    // an imported file may legitimately contain shells/faces only - it just
+    // rejects a null shape (status 63). The handle still validates through
+    // as_shape because the stored TopoDS_Shape is non-null.
+    int wrap_imported_shape(const TopoDS_Shape& shape, void** shape_handle)
+    {
+        if (shape.IsNull())
+        {
+            return 63;
         }
 
         std::unique_ptr<Shape> result(new Shape());
@@ -630,6 +653,146 @@ int sam_occt_shape_decode(
 
         *result_handle = result.release();
         return 0;
+    }
+    catch (...)
+    {
+        return 99;
+    }
+}
+
+int sam_occt_shape_export_step(void* shape_handle, const char* path)
+{
+    if (path == nullptr || path[0] == '\0')
+    {
+        return 60;
+    }
+
+    Shape* shape = as_shape(shape_handle);
+    if (shape == nullptr)
+    {
+        return 50;
+    }
+
+    try
+    {
+        STEPControl_Writer writer;
+        if (writer.Transfer(shape->shape, STEPControl_AsIs) != IFSelect_RetDone)
+        {
+            return 62;
+        }
+
+        if (writer.Write(path) != IFSelect_RetDone)
+        {
+            return 62;
+        }
+
+        return 0;
+    }
+    catch (...)
+    {
+        return 99;
+    }
+}
+
+int sam_occt_shape_export_iges(void* shape_handle, const char* path)
+{
+    if (path == nullptr || path[0] == '\0')
+    {
+        return 60;
+    }
+
+    Shape* shape = as_shape(shape_handle);
+    if (shape == nullptr)
+    {
+        return 50;
+    }
+
+    try
+    {
+        // BRep mode (second ctor argument 1) writes solids/shells as BRep
+        // entities so closed volumes round-trip instead of degrading to bare
+        // trimmed surfaces.
+        IGESControl_Writer writer("MM", 1);
+        if (!writer.AddShape(shape->shape))
+        {
+            return 62;
+        }
+
+        writer.ComputeModel();
+        if (!writer.Write(path))
+        {
+            return 62;
+        }
+
+        return 0;
+    }
+    catch (...)
+    {
+        return 99;
+    }
+}
+
+int sam_occt_shape_import_step(const char* path, void** shape_handle)
+{
+    if (shape_handle != nullptr)
+    {
+        *shape_handle = nullptr;
+    }
+
+    if (path == nullptr || path[0] == '\0')
+    {
+        return 60;
+    }
+
+    if (shape_handle == nullptr)
+    {
+        return 60;
+    }
+
+    try
+    {
+        STEPControl_Reader reader;
+        if (reader.ReadFile(path) != IFSelect_RetDone)
+        {
+            return 61;
+        }
+
+        reader.TransferRoots();
+        return wrap_imported_shape(reader.OneShape(), shape_handle);
+    }
+    catch (...)
+    {
+        return 99;
+    }
+}
+
+int sam_occt_shape_import_iges(const char* path, void** shape_handle)
+{
+    if (shape_handle != nullptr)
+    {
+        *shape_handle = nullptr;
+    }
+
+    if (path == nullptr || path[0] == '\0')
+    {
+        return 60;
+    }
+
+    if (shape_handle == nullptr)
+    {
+        return 60;
+    }
+
+    try
+    {
+        IGESControl_Reader reader;
+        if (reader.ReadFile(path) != IFSelect_RetDone)
+        {
+            return 61;
+        }
+
+        reader.TransferRoots();
+        return wrap_imported_shape(reader.OneShape(), shape_handle);
     }
     catch (...)
     {
