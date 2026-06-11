@@ -53,7 +53,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 nonPlanarOnly.SetPersistentData(false);
                 result.Add(new GH_SAMParam(nonPlanarOnly, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "Tolerance, also used as the planarity threshold for nonPlanarOnly_.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "Distance tolerance (model units). It is also the planarity threshold used by nonPlanarOnly_: a surface counts as planar - and is passed through unchanged as one Face3D - when every boundary point lies within this distance of the surface's best-fit plane. Surfaces with any corner farther than this are triangulated. Larger values let more (slightly warped) surfaces pass through as single faces.", Access = GH_ParamAccess.item };
                 tolerance.SetPersistentData(Tolerance.Distance);
                 result.Add(new GH_SAMParam(tolerance, ParamVisibility.Voluntary));
 
