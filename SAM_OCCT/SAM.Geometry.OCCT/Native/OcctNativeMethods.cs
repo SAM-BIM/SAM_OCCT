@@ -136,6 +136,18 @@ namespace SAM.Geometry.OCCT.Native
             double tolerance);
 
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_distance(
+            OcctTopology shapeHandleA,
+            OcctTopology shapeHandleB,
+            out double distance,
+            out double ax,
+            out double ay,
+            out double az,
+            out double bx,
+            out double by,
+            out double bz);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sam_occt_shape_decode(
             OcctTopology shapeHandle,
             double tolerance,
