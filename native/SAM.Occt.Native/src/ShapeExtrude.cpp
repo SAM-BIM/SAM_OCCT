@@ -15,7 +15,6 @@
 #include <BRep_Builder.hxx>
 #include <ShapeFix_Shape.hxx>
 #include <TopExp_Explorer.hxx>
-#include <TopTools_ListIteratorOfListOfShape.hxx>
 #include <TopTools_ListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
@@ -111,9 +110,11 @@ int sam_occt_extrude(
         const gp_Vec direction(direction_x, direction_y, direction_z);
 
         std::vector<TopoDS_Solid> solids;
-        for (TopTools_ListIteratorOfListOfShape face_iterator(faces); face_iterator.More(); face_iterator.Next())
+        // OCCT 8.0 removed the legacy TopTools_ListIteratorOfListOfShape; iterate
+        // the list (an NCollection_List) with a range-based for instead.
+        for (const TopoDS_Shape& face : faces)
         {
-            BRepPrimAPI_MakePrism prism(face_iterator.Value(), direction);
+            BRepPrimAPI_MakePrism prism(face, direction);
             if (!prism.IsDone())
             {
                 return 30;
