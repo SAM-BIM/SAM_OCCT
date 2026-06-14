@@ -106,6 +106,22 @@ SAM_OCCT_API int sam_occt_shape_repair(
     double min_area,
     void** shape_handle_out);
 
+/* General Fuse (BOPAlgo_Builder) over every solid in the handle: imprints the
+   solids against one another so coincident regions of touching faces are split
+   into matching sub-faces shared by both neighbours. This is what gives an
+   energy model "second-level" space boundaries - after imprinting, a wall that
+   abuts two spaces decodes into sub-faces that key-match each neighbour, so
+   sam_occt_shape_decode reports them as FaceAdjacencies. Solid count is
+   preserved for non-overlapping (merely touching) inputs; genuinely
+   overlapping inputs are resolved like any General Fuse. A single solid is a
+   pass-through (nothing to imprint). Status: 0 ok, 10 null output pointer,
+   30 BOP error, 40 result has no solids, 50 invalid input handle, 99 exception. */
+SAM_OCCT_API int sam_occt_shape_imprint(
+    void* shape_handle,
+    double fuzzy_tolerance,
+    int run_parallel,
+    void** shape_handle_out);
+
 /* BOPAlgo_MakerVolume over the faces of shape_handle plus optional extra
    faces given as flattened arrays (coordinates may be null / face_count 0).
    The shape-backed core of plane sectioning and of re-celling a shape. */
