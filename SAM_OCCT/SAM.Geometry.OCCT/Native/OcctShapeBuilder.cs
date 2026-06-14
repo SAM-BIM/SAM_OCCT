@@ -213,12 +213,105 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
+        /// <summary>
+        /// Offsets the skin of each shell's solid by a signed distance (issue
+        /// #29) or, when <paramref name="thicken"/> is true, hollows each into a
+        /// wall of that thickness. Builds the input topology, calls the native
+        /// BRepOffsetAPI entry point, then decodes. The output handle is retained
+        /// on the result only when OcctBuildOptions.RetainTopology is set.
+        /// </summary>
+        public static bool TryOffsetShells(IEnumerable<Shell> shells, double distance, bool thicken, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            if (!TryCreateTopology(shells, options, result, out OcctTopology input))
+            {
+                return false;
+            }
+
+            OcctTopology output = null;
+            try
+            {
+                int status;
+                OcctTopology output_Temp;
+                if (thicken)
+                {
+                    status = OcctNativeMethods.sam_occt_shape_thick_solid(input, distance, options.Tolerance, out output_Temp);
+                }
+                else
+                {
+                    status = OcctNativeMethods.sam_occt_shape_offset(input, distance, options.Tolerance, out output_Temp);
+                }
+
+                result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                // Map the native status with an offset/thicken-specific message
+                // rather than the generic MakerVolume wording of HandleCreateStatus.
+                if (status != 0 || output_Temp == null || output_Temp.IsInvalid)
+                {
+                    output_Temp?.Dispose();
+                    result.AddDiagnostic(
+                        OcctDiagnosticSeverity.Error,
+                        thicken ? "SAM_OCCT_THICKEN_NATIVE_FAILED" : "SAM_OCCT_OFFSET_NATIVE_FAILED",
+                        string.Format("Native OCCT {0} returned status {1} ({2}).", thicken ? "thick-solid" : "offset", status, DescribeOffsetStatus(status)));
+                    return false;
+                }
+
+                output = output_Temp;
+
+                if (!TryDecode(output, options, result))
+                {
+                    return false;
+                }
+
+                if (options.RetainTopology)
+                {
+                    result.Topology = output;
+                    output = null;
+                }
+
+                return true;
+            }
+            catch (DllNotFoundException exception)
+            {
+                return HandleNativeMissing(exception, result);
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                return HandleEntryPointMissing(exception, result);
+            }
+            catch (ObjectDisposedException)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "An OCCT topology handle was disposed while in use.");
+                return false;
+            }
+            finally
+            {
+                input.Dispose();
+                output?.Dispose();
+            }
+        }
+
+        private static string DescribeOffsetStatus(int status)
+        {
+            switch (status)
+            {
+                case 10: return "a null output handle was supplied";
+                case 12: return "the offset / thickness distance was zero";
+                case 30: return "the OCCT offset / thick-solid operation did not complete for any solid - the geometry may be too complex, or the distance too large or the wrong sign (try a smaller magnitude, or the opposite sign)";
+                case 40: return "the operation produced no solids";
+                case 50: return "the OCCT shape handle was invalid";
+                case 99: return "an unexpected native exception was thrown";
+                default: return "unrecognised native status";
+            }
+        }
+
         internal enum ShapeOperation
         {
             Union,
             Difference,
             Intersection,
-            Repair
+            Repair,
+            Imprint
         }
 
         public static bool TryOperate(ShapeOperation operation, OcctTopology topology, OcctTopology secondTopology, OcctBuildOptions options, double minArea, OcctCellComplexResult result, out OcctTopology output)
@@ -259,6 +352,10 @@ namespace SAM.Geometry.OCCT.Native
 
                     case ShapeOperation.Repair:
                         status = OcctNativeMethods.sam_occt_shape_repair(topology, options.FuzzyTolerance, runParallel, minArea, out output_Temp);
+                        break;
+
+                    case ShapeOperation.Imprint:
+                        status = OcctNativeMethods.sam_occt_shape_imprint(topology, options.FuzzyTolerance, runParallel, out output_Temp);
                         break;
 
                     default:
@@ -326,6 +423,50 @@ namespace SAM.Geometry.OCCT.Native
             {
                 input.Dispose();
                 secondInput?.Dispose();
+                output?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Imprints a set of shells against one another (issue #27): build the
+        /// per-shell solids into one topology, run the native General Fuse so
+        /// coincident boundary regions are split into matching sub-faces, then
+        /// decode the result. The shared sub-faces key-match during decode, so
+        /// touching spaces gain second-level FaceAdjacencies. The input topology
+        /// is always disposed; the imprinted output is retained on the result
+        /// only when OcctBuildOptions.RetainTopology is set, otherwise disposed.
+        /// </summary>
+        public static bool TryImprintShells(IEnumerable<Shell> shells, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            if (!TryCreateTopology(shells, options, result, out OcctTopology input))
+            {
+                return false;
+            }
+
+            OcctTopology output = null;
+            try
+            {
+                if (!TryOperate(ShapeOperation.Imprint, input, null, options, 0, result, out output))
+                {
+                    return false;
+                }
+
+                if (!TryDecode(output, options, result))
+                {
+                    return false;
+                }
+
+                if (options.RetainTopology)
+                {
+                    result.Topology = output;
+                    output = null;
+                }
+
+                return true;
+            }
+            finally
+            {
+                input.Dispose();
                 output?.Dispose();
             }
         }
