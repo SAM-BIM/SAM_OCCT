@@ -149,7 +149,8 @@ namespace SAM.Geometry.OCCT.Native
             Union,
             Difference,
             Intersection,
-            Repair
+            Repair,
+            Imprint
         }
 
         public static bool TryOperate(ShapeOperation operation, OcctTopology topology, OcctTopology secondTopology, OcctBuildOptions options, double minArea, OcctCellComplexResult result, out OcctTopology output)
@@ -190,6 +191,10 @@ namespace SAM.Geometry.OCCT.Native
 
                     case ShapeOperation.Repair:
                         status = OcctNativeMethods.sam_occt_shape_repair(topology, options.FuzzyTolerance, runParallel, minArea, out output_Temp);
+                        break;
+
+                    case ShapeOperation.Imprint:
+                        status = OcctNativeMethods.sam_occt_shape_imprint(topology, options.FuzzyTolerance, runParallel, out output_Temp);
                         break;
 
                     default:
@@ -257,6 +262,50 @@ namespace SAM.Geometry.OCCT.Native
             {
                 input.Dispose();
                 secondInput?.Dispose();
+                output?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Imprints a set of shells against one another (issue #27): build the
+        /// per-shell solids into one topology, run the native General Fuse so
+        /// coincident boundary regions are split into matching sub-faces, then
+        /// decode the result. The shared sub-faces key-match during decode, so
+        /// touching spaces gain second-level FaceAdjacencies. The input topology
+        /// is always disposed; the imprinted output is retained on the result
+        /// only when OcctBuildOptions.RetainTopology is set, otherwise disposed.
+        /// </summary>
+        public static bool TryImprintShells(IEnumerable<Shell> shells, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            if (!TryCreateTopology(shells, options, result, out OcctTopology input))
+            {
+                return false;
+            }
+
+            OcctTopology output = null;
+            try
+            {
+                if (!TryOperate(ShapeOperation.Imprint, input, null, options, 0, result, out output))
+                {
+                    return false;
+                }
+
+                if (!TryDecode(output, options, result))
+                {
+                    return false;
+                }
+
+                if (options.RetainTopology)
+                {
+                    result.Topology = output;
+                    output = null;
+                }
+
+                return true;
+            }
+            finally
+            {
+                input.Dispose();
                 output?.Dispose();
             }
         }
