@@ -16,9 +16,12 @@
 
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepOffset_Mode.hxx>
 #include <BRep_Builder.hxx>
+#include <GeomAbs_JoinType.hxx>
 #include <ShapeFix_Shape.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_ListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Shape.hxx>
@@ -132,16 +135,38 @@ int sam_occt_shape_offset(
         std::vector<TopoDS_Solid> result_solids;
         for (const TopoDS_Solid& solid : solids)
         {
+            // PerformByJoin (not PerformBySimple): the "simple" algorithm skips
+            // surface-intersection computation, so on a closed solid adjacent
+            // offset faces are never trimmed back to a shared corner - the skin
+            // tears / overlaps at every vertex (issue #29 corner artefacts).
+            // PerformByJoin supports solids directly and constructs the parallel
+            // outside (offset > 0) or inside (offset < 0); GeomAbs_Intersection
+            // mitres the corners instead of rounding them with arcs/spheres.
             BRepOffsetAPI_MakeOffsetShape make_offset;
-            make_offset.PerformBySimple(solid, offset);
-            if (!make_offset.IsDone())
+            try
             {
-                // Offsetting is failure-prone; skip a solid OCCT cannot offset
-                // rather than abandoning the whole batch.
+                make_offset.PerformByJoin(
+                    solid,
+                    offset,
+                    safe_tolerance,
+                    BRepOffset_Skin,
+                    Standard_False,
+                    Standard_False,
+                    GeomAbs_Intersection);
+            }
+            catch (...)
+            {
+                // Offsetting is failure-prone (self-intersections, >3-edge
+                // vertices); skip a solid OCCT cannot offset rather than
+                // abandoning the whole batch.
                 continue;
             }
 
-            (void)safe_tolerance;
+            if (!make_offset.IsDone())
+            {
+                continue;
+            }
+
             collect_fixed_solids_offset(make_offset.Shape(), result_solids);
         }
 
@@ -190,16 +215,38 @@ int sam_occt_shape_thick_solid(
         std::vector<TopoDS_Solid> result_solids;
         for (const TopoDS_Solid& solid : solids)
         {
+            // MakeThickSolidBySimple expects a NON-closed shell/face (OCCT docs)
+            // - feeding it a closed zone solid produced no valid result (issue
+            // #29 status 30). MakeThickSolidByJoin is the hollow-solid (shelling)
+            // operation: with an empty closing-faces list no face is opened, so
+            // the closed solid becomes a watertight wall of the given thickness
+            // between its original boundary and the parallel offset surface.
+            TopTools_ListOfShape closing_faces; // empty -> fully closed wall
             BRepOffsetAPI_MakeThickSolid make_thick;
-            make_thick.MakeThickSolidBySimple(solid, thickness);
-            if (!make_thick.IsDone())
+            try
             {
-                // MakeThickSolidBySimple is failure-prone; skip a solid it
-                // cannot hollow rather than abandoning the whole batch.
+                make_thick.MakeThickSolidByJoin(
+                    solid,
+                    closing_faces,
+                    thickness,
+                    safe_tolerance,
+                    BRepOffset_Skin,
+                    Standard_False,
+                    Standard_False,
+                    GeomAbs_Intersection);
+            }
+            catch (...)
+            {
+                // Thickening is failure-prone; skip a solid it cannot hollow
+                // rather than abandoning the whole batch.
                 continue;
             }
 
-            (void)safe_tolerance;
+            if (!make_thick.IsDone())
+            {
+                continue;
+            }
+
             collect_fixed_solids_offset(make_thick.Shape(), result_solids);
         }
 

@@ -57,5 +57,41 @@ namespace SAM.OCCT.IntegrationTests
             Assert.NotEmpty(result.Cells);
             Assert.True(result.Cells.Sum(x => x.Volume) > 0);
         }
+
+        /// <summary>
+        /// Regression for issue #29: a batch of a non-axis-aligned solid (a
+        /// triangular roof prism, whose sloped faces converge at apex edges) and
+        /// a box. The original BySimple calls skipped corner-intersection
+        /// computation, so offsetting tore the skin at the prism's corners and
+        /// thickening a closed solid failed outright (native status 30). The
+        /// ByJoin algorithm offsets/hollows both solids cleanly.
+        /// </summary>
+        [SkippableFact]
+        public void ShellsOffsetAndThicken_PrismAndBoxBatch_SucceedForBothSolids()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange - a triangular roof prism beside a box (two closed solids).
+            List<Shell> shells = new List<Shell>
+            {
+                TestGeometry.CreateTriangularPrism(),
+                TestGeometry.CreateBox(0, -30, 0, 9, 10, 10)
+            };
+
+            // Act - inward offset, then wall-thicken, the whole batch.
+            List<Shell> offset_Shells = GeometryQuery.ShellsOffset(shells, -0.2, out OcctCellComplexResult offset_Result, new OcctBuildOptions());
+            List<Shell> thicken_Shells = GeometryQuery.ShellsThicken(shells, 0.2, out OcctCellComplexResult thicken_Result, new OcctBuildOptions());
+
+            // Assert - both solids survive each operation with positive volume.
+            Assert.True(offset_Result.Success);
+            Assert.NotNull(offset_Shells);
+            Assert.Equal(2, offset_Result.Cells.Count);
+            Assert.True(offset_Result.Cells.Sum(x => x.Volume) > 0);
+
+            Assert.True(thicken_Result.Success);
+            Assert.NotNull(thicken_Shells);
+            Assert.Equal(2, thicken_Result.Cells.Count);
+            Assert.True(thicken_Result.Cells.Sum(x => x.Volume) > 0);
+        }
     }
 }

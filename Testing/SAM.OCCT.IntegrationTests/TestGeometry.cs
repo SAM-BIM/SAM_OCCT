@@ -45,6 +45,30 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         /// <summary>
+        /// A triangular roof prism (the issue #29 repro solid): an isosceles
+        /// triangle in the y-z plane extruded along x from 0 to 9. Its two
+        /// sloped faces meet the base and each other at non-orthogonal corners,
+        /// which the simple (no-intersection) offset/thicken algorithm could not
+        /// handle.
+        /// </summary>
+        public static Shell CreateTriangularPrism()
+        {
+            Point3D a0 = new Point3D(0, -30, 10), b0 = new Point3D(0, -20, 10), c0 = new Point3D(0, -23, 20);
+            Point3D a9 = new Point3D(9, -30, 10), b9 = new Point3D(9, -20, 10), c9 = new Point3D(9, -23, 20);
+
+            List<Face3D> face3Ds = new List<Face3D>
+            {
+                CreatePlanarFace(a0, b0, c0), // triangle cap (x = 0)
+                CreatePlanarFace(a9, b9, c9), // triangle cap (x = 9)
+                CreatePlanarFace(a0, b0, b9, a9), // base
+                CreatePlanarFace(b0, c0, c9, b9), // slope 1
+                CreatePlanarFace(c0, a0, a9, c9)  // slope 2
+            };
+
+            return new Shell(face3Ds);
+        }
+
+        /// <summary>
         /// A closed, slender column box (0.03 x 0.03 x height) whose top and bottom
         /// caps are 0.0009 m^2 - below the default 0.001 m^2 minArea - while its four
         /// walls stay above it. The caps are load-bearing, and the 0.03 m opening left
