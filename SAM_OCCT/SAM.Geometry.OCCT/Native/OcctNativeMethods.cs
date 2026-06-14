@@ -111,6 +111,13 @@ namespace SAM.Geometry.OCCT.Native
             out OcctTopology shapeHandleOut);
 
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_imprint(
+            OcctTopology shapeHandle,
+            double fuzzyTolerance,
+            int runParallel,
+            out OcctTopology shapeHandleOut);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sam_occt_shape_make_volume(
             OcctTopology shapeHandle,
             [In] double[] coordinates,
@@ -122,6 +129,33 @@ namespace SAM.Geometry.OCCT.Native
             double fuzzyTolerance,
             int runParallel,
             int avoidInternalShapes,
+            out OcctTopology shapeHandleOut);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_extrude(
+            [In] double[] coordinates,
+            int pointCount,
+            [In] int[] loopPointCounts,
+            int loopCount,
+            [In] int[] faceLoopCounts,
+            int faceCount,
+            double directionX,
+            double directionY,
+            double directionZ,
+            out OcctTopology shapeHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_offset(
+            OcctTopology shapeHandle,
+            double offset,
+            double tolerance,
+            out OcctTopology shapeHandleOut);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_thick_solid(
+            OcctTopology shapeHandle,
+            double thickness,
+            double tolerance,
             out OcctTopology shapeHandleOut);
 
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]

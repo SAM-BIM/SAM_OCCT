@@ -35,11 +35,19 @@ namespace SAM.Geometry.OCCT
         /// </summary>
         public OcctTopology Topology { get; internal set; }
 
+        /// <summary>
+        /// Set by operations that legitimately produce no cells (e.g. the
+        /// distance/proximity query, issue #28) to report success without a
+        /// decoded cell complex. Cell-producing operations leave this false and
+        /// are judged successful by their decoded cell count instead.
+        /// </summary>
+        internal bool OperationSucceeded { get; set; }
+
         public bool Success
         {
             get
             {
-                return cells.Count != 0 && !diagnostics.Any(x => x.Severity == OcctDiagnosticSeverity.Error);
+                return (cells.Count != 0 || OperationSucceeded) && !diagnostics.Any(x => x.Severity == OcctDiagnosticSeverity.Error);
             }
         }
 

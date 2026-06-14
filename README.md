@@ -43,11 +43,15 @@ in C#.
 Geometry:
 
 - `SAMOCCT.CreateShells`
+- `SAMOCCT.ExtrudeFootprints`
 - `SAMOCCT.ShellsUnion`
 - `SAMOCCT.ShellsDifference`
 - `SAMOCCT.ShellsIntersection`
 - `SAMOCCT.ShellsRepair`
 - `SAMOCCT.ShellsSplit`
+- `SAMOCCT.ShellsOffset`
+- `SAMOCCT.ShellsThicken`
+- `SAMOCCT.ShellsImprint`
 - `SAMOCCT.ShellsSectionByPlane`
 - `SAMOCCT.ShellsDistance`
 - `SAMOCCT.MergeSmallShells`
@@ -141,11 +145,15 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | Component | What it does | Key inputs | Main output |
 | --- | --- | --- | --- |
 | `SAMOCCT.CreateShells` | Builds closed SAM `Shell` volumes from boundary faces/surfaces using OCCT. | `_face3Ds`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ExtrudeFootprints` | Extrudes planar footprint Face3Ds vertically (via OCCT `BRepPrimAPI_MakePrism`) into one closed shell each - the draw-outline-plus-storey-height workflow feeding `CreateShells`. | `_footprints`, `_height`, `tolerance_` | `Shells` |
 | `SAMOCCT.ShellsUnion` | Merges touching or overlapping closed shells into combined solids. | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsDifference` | Subtracts closed cutter volumes from target shells. | `_shells`, `_cutterShells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsIntersection` | Keeps only the volume where target shells overlap tool shells. | `_shells`, `_toolShells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsRepair` | Rebuilds/repairs each closed shell through OCCT (heals gaps, bad faces) and defeatures away tiny sliver faces below `minArea_` left by sectioning, extending neighbours to keep the shell closed. | `_shells`, `tolerance_`, `fuzzyTolerance_`, `minArea_` | `Shells` |
 | `SAMOCCT.ShellsSplit` | Splits overlapping/touching shells into cleaner adjacent pieces. | `_shells`, `silverSpacing_`, `tolerance_` | `Shells` |
+| `SAMOCCT.ShellsOffset` | Offsets each closed shell's skin outward (positive) or inward (negative) via OCCT `BRepOffsetAPI_MakeOffsetShape` - centre-line vs physical face. | `_shells`, `_offset`, `tolerance_` | `Shells` |
+| `SAMOCCT.ShellsThicken` | Hollows each closed shell into a genuine wall of the given thickness - the material between the boundary and a parallel offset surface, with an inner cavity (built as outer solid − inner solid), unlike `ShellsOffset` which moves the whole skin. Positive thickens outward, negative inward (construction / plenum shells). | `_shells`, `_thickness`, `tolerance_` | `Shells` |
+| `SAMOCCT.ShellsImprint` | Imprints touching shells against each other via OCCT General Fuse so partly-shared boundary faces are split into matching sub-faces (second-level space boundaries). Volumes stay separate (not a union); the matched faces decode into `FaceAdjacencies`. | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsSectionByPlane` | Sections shells by one or more planes (supply many level planes to cut many levels at once), returning the cut faces and the split shells. | `_shells`, `planes_`, `tolerance_` | `Face3Ds`, `Shells` |
 | `SAMOCCT.ShellsDistance` | Minimum distance between two sets of closed shells via OCCT `BRepExtrema`, with the closest point on each side (tolerance-true adjacency/gap/clash detection; 0 = touching/overlapping). | `_shells`, `_otherShells`, `tolerance_`, `fuzzyTolerance_` | `Distance`, `PointOnShells`, `PointOnOtherShells` |
 | `SAMOCCT.MergeSmallShells` | Fuses tiny closed shells into their best face-adjacent neighbour via OCCT cell topology. | `_shells`, `minArea_`, `minVolume_`, `mergeMode_`, `protectedShells_`, `fuzzyTolerance_`, `tolerance_` | `Shells` (+ `mergedSmallShells`, `unmergedSmallShells`, `report`) |
@@ -270,6 +278,9 @@ an approved Ninja executable with `-NinjaPath`.
 The native bridge currently uses:
 
 - `BOPAlgo_MakerVolume` for face/panel sets and shell repair.
+- `BRepPrimAPI_MakePrism` for footprint extrusion.
+- `BOPAlgo_Builder` (General Fuse) for shell imprinting / second-level space boundaries.
+- `BRepOffsetAPI_MakeOffsetShape` (PerformByJoin) for shell offset, and the same offset cut against the original (`BRepAlgoAPI_Cut`) for wall thickening.
 - `BRepAlgoAPI_Fuse` for shell union.
 - `BRepExtrema_DistShapeShape` for shell-to-shell distance / gap detection.
 - `BRepAlgoAPI_Cut` for shell difference.
