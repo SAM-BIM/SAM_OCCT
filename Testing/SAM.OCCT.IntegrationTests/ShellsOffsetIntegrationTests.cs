@@ -41,21 +41,27 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         [SkippableFact]
-        public void ShellsThicken_UnitBox_ProducesPositiveWallVolume()
+        public void ShellsThicken_UnitBox_ProducesHollowWallNotSolidOffset()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
 
             // Arrange
             List<Shell> shells = new List<Shell> { TestGeometry.CreateUnitBox(0, 0, 0) };
 
-            // Act - hollow into a 0.1 wall.
+            // Act - hollow the unit box (volume 1) into a 0.1 inward wall.
             List<Shell> result_Shells = GeometryQuery.ShellsThicken(shells, 0.1, out OcctCellComplexResult result, new OcctBuildOptions());
 
-            // Assert - a valid solid with positive volume is produced.
+            // Assert - a genuine hollow wall: positive volume, but strictly less
+            // than the source solid (it is the material between the boundary and
+            // an inner cavity, not a full offset solid). The cavity adds an inner
+            // face set, so the wall shell carries more faces than the 6 of a box.
             Assert.True(result.Success);
             Assert.NotNull(result_Shells);
-            Assert.NotEmpty(result.Cells);
-            Assert.True(result.Cells.Sum(x => x.Volume) > 0);
+            Assert.Single(result.Cells);
+            double wallVolume = result.Cells.Sum(x => x.Volume);
+            Assert.True(wallVolume > 0);
+            Assert.True(wallVolume < 1.0, $"wall volume {wallVolume} should be less than the unit box it hollowed");
+            Assert.True(result_Shells.Sum(x => x.Face3Ds.Count) > 6, "a hollow wall must carry both an outer and an inner face set");
         }
 
         /// <summary>

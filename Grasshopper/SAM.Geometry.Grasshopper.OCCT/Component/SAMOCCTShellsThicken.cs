@@ -23,7 +23,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
         public SAMOCCTShellsThicken()
-          : base("SAMOCCT.ShellsThicken", "SAMOCCT.ShellsThicken", "Hollow each closed shell into a wall of the given thickness using OCCT (BRepOffsetAPI_MakeThickSolid) - e.g. construction / plenum shells. Check Diagnostics; thickening is failure-prone on complex inputs.", "SAM", "OCCT")
+          : base("SAMOCCT.ShellsThicken", "SAMOCCT.ShellsThicken", "Hollow each closed shell into a genuine wall of the given thickness using OCCT - the material between the boundary and a parallel offset surface, with an inner cavity (unlike ShellsOffset, which moves the whole skin). E.g. construction / plenum shells. Check Diagnostics; thickening is failure-prone on complex inputs.", "SAM", "OCCT")
         {
         }
 

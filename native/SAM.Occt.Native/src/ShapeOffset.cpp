@@ -3,9 +3,12 @@
 
 // Surface offset & wall-thickening (issue #29). Two persistent-handle ops:
 //   * sam_occt_shape_offset      - grow/shrink a solid's skin by a signed
-//                                  distance (BRepOffsetAPI_MakeOffsetShape).
+//                                  distance (BRepOffsetAPI_MakeOffsetShape,
+//                                  PerformByJoin).
 //   * sam_occt_shape_thick_solid - hollow a solid into a wall of the given
-//                                  thickness (BRepOffsetAPI_MakeThickSolid).
+//                                  thickness, built as (outer solid) - (inner
+//                                  solid) so the result is a genuine hollow
+//                                  solid with a cavity, not just an offset.
 // These move between analytical centre-line geometry and physical construction
 // thickness for energy models. Offsetting is the most failure-prone OCCT
 // operation, so each solid is processed independently and a failure surfaces as
@@ -14,14 +17,13 @@
 #include "sam_occt.h"
 #include "OcctNativeCore.h"
 
+#include <BRepAlgoAPI_Cut.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
-#include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepOffset_Mode.hxx>
 #include <BRep_Builder.hxx>
 #include <GeomAbs_JoinType.hxx>
 #include <ShapeFix_Shape.hxx>
 #include <TopExp_Explorer.hxx>
-#include <TopTools_ListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Shape.hxx>
@@ -80,6 +82,37 @@ namespace
         return 0;
     }
 
+    // Offsets a single solid's skin by a signed distance via the join
+    // algorithm (mitred corners), returning false if OCCT cannot offset it.
+    // Shared by the offset op and by the thick-solid op's inner/outer surface.
+    bool try_offset_solid(const TopoDS_Solid& solid, double distance, double tolerance, TopoDS_Shape& result_shape)
+    {
+        BRepOffsetAPI_MakeOffsetShape make_offset;
+        try
+        {
+            make_offset.PerformByJoin(
+                solid,
+                distance,
+                tolerance,
+                BRepOffset_Skin,
+                Standard_False,
+                Standard_False,
+                GeomAbs_Intersection);
+        }
+        catch (...)
+        {
+            return false;
+        }
+
+        if (!make_offset.IsDone())
+        {
+            return false;
+        }
+
+        result_shape = make_offset.Shape();
+        return true;
+    }
+
     int validate_offset_arguments(void** shape_handle_out, void* shape_handle, Shape*& shape)
     {
         if (shape_handle_out != nullptr)
@@ -135,39 +168,21 @@ int sam_occt_shape_offset(
         std::vector<TopoDS_Solid> result_solids;
         for (const TopoDS_Solid& solid : solids)
         {
-            // PerformByJoin (not PerformBySimple): the "simple" algorithm skips
-            // surface-intersection computation, so on a closed solid adjacent
-            // offset faces are never trimmed back to a shared corner - the skin
-            // tears / overlaps at every vertex (issue #29 corner artefacts).
-            // PerformByJoin supports solids directly and constructs the parallel
-            // outside (offset > 0) or inside (offset < 0); GeomAbs_Intersection
-            // mitres the corners instead of rounding them with arcs/spheres.
-            BRepOffsetAPI_MakeOffsetShape make_offset;
-            try
-            {
-                make_offset.PerformByJoin(
-                    solid,
-                    offset,
-                    safe_tolerance,
-                    BRepOffset_Skin,
-                    Standard_False,
-                    Standard_False,
-                    GeomAbs_Intersection);
-            }
-            catch (...)
-            {
-                // Offsetting is failure-prone (self-intersections, >3-edge
-                // vertices); skip a solid OCCT cannot offset rather than
-                // abandoning the whole batch.
-                continue;
-            }
-
-            if (!make_offset.IsDone())
+            // try_offset_solid uses PerformByJoin (not PerformBySimple): the
+            // "simple" algorithm skips surface-intersection computation, so on a
+            // closed solid adjacent offset faces are never trimmed back to a
+            // shared corner - the skin tears / overlaps at every vertex (issue
+            // #29 corner artefacts). PerformByJoin supports solids directly and
+            // mitres the corners. Offsetting is failure-prone (self-intersections,
+            // >3-edge vertices); skip a solid OCCT cannot offset rather than
+            // abandoning the whole batch.
+            TopoDS_Shape offset_shape;
+            if (!try_offset_solid(solid, offset, safe_tolerance, offset_shape))
             {
                 continue;
             }
 
-            collect_fixed_solids_offset(make_offset.Shape(), result_solids);
+            collect_fixed_solids_offset(offset_shape, result_solids);
         }
 
         // Status 30 only when nothing could be offset at all.
@@ -215,25 +230,49 @@ int sam_occt_shape_thick_solid(
         std::vector<TopoDS_Solid> result_solids;
         for (const TopoDS_Solid& solid : solids)
         {
-            // MakeThickSolidBySimple expects a NON-closed shell/face (OCCT docs)
-            // - feeding it a closed zone solid produced no valid result (issue
-            // #29 status 30). MakeThickSolidByJoin is the hollow-solid (shelling)
-            // operation: with an empty closing-faces list no face is opened, so
-            // the closed solid becomes a watertight wall of the given thickness
-            // between its original boundary and the parallel offset surface.
-            TopTools_ListOfShape closing_faces; // empty -> fully closed wall
-            BRepOffsetAPI_MakeThickSolid make_thick;
+            // Build the wall explicitly as (outer solid) - (inner solid) so the
+            // result is a genuine hollow solid with both a boundary and a cavity.
+            // MakeThickSolidByJoin with an empty closing-faces list does NOT carve
+            // a cavity - it returns only the outward offset, so the decoded SAM
+            // shell was identical to ShellsOffset (issue #29 follow-up). A boolean
+            // cut between the original surface and its parallel keeps both face
+            // sets, so the wall reads as a real construction / plenum shell.
+            //
+            //   thickness > 0 : wall on the OUTSIDE (outer = original grown,
+            //                   cavity = original boundary).
+            //   thickness < 0 : wall on the INSIDE  (outer = original boundary,
+            //                   cavity = original shrunk inward).
+            // (Matches the SAMOCCT.ShellsThicken node: positive = outward.)
+            TopoDS_Shape outer_shape;
+            TopoDS_Shape inner_shape;
+            if (thickness > 0.0)
+            {
+                inner_shape = solid;
+                if (!try_offset_solid(solid, thickness, safe_tolerance, outer_shape))
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                outer_shape = solid;
+                if (!try_offset_solid(solid, thickness, safe_tolerance, inner_shape))
+                {
+                    continue;
+                }
+            }
+
             try
             {
-                make_thick.MakeThickSolidByJoin(
-                    solid,
-                    closing_faces,
-                    thickness,
-                    safe_tolerance,
-                    BRepOffset_Skin,
-                    Standard_False,
-                    Standard_False,
-                    GeomAbs_Intersection);
+                BRepAlgoAPI_Cut cut(outer_shape, inner_shape);
+                cut.SetFuzzyValue(safe_tolerance);
+                cut.Build();
+                if (cut.HasErrors())
+                {
+                    continue;
+                }
+
+                collect_fixed_solids_offset(cut.Shape(), result_solids);
             }
             catch (...)
             {
@@ -241,13 +280,6 @@ int sam_occt_shape_thick_solid(
                 // rather than abandoning the whole batch.
                 continue;
             }
-
-            if (!make_thick.IsDone())
-            {
-                continue;
-            }
-
-            collect_fixed_solids_offset(make_thick.Shape(), result_solids);
         }
 
         // Status 30 only when nothing could be thickened at all.
