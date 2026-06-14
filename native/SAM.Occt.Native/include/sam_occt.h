@@ -138,6 +138,26 @@ SAM_OCCT_API int sam_occt_shape_make_volume(
     int avoid_internal_shapes,
     void** shape_handle_out);
 
+/* Footprint extrusion (issue #30): builds planar boundary loops (the same
+   flattened-array contract as sam_occt_shape_create_cell_complex) into faces
+   and linearly extrudes each by the direction vector via BRepPrimAPI_MakePrism,
+   producing one closed solid per footprint wrapped in a new caller-owned
+   handle. Intended for the 2-D-footprint-plus-storey-height workflow that feeds
+   CreateShells / the adjacency pipeline. Status: 0 ok, 10/11 input,
+   12 zero-length direction, 20 no valid faces, 30 prism failed, 40 no solids,
+   99 exception. */
+SAM_OCCT_API int sam_occt_extrude(
+    const double* coordinates,
+    int point_count,
+    const int* loop_point_counts,
+    int loop_count,
+    const int* face_loop_counts,
+    int face_count,
+    double direction_x,
+    double direction_y,
+    double direction_z,
+    void** shape_handle);
+
 /* Offsets each solid's skin outward (positive) or inward (negative) by `offset`
    via BRepOffsetAPI_MakeOffsetShape (issue #29) - moving between analytical
    centre-line and physical construction faces. Returns a NEW caller-owned

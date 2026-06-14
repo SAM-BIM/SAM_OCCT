@@ -145,6 +145,75 @@ namespace SAM.Geometry.OCCT.Native
         }
 
         /// <summary>
+        /// Extrudes planar footprint Face3Ds along a direction vector (issue
+        /// #30): serialize the footprints, call the native BRepPrimAPI_MakePrism
+        /// entry point to get one closed solid per footprint, then decode into
+        /// the result. The output handle is retained on the result only when
+        /// OcctBuildOptions.RetainTopology is set, otherwise disposed.
+        /// </summary>
+        public static bool TryExtrude(IEnumerable<Face3D> face3Ds, Vector3D direction, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            if (!OcctNativeInputBuilder.TryBuild(face3Ds, options, result, out OcctNativeInput input))
+            {
+                return false;
+            }
+
+            OcctTopology topology = null;
+            try
+            {
+                int status = OcctNativeMethods.sam_occt_extrude(
+                    input.Coordinates,
+                    input.Coordinates.Length / 3,
+                    input.LoopPointCounts,
+                    input.LoopPointCounts.Length,
+                    input.FaceLoopCounts,
+                    input.FaceCount,
+                    direction.X,
+                    direction.Y,
+                    direction.Z,
+                    out OcctTopology topology_Temp);
+
+                result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                if (!HandleCreateStatus(status, topology_Temp, result, out topology))
+                {
+                    return false;
+                }
+
+                if (!TryDecode(topology, options, result))
+                {
+                    return false;
+                }
+
+                if (options.RetainTopology)
+                {
+                    result.Topology = topology;
+                    topology = null;
+                }
+
+                return true;
+            }
+            catch (DllNotFoundException exception)
+            {
+                return HandleNativeMissing(exception, result);
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                return HandleEntryPointMissing(exception, result);
+            }
+            catch (ObjectDisposedException)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "An OCCT topology handle was disposed while in use.");
+                return false;
+            }
+            finally
+            {
+                topology?.Dispose();
+            }
+        }
+
+        /// <summary>
         /// Offsets the skin of each shell's solid by a signed distance (issue
         /// #29) or, when <paramref name="thicken"/> is true, hollows each into a
         /// wall of that thickness. Builds the input topology, calls the native
