@@ -144,6 +144,75 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
+        /// <summary>
+        /// Offsets the skin of each shell's solid by a signed distance (issue
+        /// #29) or, when <paramref name="thicken"/> is true, hollows each into a
+        /// wall of that thickness. Builds the input topology, calls the native
+        /// BRepOffsetAPI entry point, then decodes. The output handle is retained
+        /// on the result only when OcctBuildOptions.RetainTopology is set.
+        /// </summary>
+        public static bool TryOffsetShells(IEnumerable<Shell> shells, double distance, bool thicken, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            if (!TryCreateTopology(shells, options, result, out OcctTopology input))
+            {
+                return false;
+            }
+
+            OcctTopology output = null;
+            try
+            {
+                int status;
+                OcctTopology output_Temp;
+                if (thicken)
+                {
+                    status = OcctNativeMethods.sam_occt_shape_thick_solid(input, distance, options.Tolerance, out output_Temp);
+                }
+                else
+                {
+                    status = OcctNativeMethods.sam_occt_shape_offset(input, distance, options.Tolerance, out output_Temp);
+                }
+
+                result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                if (!HandleCreateStatus(status, output_Temp, result, out output))
+                {
+                    return false;
+                }
+
+                if (!TryDecode(output, options, result))
+                {
+                    return false;
+                }
+
+                if (options.RetainTopology)
+                {
+                    result.Topology = output;
+                    output = null;
+                }
+
+                return true;
+            }
+            catch (DllNotFoundException exception)
+            {
+                return HandleNativeMissing(exception, result);
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                return HandleEntryPointMissing(exception, result);
+            }
+            catch (ObjectDisposedException)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "An OCCT topology handle was disposed while in use.");
+                return false;
+            }
+            finally
+            {
+                input.Dispose();
+                output?.Dispose();
+            }
+        }
+
         internal enum ShapeOperation
         {
             Union,
