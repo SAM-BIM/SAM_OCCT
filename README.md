@@ -50,6 +50,7 @@ Geometry:
 - `SAMOCCT.ShellsSplit`
 - `SAMOCCT.ShellsOffset`
 - `SAMOCCT.ShellsThicken`
+- `SAMOCCT.ShellsImprint`
 - `SAMOCCT.ShellsSectionByPlane`
 - `SAMOCCT.MergeSmallShells`
 - `SAMOCCT.MergeCoplanarFace3Ds`
@@ -149,6 +150,7 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | `SAMOCCT.ShellsSplit` | Splits overlapping/touching shells into cleaner adjacent pieces. | `_shells`, `silverSpacing_`, `tolerance_` | `Shells` |
 | `SAMOCCT.ShellsOffset` | Offsets each closed shell's skin outward (positive) or inward (negative) via OCCT `BRepOffsetAPI_MakeOffsetShape` - centre-line vs physical face. | `_shells`, `_offset`, `tolerance_` | `Shells` |
 | `SAMOCCT.ShellsThicken` | Hollows each closed shell into a wall of the given thickness via OCCT `BRepOffsetAPI_MakeThickSolid` (construction / plenum shells). | `_shells`, `_thickness`, `tolerance_` | `Shells` |
+| `SAMOCCT.ShellsImprint` | Imprints touching shells against each other via OCCT General Fuse so partly-shared boundary faces are split into matching sub-faces (second-level space boundaries). Volumes stay separate (not a union); the matched faces decode into `FaceAdjacencies`. | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsSectionByPlane` | Sections shells by one or more planes (supply many level planes to cut many levels at once), returning the cut faces and the split shells. | `_shells`, `planes_`, `tolerance_` | `Face3Ds`, `Shells` |
 | `SAMOCCT.MergeSmallShells` | Fuses tiny closed shells into their best face-adjacent neighbour via OCCT cell topology. | `_shells`, `minArea_`, `minVolume_`, `mergeMode_`, `protectedShells_`, `fuzzyTolerance_`, `tolerance_` | `Shells` (+ `mergedSmallShells`, `unmergedSmallShells`, `report`) |
 | `SAMOCCT.MergeCoplanarFace3Ds` | Merges adjacent coplanar Face3Ds into fewer, larger faces via OCCT `ShapeUpgrade_UnifySameDomain`. | `_face3Ds`, `angleTolerance_`, `tolerance_` | `Face3Ds` |
@@ -272,6 +274,7 @@ an approved Ninja executable with `-NinjaPath`.
 The native bridge currently uses:
 
 - `BOPAlgo_MakerVolume` for face/panel sets and shell repair.
+- `BOPAlgo_Builder` (General Fuse) for shell imprinting / second-level space boundaries.
 - `BRepOffsetAPI_MakeOffsetShape` / `BRepOffsetAPI_MakeThickSolid` for shell offset / wall thickening.
 - `BRepAlgoAPI_Fuse` for shell union.
 - `BRepAlgoAPI_Cut` for shell difference.
