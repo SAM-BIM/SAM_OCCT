@@ -56,6 +56,7 @@ add_library(SAM.Occt.Native SHARED
     src/CellComplexBuilder.cpp
     src/DataExchangeRuntime.cpp
     src/ShapeHandle.cpp
+    src/ShapeExtrude.cpp
 )
 
 target_compile_definitions(SAM.Occt.Native PRIVATE SAM_OCCT_NATIVE_EXPORTS)
