@@ -136,11 +136,19 @@ int sam_occt_shape_offset(
             make_offset.PerformBySimple(solid, offset);
             if (!make_offset.IsDone())
             {
-                return 30;
+                // Offsetting is failure-prone; skip a solid OCCT cannot offset
+                // rather than abandoning the whole batch.
+                continue;
             }
 
             (void)safe_tolerance;
             collect_fixed_solids_offset(make_offset.Shape(), result_solids);
+        }
+
+        // Status 30 only when nothing could be offset at all.
+        if (result_solids.empty())
+        {
+            return 30;
         }
 
         return wrap_solids_offset(result_solids, shape_handle_out);
@@ -186,11 +194,19 @@ int sam_occt_shape_thick_solid(
             make_thick.MakeThickSolidBySimple(solid, thickness);
             if (!make_thick.IsDone())
             {
-                return 30;
+                // MakeThickSolidBySimple is failure-prone; skip a solid it
+                // cannot hollow rather than abandoning the whole batch.
+                continue;
             }
 
             (void)safe_tolerance;
             collect_fixed_solids_offset(make_thick.Shape(), result_solids);
+        }
+
+        // Status 30 only when nothing could be thickened at all.
+        if (result_solids.empty())
+        {
+            return 30;
         }
 
         return wrap_solids_offset(result_solids, shape_handle_out);
