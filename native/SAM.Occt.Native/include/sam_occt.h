@@ -122,6 +122,28 @@ SAM_OCCT_API int sam_occt_shape_make_volume(
     int avoid_internal_shapes,
     void** shape_handle_out);
 
+/* Offsets each solid's skin outward (positive) or inward (negative) by `offset`
+   via BRepOffsetAPI_MakeOffsetShape (issue #29) - moving between analytical
+   centre-line and physical construction faces. Returns a NEW caller-owned
+   handle. Offsetting is the most failure-prone OCCT op, so each solid is
+   processed independently. Status: 0 ok, 10 null output pointer,
+   12 zero offset, 30 offset failed, 40 no solids, 50 invalid handle, 99 exception. */
+SAM_OCCT_API int sam_occt_shape_offset(
+    void* shape_handle,
+    double offset,
+    double tolerance,
+    void** shape_handle_out);
+
+/* Hollows each solid into a wall of the given `thickness` via
+   BRepOffsetAPI_MakeThickSolid (issue #29) - e.g. plenum / air-cavity volumes.
+   Returns a NEW caller-owned handle. Status codes as sam_occt_shape_offset
+   (12 = zero thickness). */
+SAM_OCCT_API int sam_occt_shape_thick_solid(
+    void* shape_handle,
+    double thickness,
+    double tolerance,
+    void** shape_handle_out);
+
 /* Number of solids in the shape; negative on an invalid handle. */
 SAM_OCCT_API int sam_occt_shape_solid_count(void* shape_handle);
 
