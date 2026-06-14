@@ -22,6 +22,7 @@
 #include <BRepOffset_Mode.hxx>
 #include <BRep_Builder.hxx>
 #include <GeomAbs_JoinType.hxx>
+#include <OSD.hxx>
 #include <ShapeFix_Shape.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -82,14 +83,26 @@ namespace
         return 0;
     }
 
+    // Convert OS-level signals / hardware faults (access violations raised deep
+    // inside the OCCT offset & boolean kernels on pathological input) into
+    // catchable Standard_Failure exceptions on the calling thread. Combined with
+    // the /EHa build option this stops such a fault from tearing down the host
+    // process (e.g. Rhino) - it surfaces as a clean status instead. Idempotent
+    // and cheap; called at each entry point because the translation is installed
+    // per-thread.
+    void arm_signal_translation()
+    {
+        OSD::SetSignal(Standard_False);
+    }
+
     // Offsets a single solid's skin by a signed distance via the join
     // algorithm (mitred corners), returning false if OCCT cannot offset it.
     // Shared by the offset op and by the thick-solid op's inner/outer surface.
     bool try_offset_solid(const TopoDS_Solid& solid, double distance, double tolerance, TopoDS_Shape& result_shape)
     {
-        BRepOffsetAPI_MakeOffsetShape make_offset;
         try
         {
+            BRepOffsetAPI_MakeOffsetShape make_offset;
             make_offset.PerformByJoin(
                 solid,
                 distance,
@@ -98,19 +111,22 @@ namespace
                 Standard_False,
                 Standard_False,
                 GeomAbs_Intersection);
+
+            if (!make_offset.IsDone())
+            {
+                return false;
+            }
+
+            result_shape = make_offset.Shape();
+            return true;
         }
         catch (...)
         {
+            // PerformByJoin, IsDone and Shape can all throw (or, with /EHa, fault)
+            // deep inside the offset kernel on pathological input - guard the whole
+            // sequence so one bad solid is skipped, not the entire batch.
             return false;
         }
-
-        if (!make_offset.IsDone())
-        {
-            return false;
-        }
-
-        result_shape = make_offset.Shape();
-        return true;
     }
 
     int validate_offset_arguments(void** shape_handle_out, void* shape_handle, Shape*& shape)
@@ -155,6 +171,8 @@ int sam_occt_shape_offset(
         return 12;
     }
 
+    arm_signal_translation();
+
     try
     {
         std::vector<TopoDS_Solid> solids = collect_solids_offset(shape->shape);
@@ -176,13 +194,22 @@ int sam_occt_shape_offset(
             // mitres the corners. Offsetting is failure-prone (self-intersections,
             // >3-edge vertices); skip a solid OCCT cannot offset rather than
             // abandoning the whole batch.
-            TopoDS_Shape offset_shape;
-            if (!try_offset_solid(solid, offset, safe_tolerance, offset_shape))
+            try
             {
+                TopoDS_Shape offset_shape;
+                if (!try_offset_solid(solid, offset, safe_tolerance, offset_shape))
+                {
+                    continue;
+                }
+
+                collect_fixed_solids_offset(offset_shape, result_solids);
+            }
+            catch (...)
+            {
+                // Also guards the ShapeFix in collect_fixed_solids_offset; skip
+                // this solid rather than failing the whole batch.
                 continue;
             }
-
-            collect_fixed_solids_offset(offset_shape, result_solids);
         }
 
         // Status 30 only when nothing could be offset at all.
@@ -216,6 +243,8 @@ int sam_occt_shape_thick_solid(
     {
         return 12;
     }
+
+    arm_signal_translation();
 
     try
     {

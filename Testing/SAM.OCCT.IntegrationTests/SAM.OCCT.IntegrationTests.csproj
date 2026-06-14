@@ -33,6 +33,9 @@
   <!-- Uploaded SAM geometry fixtures exercised by OcctFixtureIntegrationTests. -->
   <ItemGroup>
     <None Update="Fixtures\*.sam" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Pathological models kept out of the top-level scan (which asserts a clean
+         build) - exercised explicitly by robustness tests that only require no crash. -->
+    <None Update="Fixtures\Robustness\*.sam" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
