@@ -9,6 +9,7 @@
 #include "sam_occt.h"
 #include "OcctNativeCore.h"
 
+#include <BOPAlgo_Builder.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
@@ -489,6 +490,69 @@ int sam_occt_shape_repair(
         }
 
         return wrap_shape(make_compound(result_solids), shape_handle_out);
+    }
+    catch (...)
+    {
+        return 99;
+    }
+}
+
+int sam_occt_shape_imprint(
+    void* shape_handle,
+    double fuzzy_tolerance,
+    int run_parallel,
+    void** shape_handle_out)
+{
+    Shape* shape = nullptr;
+    const int argument_status = validate_op_arguments(shape_handle_out, shape_handle, shape);
+    if (argument_status != 0)
+    {
+        return argument_status;
+    }
+
+    try
+    {
+        std::vector<TopoDS_Solid> solids = collect_solids(shape->shape);
+        if (solids.empty())
+        {
+            return 40;
+        }
+
+        // A single solid has no neighbour to imprint against - pass it through
+        // unchanged, matching the single-solid branch of sam_occt_shape_union.
+        if (solids.size() == 1)
+        {
+            return wrap_shape(solids[0], shape_handle_out);
+        }
+
+        // General Fuse: a non-destructive build that computes every interference
+        // between the arguments and imprints coincident faces into matching
+        // sub-faces, while keeping the input solids as distinct result solids
+        // (it does not weld them like BRepAlgoAPI_Fuse). The decode step then
+        // key-matches those shared sub-faces into FaceAdjacencies.
+        BOPAlgo_Builder builder;
+        for (const TopoDS_Solid& solid : solids)
+        {
+            builder.AddArgument(solid);
+        }
+
+        builder.SetFuzzyValue(fuzzy_tolerance);
+        builder.SetRunParallel(run_parallel != 0);
+        builder.Perform();
+
+        if (builder.HasErrors())
+        {
+            return 30;
+        }
+
+        std::vector<TopoDS_Solid> imprinted_solids;
+        collect_fixed_solids(builder.Shape(), imprinted_solids);
+        if (imprinted_solids.empty())
+        {
+            return 40;
+        }
+
+        return wrap_shape(make_compound(imprinted_solids), shape_handle_out);
     }
     catch (...)
     {
