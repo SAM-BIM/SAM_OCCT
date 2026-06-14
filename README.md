@@ -43,6 +43,7 @@ in C#.
 Geometry:
 
 - `SAMOCCT.CreateShells`
+- `SAMOCCT.ExtrudeFootprints`
 - `SAMOCCT.ShellsUnion`
 - `SAMOCCT.ShellsDifference`
 - `SAMOCCT.ShellsIntersection`
@@ -140,6 +141,7 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | Component | What it does | Key inputs | Main output |
 | --- | --- | --- | --- |
 | `SAMOCCT.CreateShells` | Builds closed SAM `Shell` volumes from boundary faces/surfaces using OCCT. | `_face3Ds`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
+| `SAMOCCT.ExtrudeFootprints` | Extrudes planar footprint Face3Ds vertically (via OCCT `BRepPrimAPI_MakePrism`) into one closed shell each - the draw-outline-plus-storey-height workflow feeding `CreateShells`. | `_footprints`, `_height`, `tolerance_` | `Shells` |
 | `SAMOCCT.ShellsUnion` | Merges touching or overlapping closed shells into combined solids. | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsDifference` | Subtracts closed cutter volumes from target shells. | `_shells`, `_cutterShells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsIntersection` | Keeps only the volume where target shells overlap tool shells. | `_shells`, `_toolShells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
@@ -268,6 +270,7 @@ an approved Ninja executable with `-NinjaPath`.
 The native bridge currently uses:
 
 - `BOPAlgo_MakerVolume` for face/panel sets and shell repair.
+- `BRepPrimAPI_MakePrism` for footprint extrusion.
 - `BRepAlgoAPI_Fuse` for shell union.
 - `BRepAlgoAPI_Cut` for shell difference.
 - `BRepAlgoAPI_Common` for shell intersection.
