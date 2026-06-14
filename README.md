@@ -49,6 +49,7 @@ Geometry:
 - `SAMOCCT.ShellsRepair`
 - `SAMOCCT.ShellsSplit`
 - `SAMOCCT.ShellsSectionByPlane`
+- `SAMOCCT.ShellsDistance`
 - `SAMOCCT.MergeSmallShells`
 - `SAMOCCT.MergeCoplanarFace3Ds`
 - `SAMOCCT.MergeCoplanarShells`
@@ -146,6 +147,7 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | `SAMOCCT.ShellsRepair` | Rebuilds/repairs each closed shell through OCCT (heals gaps, bad faces) and defeatures away tiny sliver faces below `minArea_` left by sectioning, extending neighbours to keep the shell closed. | `_shells`, `tolerance_`, `fuzzyTolerance_`, `minArea_` | `Shells` |
 | `SAMOCCT.ShellsSplit` | Splits overlapping/touching shells into cleaner adjacent pieces. | `_shells`, `silverSpacing_`, `tolerance_` | `Shells` |
 | `SAMOCCT.ShellsSectionByPlane` | Sections shells by one or more planes (supply many level planes to cut many levels at once), returning the cut faces and the split shells. | `_shells`, `planes_`, `tolerance_` | `Face3Ds`, `Shells` |
+| `SAMOCCT.ShellsDistance` | Minimum distance between two sets of closed shells via OCCT `BRepExtrema`, with the closest point on each side (tolerance-true adjacency/gap/clash detection; 0 = touching/overlapping). | `_shells`, `_otherShells`, `tolerance_`, `fuzzyTolerance_` | `Distance`, `PointOnShells`, `PointOnOtherShells` |
 | `SAMOCCT.MergeSmallShells` | Fuses tiny closed shells into their best face-adjacent neighbour via OCCT cell topology. | `_shells`, `minArea_`, `minVolume_`, `mergeMode_`, `protectedShells_`, `fuzzyTolerance_`, `tolerance_` | `Shells` (+ `mergedSmallShells`, `unmergedSmallShells`, `report`) |
 | `SAMOCCT.MergeCoplanarFace3Ds` | Merges adjacent coplanar Face3Ds into fewer, larger faces via OCCT `ShapeUpgrade_UnifySameDomain`. | `_face3Ds`, `angleTolerance_`, `tolerance_` | `Face3Ds` |
 | `SAMOCCT.MergeCoplanarShells` | Merges each shell's coplanar faces into fewer faces (volume preserved) via OCCT. | `_shells`, `angleTolerance_`, `tolerance_` | `Shells` |
@@ -269,6 +271,7 @@ The native bridge currently uses:
 
 - `BOPAlgo_MakerVolume` for face/panel sets and shell repair.
 - `BRepAlgoAPI_Fuse` for shell union.
+- `BRepExtrema_DistShapeShape` for shell-to-shell distance / gap detection.
 - `BRepAlgoAPI_Cut` for shell difference.
 - `BRepAlgoAPI_Common` for shell intersection.
 - `ShapeFix_Shape` before result decoding.

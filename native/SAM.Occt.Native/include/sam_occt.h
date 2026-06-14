@@ -136,6 +136,25 @@ SAM_OCCT_API int sam_occt_shape_point_in_solid(
     double z,
     double tolerance);
 
+/* Minimum distance between two shapes via BRepExtrema_DistShapeShape, plus the
+   closest point on each (the gap/proximity primitive of issue #28). Read-only:
+   both input handles stay valid and caller-owned, and no new handle is created.
+   Use it for tolerance-true adjacency detection, watertightness QA (locate the
+   actual gap before MakerVolume fails to close a cell) and clash reporting.
+   `distance` is required; the six closest-point out doubles are optional (pass
+   null to skip). Status: 0 ok, 10 null distance pointer, 30 extrema not done,
+   40 no solution, 50 invalid shape handle (either operand), 99 exception. */
+SAM_OCCT_API int sam_occt_shape_distance(
+    void* shape_handle_a,
+    void* shape_handle_b,
+    double* distance,
+    double* ax,
+    double* ay,
+    double* az,
+    double* bx,
+    double* by,
+    double* bz);
+
 /* Decodes every solid of the shape into a regular result handle consumed by
    the sam_occt_result_* accessors and freed with sam_occt_free_result. Face
    topology keys are quantized with `tolerance` and are only comparable within
