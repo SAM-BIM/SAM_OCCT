@@ -145,6 +145,97 @@ namespace SAM.Geometry.OCCT.Native
         }
 
         /// <summary>
+        /// Minimum distance between two sets of shells (issue #28): build each
+        /// set into its own topology, then call the native
+        /// BRepExtrema_DistShapeShape primitive. Returns the gap distance and
+        /// the closest point on each side. Both topologies are always disposed;
+        /// neither is retained. Distance of zero means the shapes touch or
+        /// overlap.
+        /// </summary>
+        public static bool TryDistance(IEnumerable<Shell> shells, IEnumerable<Shell> otherShells, OcctBuildOptions options, OcctCellComplexResult result, out double distance, out Point3D pointA, out Point3D pointB)
+        {
+            distance = double.NaN;
+            pointA = null;
+            pointB = null;
+
+            if (!TryCreateTopology(shells, options, result, out OcctTopology topologyA))
+            {
+                return false;
+            }
+
+            OcctTopology topologyB = null;
+            try
+            {
+                if (!TryCreateTopology(otherShells, options, result, out topologyB))
+                {
+                    return false;
+                }
+
+                try
+                {
+                    int status = OcctNativeMethods.sam_occt_shape_distance(
+                        topologyA,
+                        topologyB,
+                        out double distance_Temp,
+                        out double ax,
+                        out double ay,
+                        out double az,
+                        out double bx,
+                        out double by,
+                        out double bz);
+
+                    result.NativeAvailable = true;
+                    result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                    if (status != 0)
+                    {
+                        result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_DISTANCE_NATIVE_FAILED", string.Format("Native OCCT distance returned status {0} ({1}).", status, DescribeDistanceStatus(status)));
+                        return false;
+                    }
+
+                    distance = distance_Temp;
+                    pointA = new Point3D(ax, ay, az);
+                    pointB = new Point3D(bx, by, bz);
+                    // Distance is a cell-less query; mark success explicitly so
+                    // result.Success is true without a decoded cell complex.
+                    result.OperationSucceeded = true;
+                    return true;
+                }
+                catch (DllNotFoundException exception)
+                {
+                    return HandleNativeMissing(exception, result);
+                }
+                catch (EntryPointNotFoundException exception)
+                {
+                    return HandleEntryPointMissing(exception, result);
+                }
+                catch (ObjectDisposedException)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "An OCCT topology handle was disposed while in use.");
+                    return false;
+                }
+            }
+            finally
+            {
+                topologyA.Dispose();
+                topologyB?.Dispose();
+            }
+        }
+
+        private static string DescribeDistanceStatus(int status)
+        {
+            switch (status)
+            {
+                case 10: return "a null distance output pointer was supplied";
+                case 30: return "the OCCT distance computation did not complete";
+                case 40: return "the shapes produced no distance solution";
+                case 50: return "an OCCT shape handle was invalid";
+                case 99: return "an unexpected native exception was thrown";
+                default: return "unrecognised native status";
+            }
+        }
+
+        /// <summary>
         /// Extrudes planar footprint Face3Ds along a direction vector (issue
         /// #30): serialize the footprints, call the native BRepPrimAPI_MakePrism
         /// entry point to get one closed solid per footprint, then decode into

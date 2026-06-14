@@ -53,6 +53,7 @@ Geometry:
 - `SAMOCCT.ShellsThicken`
 - `SAMOCCT.ShellsImprint`
 - `SAMOCCT.ShellsSectionByPlane`
+- `SAMOCCT.ShellsDistance`
 - `SAMOCCT.MergeSmallShells`
 - `SAMOCCT.MergeCoplanarFace3Ds`
 - `SAMOCCT.MergeCoplanarShells`
@@ -154,6 +155,7 @@ covered under [Tolerances](#tolerances-and-key-inputs) below.
 | `SAMOCCT.ShellsThicken` | Hollows each closed shell into a genuine wall of the given thickness - the material between the boundary and a parallel offset surface, with an inner cavity (built as outer solid − inner solid), unlike `ShellsOffset` which moves the whole skin. Positive thickens outward, negative inward (construction / plenum shells). | `_shells`, `_thickness`, `tolerance_` | `Shells` |
 | `SAMOCCT.ShellsImprint` | Imprints touching shells against each other via OCCT General Fuse so partly-shared boundary faces are split into matching sub-faces (second-level space boundaries). Volumes stay separate (not a union); the matched faces decode into `FaceAdjacencies`. | `_shells`, `tolerance_`, `fuzzyTolerance_` | `Shells` |
 | `SAMOCCT.ShellsSectionByPlane` | Sections shells by one or more planes (supply many level planes to cut many levels at once), returning the cut faces and the split shells. | `_shells`, `planes_`, `tolerance_` | `Face3Ds`, `Shells` |
+| `SAMOCCT.ShellsDistance` | Minimum distance between two sets of closed shells via OCCT `BRepExtrema`, with the closest point on each side (tolerance-true adjacency/gap/clash detection; 0 = touching/overlapping). | `_shells`, `_otherShells`, `tolerance_`, `fuzzyTolerance_` | `Distance`, `PointOnShells`, `PointOnOtherShells` |
 | `SAMOCCT.MergeSmallShells` | Fuses tiny closed shells into their best face-adjacent neighbour via OCCT cell topology. | `_shells`, `minArea_`, `minVolume_`, `mergeMode_`, `protectedShells_`, `fuzzyTolerance_`, `tolerance_` | `Shells` (+ `mergedSmallShells`, `unmergedSmallShells`, `report`) |
 | `SAMOCCT.MergeCoplanarFace3Ds` | Merges adjacent coplanar Face3Ds into fewer, larger faces via OCCT `ShapeUpgrade_UnifySameDomain`. | `_face3Ds`, `angleTolerance_`, `tolerance_` | `Face3Ds` |
 | `SAMOCCT.MergeCoplanarShells` | Merges each shell's coplanar faces into fewer faces (volume preserved) via OCCT. | `_shells`, `angleTolerance_`, `tolerance_` | `Shells` |
@@ -280,6 +282,7 @@ The native bridge currently uses:
 - `BOPAlgo_Builder` (General Fuse) for shell imprinting / second-level space boundaries.
 - `BRepOffsetAPI_MakeOffsetShape` (PerformByJoin) for shell offset, and the same offset cut against the original (`BRepAlgoAPI_Cut`) for wall thickening.
 - `BRepAlgoAPI_Fuse` for shell union.
+- `BRepExtrema_DistShapeShape` for shell-to-shell distance / gap detection.
 - `BRepAlgoAPI_Cut` for shell difference.
 - `BRepAlgoAPI_Common` for shell intersection.
 - `ShapeFix_Shape` before result decoding.

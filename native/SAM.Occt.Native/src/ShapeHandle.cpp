@@ -12,6 +12,7 @@
 #include <BOPAlgo_Builder.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRep_Builder.hxx>
@@ -675,6 +676,61 @@ int sam_occt_shape_point_in_solid(
     catch (...)
     {
         return -99;
+    }
+}
+
+int sam_occt_shape_distance(
+    void* shape_handle_a,
+    void* shape_handle_b,
+    double* distance,
+    double* ax,
+    double* ay,
+    double* az,
+    double* bx,
+    double* by,
+    double* bz)
+{
+    if (distance == nullptr)
+    {
+        return 10;
+    }
+
+    const Shape* shape_a = as_shape(shape_handle_a);
+    const Shape* shape_b = as_shape(shape_handle_b);
+    if (shape_a == nullptr || shape_b == nullptr)
+    {
+        return 50;
+    }
+
+    try
+    {
+        BRepExtrema_DistShapeShape extrema(shape_a->shape, shape_b->shape);
+        if (!extrema.IsDone())
+        {
+            return 30;
+        }
+
+        if (extrema.NbSolution() < 1)
+        {
+            return 40;
+        }
+
+        *distance = extrema.Value();
+
+        const gp_Pnt point_a = extrema.PointOnShape1(1);
+        const gp_Pnt point_b = extrema.PointOnShape2(1);
+        if (ax != nullptr) { *ax = point_a.X(); }
+        if (ay != nullptr) { *ay = point_a.Y(); }
+        if (az != nullptr) { *az = point_a.Z(); }
+        if (bx != nullptr) { *bx = point_b.X(); }
+        if (by != nullptr) { *by = point_b.Y(); }
+        if (bz != nullptr) { *bz = point_b.Z(); }
+
+        return 0;
+    }
+    catch (...)
+    {
+        return 99;
     }
 }
 
