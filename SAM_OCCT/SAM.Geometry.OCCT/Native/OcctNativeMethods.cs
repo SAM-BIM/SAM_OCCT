@@ -111,6 +111,13 @@ namespace SAM.Geometry.OCCT.Native
             out OcctTopology shapeHandleOut);
 
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_imprint(
+            OcctTopology shapeHandle,
+            double fuzzyTolerance,
+            int runParallel,
+            out OcctTopology shapeHandleOut);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sam_occt_shape_make_volume(
             OcctTopology shapeHandle,
             [In] double[] coordinates,
