@@ -56,11 +56,26 @@ add_library(SAM.Occt.Native SHARED
     src/CellComplexBuilder.cpp
     src/DataExchangeRuntime.cpp
     src/ShapeHandle.cpp
+    src/ShapeOffset.cpp
 )
 
 target_compile_definitions(SAM.Occt.Native PRIVATE SAM_OCCT_NATIVE_EXPORTS)
 target_include_directories(SAM.Occt.Native PUBLIC include)
 target_compile_features(SAM.Occt.Native PRIVATE cxx_std_17)
+
+# /EHa (asynchronous exception model): OCCT offset / boolean algorithms can hit
+# a hardware fault (access violation) deep inside the kernel on pathological
+# input. Under the default /EHsc, catch(...) cannot catch a structured (SEH)
+# exception, so such a fault tears down the whole host process (e.g. Rhino /
+# Grasshopper) instead of surfacing as a diagnostic. /EHa makes catch(...) catch
+# these faults so every native op returns a clean status. Pairs with the
+# OSD::SetSignal call in the entry points, which converts the signals to typed
+# Standard_Failure exceptions. Strip the CMake-default /EHsc first to avoid the
+# "/EHsc overridden by /EHa" warning.
+if(MSVC)
+    string(REGEX REPLACE "/EHsc" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    target_compile_options(SAM.Occt.Native PRIVATE /EHa)
+endif()
 
 target_include_directories(SAM.Occt.Native PRIVATE ${SAM_OCCT_OCCT_INCLUDE_DIRS})
 target_link_libraries(SAM.Occt.Native PRIVATE ${SAM_OCCT_OCCT_LIBRARIES})
