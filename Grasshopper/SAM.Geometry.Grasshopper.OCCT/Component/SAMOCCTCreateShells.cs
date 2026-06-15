@@ -18,7 +18,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("89f9c336-e4dc-4908-bb87-b7b10ee84245");
 
-        public override string LatestComponentVersion => "0.2.0";
+        public override string LatestComponentVersion => "0.3.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -50,6 +50,10 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Number sewingTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "sewingTolerance_", NickName = "sewingTolerance_", Description = "OCCT sewing tolerance used by sewBeforeBuild_ and by the automatic sew-then-rebuild retry: coincident / near-touching face edges within this distance are joined. Leave 0 to fall back to tolerance_.", Access = GH_ParamAccess.item };
                 sewingTolerance.SetPersistentData(0.0);
                 result.Add(new GH_SAMParam(sewingTolerance, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Integer glueMode = new global::Grasshopper.Kernel.Parameters.Param_Integer() { Name = "glueMode_", NickName = "glueMode_", Description = "BOP glue mode for cell complexes with many coincident shared walls (issue #37): 0 = off (default), 1 = shift, 2 = full. Glue is a throughput win but corrupts merely-near-coincident faces, so it is applied ONLY when a watertightness check finds no gaps (otherwise it degrades to the glue-off path with a diagnostic).", Access = GH_ParamAccess.item };
+                glueMode.SetPersistentData(0);
+                result.Add(new GH_SAMParam(glueMode, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Boolean run = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "_run", NickName = "_run", Description = "Run", Access = GH_ParamAccess.item };
                 run.SetPersistentData(false);
@@ -124,6 +128,15 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 dataAccess.GetData(index, ref sewingTolerance);
             }
 
+            int glueMode = 0;
+            index = Params.IndexOfInputParam("glueMode_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref glueMode);
+            }
+
+            OcctGlueMode occtGlueMode = glueMode == 2 ? OcctGlueMode.Full : glueMode == 1 ? OcctGlueMode.Shift : OcctGlueMode.Off;
+
             List<Face3D> face3Ds = new List<Face3D>();
             foreach (GH_ObjectWrapper objectWrapper in objectWrappers)
             {
@@ -133,7 +146,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 }
             }
 
-            List<Shell> shells = Geometry.OCCT.Create.Shells(face3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, SewBeforeBuild = sewBeforeBuild, SewingTolerance = sewingTolerance });
+            List<Shell> shells = Geometry.OCCT.Create.Shells(face3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, SewBeforeBuild = sewBeforeBuild, SewingTolerance = sewingTolerance, GlueMode = occtGlueMode });
             List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList();
 
             index = Params.IndexOfOutputParam("Shells");
