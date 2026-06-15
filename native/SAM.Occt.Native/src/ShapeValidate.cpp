@@ -203,26 +203,15 @@ namespace
 
         analyzer.Perform();
 
-        const BOPAlgo_ListOfCheckResult& results = analyzer.GetCheckResult();
-        for (BOPAlgo_ListOfCheckResult::Iterator it(results); it.More(); it.Next())
+        // auto + range-based for so this does not depend on the exact spelling of
+        // the BOPAlgo_ListOfCheckResult typedef / its nested iterator (which vary
+        // across OCCT versions); NCollection_List provides begin()/end().
+        for (const auto& check : analyzer.GetCheckResult())
         {
-            const BOPAlgo_CheckResult& check = it.Value();
-
             ValidationIssue issue;
             issue.category = map_check_status(check.GetCheckStatus());
-
-            // Locate from the first reported sub-shape: faces first, then the
-            // raw shape operand the fault was attributed to.
-            const TopTools_ListOfShape& faces = check.GetFaces1();
-            if (!faces.IsEmpty())
-            {
-                shape_location(faces.First(), issue.x, issue.y, issue.z);
-            }
-            else
-            {
-                shape_location(check.GetShape1(), issue.x, issue.y, issue.z);
-            }
-
+            // Locate from the shape operand the fault was attributed to.
+            shape_location(check.GetShape1(), issue.x, issue.y, issue.z);
             validation.issues.push_back(issue);
         }
 
