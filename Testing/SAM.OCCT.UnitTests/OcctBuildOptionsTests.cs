@@ -25,6 +25,22 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(0.0, options.SewingTolerance);
             Assert.False(options.SewBeforeBuild);
             Assert.Equal(global::SAM.Core.Tolerance.Distance, options.EffectiveSewingTolerance);
+
+            // issue #37 follow-on: BOP glue defaults off.
+            Assert.Equal(OcctGlueMode.Off, options.GlueMode);
+        }
+
+        [Fact]
+        public void CopyConstructor_WithSource_CopiesGlueMode()
+        {
+            // Arrange
+            OcctBuildOptions source = new OcctBuildOptions { GlueMode = OcctGlueMode.Full };
+
+            // Act
+            OcctBuildOptions copy = new OcctBuildOptions(source);
+
+            // Assert
+            Assert.Equal(OcctGlueMode.Full, copy.GlueMode);
         }
 
         [Fact]

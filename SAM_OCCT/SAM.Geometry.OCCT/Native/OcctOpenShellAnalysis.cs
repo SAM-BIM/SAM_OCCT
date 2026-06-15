@@ -59,6 +59,86 @@ namespace SAM.Geometry.OCCT.Native
         }
 
         /// <summary>
+        /// Maps a non-zero <c>sam_occt_shape_validate</c> status (issue #37
+        /// follow-on) to a plain explanation. A status of 0 means the report was
+        /// produced (the shape may still be invalid - inspect the report), so it
+        /// is not listed here.
+        /// </summary>
+        public static string DescribeValidateStatus(int status)
+        {
+            switch (status)
+            {
+                case 10: return "null output pointer passed to the native validator";
+                case 50: return "the OCCT shape handle was invalid";
+                case 99: return "an unexpected native exception was thrown";
+                default: return "unrecognised native status";
+            }
+        }
+
+        /// <summary>
+        /// A pure-managed welded-edge summary of a face soup: how many distinct
+        /// edges there are, how many are naked (used an odd number of times), and
+        /// how many are non-manifold (shared by more than two faces). Used to gate
+        /// the BOP-glue path (glue is only safe when every edge is shared by
+        /// exactly two faces) without needing the native library.
+        /// </summary>
+        public struct WatertightnessSummary
+        {
+            public int EdgeCount { get; set; }
+
+            public int NakedEdgeCount { get; set; }
+
+            public int NonManifoldEdgeCount { get; set; }
+
+            /// <summary>
+            /// True when the faces have no naked (free) edges - i.e. there are no
+            /// gaps. This is the precondition for safely enabling glue. Non-manifold
+            /// edges (shared by more than two faces) are EXPECTED in a multi-cell
+            /// complex - the shared walls glue exists to accelerate - so they do
+            /// NOT block glue; only real gaps (naked edges, i.e. near-coincidence
+            /// that exceeds tolerance) do.
+            /// </summary>
+            public bool IsCleanForGlue
+            {
+                get { return EdgeCount > 0 && NakedEdgeCount == 0; }
+            }
+        }
+
+        /// <summary>
+        /// Welds the loop edges of the supplied faces at the build tolerance and
+        /// summarises their use counts, so the BOP-glue gate can confirm the
+        /// input is a clean closed two-manifold before glue (which corrupts
+        /// merely-near-coincident faces) is enabled.
+        /// </summary>
+        public static WatertightnessSummary AnalyzeWatertightness(IEnumerable<Face3D> face3Ds, OcctBuildOptions options)
+        {
+            WatertightnessSummary summary = new WatertightnessSummary();
+
+            List<Face3D> face3DList = face3Ds?.Where(x => x != null).ToList();
+            if (face3DList == null || face3DList.Count == 0)
+            {
+                return summary;
+            }
+
+            AccumulateEdges(face3DList, GetSnap(options), out Dictionary<string, int> edgeUseCounts, out _);
+
+            summary.EdgeCount = edgeUseCounts.Count;
+            foreach (KeyValuePair<string, int> keyValuePair in edgeUseCounts)
+            {
+                if (keyValuePair.Value % 2 == 1)
+                {
+                    summary.NakedEdgeCount++;
+                }
+                else if (keyValuePair.Value > 2)
+                {
+                    summary.NonManifoldEdgeCount++;
+                }
+            }
+
+            return summary;
+        }
+
+        /// <summary>
         /// Analyses the supplied faces for naked (open) edges and adds a
         /// diagnostic describing how many were found, their total length, and a
         /// representative location, so an open shell self-reports where the hole
@@ -78,21 +158,7 @@ namespace SAM.Geometry.OCCT.Native
                 return;
             }
 
-            // Weld vertices at the build distance tolerance so that genuinely
-            // coincident loop corners collapse to one key, while real gaps
-            // larger than the tolerance stay distinct and surface as naked edges.
-            double snap = options != null && options.Tolerance > 0 ? options.Tolerance : 1e-6;
-
-            Dictionary<string, int> edgeUseCounts = new Dictionary<string, int>();
-            Dictionary<string, Segment3D> edgeSamples = new Dictionary<string, Segment3D>();
-
-            foreach (Face3D face3D in face3DList)
-            {
-                foreach (List<Point3D> loop in GetLoops(face3D))
-                {
-                    AccumulateLoop(loop, snap, edgeUseCounts, edgeSamples);
-                }
-            }
+            AccumulateEdges(face3DList, GetSnap(options), out Dictionary<string, int> edgeUseCounts, out Dictionary<string, Segment3D> edgeSamples);
 
             if (edgeUseCounts.Count == 0)
             {
@@ -153,6 +219,28 @@ namespace SAM.Geometry.OCCT.Native
                     sample == null ? double.NaN : sample.Y,
                     sample == null ? double.NaN : sample.Z,
                     nonManifoldEdges > 0 ? string.Format(" Also found {0} non-manifold edge(s) (shared by more than two faces).", nonManifoldEdges) : string.Empty));
+        }
+
+        // Weld vertices at the build distance tolerance so that genuinely
+        // coincident loop corners collapse to one key, while real gaps larger
+        // than the tolerance stay distinct and surface as naked edges.
+        private static double GetSnap(OcctBuildOptions options)
+        {
+            return options != null && options.Tolerance > 0 ? options.Tolerance : 1e-6;
+        }
+
+        private static void AccumulateEdges(List<Face3D> face3DList, double snap, out Dictionary<string, int> edgeUseCounts, out Dictionary<string, Segment3D> edgeSamples)
+        {
+            edgeUseCounts = new Dictionary<string, int>();
+            edgeSamples = new Dictionary<string, Segment3D>();
+
+            foreach (Face3D face3D in face3DList)
+            {
+                foreach (List<Point3D> loop in GetLoops(face3D))
+                {
+                    AccumulateLoop(loop, snap, edgeUseCounts, edgeSamples);
+                }
+            }
         }
 
         private static IEnumerable<List<Point3D>> GetLoops(Face3D face3D)

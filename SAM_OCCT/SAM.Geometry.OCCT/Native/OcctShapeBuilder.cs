@@ -933,6 +933,189 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
+        /// <summary>
+        /// Validates a live topology (issue #37 follow-on): runs the native
+        /// BRepCheck_Analyzer + ShapeAnalysis_FreeBounds (+ optional self-
+        /// intersection) and decodes the located, categorised issues into an
+        /// <see cref="OcctValidationReport"/>. The input handle stays valid.
+        /// </summary>
+        public static bool TryValidate(OcctTopology topology, bool checkSelfIntersections, OcctBuildOptions options, OcctCellComplexResult result, out OcctValidationReport report)
+        {
+            report = null;
+
+            if (topology == null || topology.IsInvalid || topology.IsClosed)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "The OCCT topology handle is null, invalid or disposed.");
+                return false;
+            }
+
+            IntPtr validationHandle = IntPtr.Zero;
+            try
+            {
+                int status = OcctNativeMethods.sam_occt_shape_validate(topology, options.Tolerance, checkSelfIntersections ? 1 : 0, out validationHandle);
+
+                result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                if (status != 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_VALIDATE_NATIVE_FAILED", string.Format("Native OCCT validation returned status {0} ({1}).", status, OcctOpenShellAnalysis.DescribeValidateStatus(status)));
+                    return false;
+                }
+
+                report = DecodeValidation(validationHandle);
+                return true;
+            }
+            catch (DllNotFoundException exception)
+            {
+                return HandleNativeMissing(exception, result);
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                return HandleEntryPointMissing(exception, result);
+            }
+            catch (ObjectDisposedException)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "The OCCT topology handle was disposed while in use.");
+                return false;
+            }
+            finally
+            {
+                if (validationHandle != IntPtr.Zero)
+                {
+                    try
+                    {
+                        OcctNativeMethods.sam_occt_free_validation(validationHandle);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Validates a set of shells (issue #37 follow-on): build the per-shell
+        /// solids into one topology, validate it, then dispose the topology.
+        /// </summary>
+        public static bool TryValidateShells(IEnumerable<Shell> shells, bool checkSelfIntersections, OcctBuildOptions options, OcctCellComplexResult result, out OcctValidationReport report)
+        {
+            report = null;
+
+            if (!TryCreateTopology(shells, options, result, out OcctTopology input))
+            {
+                return false;
+            }
+
+            try
+            {
+                return TryValidate(input, checkSelfIntersections, options, result, out report);
+            }
+            finally
+            {
+                input.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Validates a face soup (issue #37 follow-on) - the teeth behind
+        /// OcctBuildOptions.ValidateInput. The faces do not bound a volume yet, so
+        /// they are first sewn (makeSolid=false) into a shell handle that the
+        /// native validator can then analyse for naked edges / self-intersections.
+        /// </summary>
+        public static bool TryValidateFaces(IEnumerable<Face3D> face3Ds, bool checkSelfIntersections, OcctBuildOptions options, OcctCellComplexResult result, out OcctValidationReport report)
+        {
+            report = null;
+
+            if (!TrySewFacesToTopology(face3Ds, false, options, result, out OcctTopology sewn))
+            {
+                return false;
+            }
+
+            try
+            {
+                return TryValidate(sewn, checkSelfIntersections, options, result, out report);
+            }
+            finally
+            {
+                sewn?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Builds a cell complex from a face soup with BOP glue enabled (issue #37
+        /// follow-on): calls the glue-aware native _ex entry point and decodes the
+        /// result. Returns a NEW topology via <paramref name="output"/>; the caller
+        /// owns it. A native build that predates ABI v3 throws
+        /// EntryPointNotFoundException, which is mapped to a graceful failure so
+        /// the caller can degrade to the glue-off path.
+        /// </summary>
+        public static bool TryCreateCellComplexGlued(IEnumerable<Face3D> face3Ds, OcctGlueMode glueMode, OcctBuildOptions options, OcctCellComplexResult result, out OcctTopology output)
+        {
+            output = null;
+
+            if (!OcctNativeInputBuilder.TryBuild(face3Ds, options, result, out OcctNativeInput input))
+            {
+                return false;
+            }
+
+            try
+            {
+                int status = OcctNativeMethods.sam_occt_shape_create_cell_complex_ex(
+                    input.Coordinates,
+                    input.Coordinates.Length / 3,
+                    input.LoopPointCounts,
+                    input.LoopPointCounts.Length,
+                    input.FaceLoopCounts,
+                    input.FaceCount,
+                    options.FuzzyTolerance,
+                    options.RunParallel ? 1 : 0,
+                    options.AvoidInternalShapes ? 1 : 0,
+                    (int)glueMode,
+                    out OcctTopology output_Temp);
+
+                result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                return HandleCreateStatus(status, output_Temp, result, out output);
+            }
+            catch (DllNotFoundException exception)
+            {
+                return HandleNativeMissing(exception, result);
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                return HandleEntryPointMissing(exception, result);
+            }
+        }
+
+        private static OcctValidationReport DecodeValidation(IntPtr validationHandle)
+        {
+            bool isValid = OcctNativeMethods.sam_occt_validation_is_valid(validationHandle) == 1;
+            bool isWatertight = OcctNativeMethods.sam_occt_validation_is_watertight(validationHandle) == 1;
+
+            int count = OcctNativeMethods.sam_occt_validation_issue_count(validationHandle);
+            List<OcctValidationIssue> issues = new List<OcctValidationIssue>();
+            for (int i = 0; i < count; i++)
+            {
+                if (OcctNativeMethods.sam_occt_validation_issue(validationHandle, i, out int category, out double x, out double y, out double z, out double size) == 0)
+                {
+                    issues.Add(new OcctValidationIssue(MapValidationCategory(category), new Point3D(x, y, z), size));
+                }
+            }
+
+            return new OcctValidationReport(isValid, isWatertight, issues);
+        }
+
+        private static OcctValidationIssueCategory MapValidationCategory(int category)
+        {
+            // A native value newer than this build decodes as Unknown rather than
+            // an out-of-range cast.
+            return System.Enum.IsDefined(typeof(OcctValidationIssueCategory), category)
+                ? (OcctValidationIssueCategory)category
+                : OcctValidationIssueCategory.Unknown;
+        }
+
         private static bool HandleCreateStatus(int status, OcctTopology topology_Temp, OcctCellComplexResult result, out OcctTopology topology)
         {
             topology = null;

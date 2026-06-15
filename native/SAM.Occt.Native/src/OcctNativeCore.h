@@ -78,6 +78,56 @@ namespace sam_occt
         return shape;
     }
 
+    // ---- validation & watertightness diagnostics (issue #37 follow-on) ----
+    // Categorises the issues BRepCheck_Analyzer / BOPAlgo_ArgumentAnalyzer /
+    // ShapeAnalysis_FreeBounds locate so a failed close is actionable instead of
+    // an opaque status code. These integer values are part of the ABI - the
+    // managed OcctValidationIssueCategory mirrors them one-for-one.
+    enum SamOcctValidationCategory
+    {
+        SAM_OCCT_VALIDATION_UNKNOWN = 0,
+        SAM_OCCT_VALIDATION_NAKED_EDGE = 1,        // free boundary edge (open shell)
+        SAM_OCCT_VALIDATION_SELF_INTERSECTION = 2, // BOPAlgo_ArgumentAnalyzer self-intersection
+        SAM_OCCT_VALIDATION_INVALID_FACE = 3,      // BRepCheck_Analyzer invalid face
+        SAM_OCCT_VALIDATION_SMALL_FACE = 4,        // sliver face below the area threshold
+        SAM_OCCT_VALIDATION_SMALL_EDGE = 5,        // degenerate / too-small edge
+        SAM_OCCT_VALIDATION_INVALID_SHAPE = 6      // other invalid sub-shape
+    };
+
+    struct ValidationIssue
+    {
+        int category = SAM_OCCT_VALIDATION_UNKNOWN;
+        double x = 0; // representative location of the issue
+        double y = 0;
+        double z = 0;
+        double size = 0; // naked-edge length / face area / 0 when not applicable
+    };
+
+    // Opaque validation report handle (issue #37 follow-on). Owns the located,
+    // categorised issues; queried with the sam_occt_validation_* accessors and
+    // freed with sam_occt_free_validation. Distinct magic from Shape / Result so
+    // a mistyped pointer fails cleanly instead of crashing.
+    constexpr std::uint32_t validation_magic = 0x53414D56; // "SAMV"
+
+    struct Validation
+    {
+        std::uint32_t magic = validation_magic;
+        bool is_valid = false;   // BRepCheck valid AND no argument-analyzer faults AND no free bounds
+        bool watertight = false; // no free (naked) boundary edges
+        std::vector<ValidationIssue> issues;
+    };
+
+    inline Validation* as_validation(void* validation_handle)
+    {
+        Validation* validation = static_cast<Validation*>(validation_handle);
+        if (validation == nullptr || validation->magic != validation_magic)
+        {
+            return nullptr;
+        }
+
+        return validation;
+    }
+
     bool make_face(
         const double* coordinates,
         const int* loop_point_counts,
@@ -98,11 +148,15 @@ namespace sam_occt
     // BOPAlgo_MakerVolume over independent faces followed by ShapeFix_Shape.
     // Returns 0 on success and 30 on BOP errors; out_shape receives the fixed
     // shape (which may still contain zero solids - callers map that to 40).
+    // `glue` selects the BOPAlgo glue mode (0 off, 1 shift, 2 full; issue #37
+    // follow-on) - a throughput win on cell complexes with many truly coincident
+    // shared walls, but only safe on validated-clean input.
     int make_volume_from_faces(
         const TopTools_ListOfShape& faces,
         double fuzzy_tolerance,
         int run_parallel,
         int avoid_internal_shapes,
+        int glue,
         TopoDS_Shape& out_shape);
 
     bool build_shell_solids(
