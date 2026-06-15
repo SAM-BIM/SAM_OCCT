@@ -159,6 +159,27 @@ namespace SAM.Geometry.OCCT.Native
             out OcctTopology shapeHandleOut);
 
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_sew_faces(
+            [In] double[] coordinates,
+            int pointCount,
+            [In] int[] loopPointCounts,
+            int loopCount,
+            [In] int[] faceLoopCounts,
+            int faceCount,
+            double sewingTolerance,
+            int runParallel,
+            int makeSolid,
+            out OcctTopology shapeHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_sew(
+            OcctTopology shapeHandle,
+            double sewingTolerance,
+            int runParallel,
+            int makeSolid,
+            out OcctTopology shapeHandleOut);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sam_occt_shape_solid_count(OcctTopology shapeHandle);
 
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]

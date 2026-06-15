@@ -563,6 +563,245 @@ namespace SAM.Geometry.OCCT.Native
         }
 
         /// <summary>
+        /// Sews a face soup into the tightest closed shell/solid (issue #37):
+        /// serialize the faces, call the native BRepBuilderAPI_Sewing + ShapeFix
+        /// entry point, then decode. When <paramref name="makeSolid"/> is true the
+        /// healed closed shells become solids that decode into cells; when false
+        /// the relaxed (possibly open) shell is returned with no solids to decode,
+        /// so cell-producing callers must pass true. The output handle is retained
+        /// on the result only when OcctBuildOptions.RetainTopology is set.
+        /// </summary>
+        public static bool TrySew(IEnumerable<Face3D> face3Ds, bool makeSolid, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            if (!TrySewFacesToTopology(face3Ds, makeSolid, options, result, out OcctTopology output))
+            {
+                return false;
+            }
+
+            return DecodeAndRetainSewn(output, options, result);
+        }
+
+        /// <summary>
+        /// Shell overload of <see cref="TrySew(IEnumerable{Face3D}, bool, OcctBuildOptions, OcctCellComplexResult)"/>:
+        /// build the per-shell solids into one topology, sew+heal their faces
+        /// natively (closing micro-gaps left by an earlier op), then decode.
+        /// </summary>
+        public static bool TrySew(IEnumerable<Shell> shells, bool makeSolid, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            if (!TryCreateTopology(shells, options, result, out OcctTopology input))
+            {
+                return false;
+            }
+
+            OcctTopology output = null;
+            try
+            {
+                if (!TrySewShapeToTopology(input, makeSolid, options, result, out output))
+                {
+                    return false;
+                }
+
+                if (!TryDecode(output, options, result))
+                {
+                    return false;
+                }
+
+                if (options.RetainTopology)
+                {
+                    result.Topology = output;
+                    output = null;
+                }
+
+                return true;
+            }
+            finally
+            {
+                input.Dispose();
+                output?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Sews a face soup into a NEW healed topology handle without decoding it
+        /// (issue #37). Used both by <see cref="TrySew(IEnumerable{Face3D}, bool, OcctBuildOptions, OcctCellComplexResult)"/>
+        /// and by the OcctCellComplexBuilder sew-then-MakerVolume pipeline, which
+        /// re-feeds the healed shell (makeSolid=false) to MakerVolume.
+        /// </summary>
+        public static bool TrySewFacesToTopology(IEnumerable<Face3D> face3Ds, bool makeSolid, OcctBuildOptions options, OcctCellComplexResult result, out OcctTopology output)
+        {
+            output = null;
+
+            if (!OcctNativeInputBuilder.TryBuild(face3Ds, options, result, out OcctNativeInput input))
+            {
+                return false;
+            }
+
+            try
+            {
+                int status = OcctNativeMethods.sam_occt_sew_faces(
+                    input.Coordinates,
+                    input.Coordinates.Length / 3,
+                    input.LoopPointCounts,
+                    input.LoopPointCounts.Length,
+                    input.FaceLoopCounts,
+                    input.FaceCount,
+                    options.EffectiveSewingTolerance,
+                    options.RunParallel ? 1 : 0,
+                    makeSolid ? 1 : 0,
+                    out OcctTopology output_Temp);
+
+                result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                return HandleSewStatus(status, output_Temp, result, out output);
+            }
+            catch (DllNotFoundException exception)
+            {
+                return HandleNativeMissing(exception, result);
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                return HandleEntryPointMissing(exception, result);
+            }
+        }
+
+        /// <summary>
+        /// Sews+heals the faces already inside a handle into a NEW topology handle
+        /// without decoding it (issue #37). The input handle stays valid.
+        /// </summary>
+        public static bool TrySewShapeToTopology(OcctTopology input, bool makeSolid, OcctBuildOptions options, OcctCellComplexResult result, out OcctTopology output)
+        {
+            output = null;
+
+            if (input == null || input.IsInvalid || input.IsClosed)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "The OCCT topology handle is null, invalid or disposed.");
+                return false;
+            }
+
+            try
+            {
+                int status = OcctNativeMethods.sam_occt_shape_sew(input, options.EffectiveSewingTolerance, options.RunParallel ? 1 : 0, makeSolid ? 1 : 0, out OcctTopology output_Temp);
+
+                result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                return HandleSewStatus(status, output_Temp, result, out output);
+            }
+            catch (DllNotFoundException exception)
+            {
+                return HandleNativeMissing(exception, result);
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                return HandleEntryPointMissing(exception, result);
+            }
+            catch (ObjectDisposedException)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "An OCCT topology handle was disposed while in use.");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// BOPAlgo_MakerVolume over the faces of an existing handle into a NEW
+        /// handle (no extra faces). The shape-handle core used by the sew-then-
+        /// rebuild pipeline (issue #37) after the sewn shell is healed.
+        /// </summary>
+        public static bool TryMakeVolume(OcctTopology input, OcctBuildOptions options, OcctCellComplexResult result, out OcctTopology output)
+        {
+            output = null;
+
+            if (input == null || input.IsInvalid || input.IsClosed)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "The OCCT topology handle is null, invalid or disposed.");
+                return false;
+            }
+
+            try
+            {
+                int status = OcctNativeMethods.sam_occt_shape_make_volume(
+                    input,
+                    null,
+                    0,
+                    null,
+                    0,
+                    null,
+                    0,
+                    options.FuzzyTolerance,
+                    options.RunParallel ? 1 : 0,
+                    options.AvoidInternalShapes ? 1 : 0,
+                    out OcctTopology output_Temp);
+
+                result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                return HandleCreateStatus(status, output_Temp, result, out output);
+            }
+            catch (DllNotFoundException exception)
+            {
+                return HandleNativeMissing(exception, result);
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                return HandleEntryPointMissing(exception, result);
+            }
+            catch (ObjectDisposedException)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_TOPOLOGY_DISPOSED", "An OCCT topology handle was disposed while in use.");
+                return false;
+            }
+        }
+
+        private static bool DecodeAndRetainSewn(OcctTopology output, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            try
+            {
+                if (!TryDecode(output, options, result))
+                {
+                    return false;
+                }
+
+                if (options.RetainTopology)
+                {
+                    result.Topology = output;
+                    output = null;
+                }
+
+                return true;
+            }
+            finally
+            {
+                output?.Dispose();
+            }
+        }
+
+        private static bool HandleSewStatus(int status, OcctTopology output_Temp, OcctCellComplexResult result, out OcctTopology output)
+        {
+            output = null;
+
+            if (status != 0)
+            {
+                output_Temp?.Dispose();
+                result.AddDiagnostic(
+                    OcctDiagnosticSeverity.Error,
+                    status == 40 ? "SAM_OCCT_SEW_NO_CLOSED_SHELL" : "SAM_OCCT_SEW_NATIVE_FAILED",
+                    string.Format("Native OCCT sew-and-heal returned status {0} ({1}).", status, OcctOpenShellAnalysis.DescribeSewStatus(status)));
+                return false;
+            }
+
+            if (output_Temp == null || output_Temp.IsInvalid)
+            {
+                output_Temp?.Dispose();
+                result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_SEW_NATIVE_FAILED", "Native OCCT sew-and-heal did not return a handle.");
+                return false;
+            }
+
+            output = output_Temp;
+            return true;
+        }
+
+        /// <summary>
         /// Exports the live topology to a STEP or IGES file (issue #20). The
         /// handle stays valid and caller-owned. Guard paths (null/disposed
         /// handle, null/empty path) never touch the native library.

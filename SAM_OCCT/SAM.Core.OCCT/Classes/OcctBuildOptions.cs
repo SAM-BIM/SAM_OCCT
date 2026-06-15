@@ -23,6 +23,24 @@ namespace SAM.Core.OCCT
         /// </summary>
         public bool RetainTopology { get; set; } = false;
 
+        /// <summary>
+        /// Tolerance for the native sew-and-heal step (issue #37). Coincident /
+        /// near-touching face edges within this distance are joined into shared
+        /// topology before the volume is built. A value of zero (the default)
+        /// means "use <see cref="Tolerance"/>".
+        /// </summary>
+        public double SewingTolerance { get; set; } = 0.0;
+
+        /// <summary>
+        /// When true, a face soup is first run through the native sew-and-heal
+        /// step (issue #37) and only then through BOPAlgo_MakerVolume, so
+        /// triangulated / near-touching faces close into a watertight shell that
+        /// MakerVolume's fuzzy-tolerance guesswork alone would leave open. Default
+        /// false keeps the direct MakerVolume path (which still falls back to one
+        /// sew-then-rebuild retry on a hard close failure).
+        /// </summary>
+        public bool SewBeforeBuild { get; set; } = false;
+
         public OcctBuildOptions()
         {
         }
@@ -40,6 +58,17 @@ namespace SAM.Core.OCCT
             AvoidInternalShapes = occtBuildOptions.AvoidInternalShapes;
             ValidateInput = occtBuildOptions.ValidateInput;
             RetainTopology = occtBuildOptions.RetainTopology;
+            SewingTolerance = occtBuildOptions.SewingTolerance;
+            SewBeforeBuild = occtBuildOptions.SewBeforeBuild;
+        }
+
+        /// <summary>
+        /// The effective sew-and-heal tolerance: <see cref="SewingTolerance"/>
+        /// when set to a positive value, otherwise <see cref="Tolerance"/>.
+        /// </summary>
+        public double EffectiveSewingTolerance
+        {
+            get { return SewingTolerance > 0 ? SewingTolerance : Tolerance; }
         }
     }
 }

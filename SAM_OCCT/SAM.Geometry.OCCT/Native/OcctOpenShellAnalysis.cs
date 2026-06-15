@@ -39,6 +39,26 @@ namespace SAM.Geometry.OCCT.Native
         }
 
         /// <summary>
+        /// Maps a non-zero <c>sam_occt_sew_faces</c> / <c>sam_occt_shape_sew</c>
+        /// status (issue #37) to a plain explanation so the failure code is not
+        /// opaque.
+        /// </summary>
+        public static string DescribeSewStatus(int status)
+        {
+            switch (status)
+            {
+                case 10: return "null argument passed to the native sew-and-heal entry point";
+                case 11: return "non-positive point/loop/face count passed to the native sew-and-heal entry point";
+                case 20: return "no OCCT faces could be built from the supplied loops";
+                case 30: return "OCCT sewing/healing failed to produce a shell - the faces may be too far apart to join at the sewing tolerance (try a larger SewingTolerance)";
+                case 40: return "OCCT sew-and-heal produced no closed shell - the faces do not bound a watertight volume even after healing";
+                case 50: return "the OCCT shape handle was invalid";
+                case 99: return "an unexpected native exception was thrown";
+                default: return "unrecognised native status";
+            }
+        }
+
+        /// <summary>
         /// Analyses the supplied faces for naked (open) edges and adds a
         /// diagnostic describing how many were found, their total length, and a
         /// representative location, so an open shell self-reports where the hole
