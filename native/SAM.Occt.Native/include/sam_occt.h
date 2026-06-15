@@ -180,6 +180,45 @@ SAM_OCCT_API int sam_occt_shape_thick_solid(
     double tolerance,
     void** shape_handle_out);
 
+/* ---- watertight sew-and-heal (issue #37) ----
+   Sew a face soup into the tightest closed shell/solid OCCT can make BEFORE
+   BOPAlgo_MakerVolume: BRepBuilderAPI_Sewing -> ShapeFix_Shell / ShapeFix_Wireframe
+   (FixSmallEdges / FixWireGaps close micro-gaps that the sewing tolerance alone
+   misses) -> ShapeFix_Solid -> ShapeUpgrade_UnifySameDomain. Unlike
+   sam_occt_(shape_)create_cell_complex this does NOT require the input to already
+   bound a volume; it is the closing step that makes it bound one, so it is the
+   recovery path for the triangulated / near-touching face soups that cause most
+   MakerVolume status-40 (no volume) failures on real models.
+
+   make_solid=1 attempts BRepBuilderAPI_MakeSolid on every closed shell and the
+   handle is wrapped like any solid-producing op (status 40 when no closed shell
+   was formed). make_solid=0 returns the healed - and possibly still open - shell
+   in a relaxed handle (no solid required) so it can be re-fed to MakerVolume; such
+   a handle has zero solids and must not be treated as a finished cell complex.
+
+   Status: 0 ok, 10/11 input, 20 no valid faces, 30 sew/heal failed,
+   40 no closed shell (make_solid=1 only), 50 invalid input handle, 99 exception. */
+SAM_OCCT_API int sam_occt_sew_faces(
+    const double* coordinates,
+    int point_count,
+    const int* loop_point_counts,
+    int loop_count,
+    const int* face_loop_counts,
+    int face_count,
+    double sewing_tolerance,
+    int run_parallel,
+    int make_solid,
+    void** shape_handle);
+
+/* Sew+heal the faces already inside a handle (after import / offset / boolean).
+   Returns a NEW caller-owned handle; the input stays valid. Status as above. */
+SAM_OCCT_API int sam_occt_shape_sew(
+    void* shape_handle,
+    double sewing_tolerance,
+    int run_parallel,
+    int make_solid,
+    void** shape_handle_out);
+
 /* Number of solids in the shape; negative on an invalid handle. */
 SAM_OCCT_API int sam_occt_shape_solid_count(void* shape_handle);
 

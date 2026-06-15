@@ -20,6 +20,35 @@ namespace SAM.OCCT.UnitTests
             Assert.True(options.RunParallel);
             Assert.True(options.AvoidInternalShapes);
             Assert.True(options.ValidateInput);
+
+            // issue #37: sew-and-heal defaults are off / fall back to Tolerance.
+            Assert.Equal(0.0, options.SewingTolerance);
+            Assert.False(options.SewBeforeBuild);
+            Assert.Equal(global::SAM.Core.Tolerance.Distance, options.EffectiveSewingTolerance);
+        }
+
+        [Fact]
+        public void EffectiveSewingTolerance_PositiveSewingTolerance_OverridesTolerance()
+        {
+            // Arrange & Act
+            OcctBuildOptions options = new OcctBuildOptions { Tolerance = 1e-6, SewingTolerance = 5e-3 };
+
+            // Assert - a positive SewingTolerance wins over Tolerance.
+            Assert.Equal(5e-3, options.EffectiveSewingTolerance);
+        }
+
+        [Fact]
+        public void CopyConstructor_WithSource_CopiesSewOptions()
+        {
+            // Arrange
+            OcctBuildOptions source = new OcctBuildOptions { SewingTolerance = 0.004, SewBeforeBuild = true };
+
+            // Act
+            OcctBuildOptions copy = new OcctBuildOptions(source);
+
+            // Assert
+            Assert.Equal(source.SewingTolerance, copy.SewingTolerance);
+            Assert.True(copy.SewBeforeBuild);
         }
 
         [Theory]

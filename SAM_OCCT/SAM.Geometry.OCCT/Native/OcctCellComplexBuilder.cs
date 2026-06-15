@@ -298,6 +298,15 @@ namespace SAM.Geometry.OCCT.Native
                 return false;
             }
 
+            // issue #37: optionally heal the face soup into a watertight shell
+            // BEFORE MakerVolume, so triangulated / near-touching faces close
+            // first instead of relying on MakerVolume's fuzzy-tolerance guesswork.
+            if (options.SewBeforeBuild && TrySewThenMakeVolume(face3DList, options, result))
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", "Built the cell complex via native sew-and-heal before MakerVolume (SewBeforeBuild).");
+                return true;
+            }
+
             IntPtr resultHandle = IntPtr.Zero;
             try
             {
@@ -319,6 +328,17 @@ namespace SAM.Geometry.OCCT.Native
 
                 if (status != 0)
                 {
+                    // issue #37: on a hard close failure (MakerVolume reported
+                    // errors or produced no closed solid) attempt one sew-then-
+                    // rebuild before giving up - this recovers the triangulated /
+                    // near-touching face soups that defeat a direct MakerVolume.
+                    // Skipped when SewBeforeBuild already tried (and failed) above.
+                    if ((status == 30 || status == 40) && !options.SewBeforeBuild && TrySewThenMakeVolume(face3DList, options, result))
+                    {
+                        result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", string.Format("MakerVolume returned status {0} ({1}); recovered via native sew-and-heal retry.", status, OcctOpenShellAnalysis.DescribeBuildStatus(status)));
+                        return true;
+                    }
+
                     result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_FAILED", string.Format("Native OCCT builder returned status {0} ({1}).", status, OcctOpenShellAnalysis.DescribeBuildStatus(status)));
 
                     // The faces did not bound a volume; report where the shell is
@@ -353,6 +373,57 @@ namespace SAM.Geometry.OCCT.Native
                     {
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// The native sew-then-MakerVolume recovery (issue #37): heal the face
+        /// soup into a (possibly still open) shell with BRepBuilderAPI_Sewing +
+        /// ShapeFix, then close it with MakerVolume. Runs in an isolated result so
+        /// a failed attempt leaves no Error diagnostics on the caller's result
+        /// (which would otherwise make a later success read as a failure); only a
+        /// fully successful recovery is merged back into <paramref name="result"/>.
+        /// </summary>
+        private static bool TrySewThenMakeVolume(List<Face3D> face3Ds, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            OcctCellComplexResult sewResult = new OcctCellComplexResult();
+
+            OcctTopology sewn = null;
+            OcctTopology volume = null;
+            try
+            {
+                if (!OcctShapeBuilder.TrySewFacesToTopology(face3Ds, false, options, sewResult, out sewn)
+                    || !OcctShapeBuilder.TryMakeVolume(sewn, options, sewResult, out volume)
+                    || !OcctShapeBuilder.TryDecode(volume, options, sewResult))
+                {
+                    // Propagate only the native availability so the caller's
+                    // graceful-degradation reporting stays accurate.
+                    result.NativeAvailable = sewResult.NativeAvailable;
+                    result.NativeVersion = sewResult.NativeVersion;
+                    return false;
+                }
+
+                result.NativeAvailable = true;
+                result.NativeVersion = sewResult.NativeVersion;
+                foreach (OcctCell cell in sewResult.Cells)
+                {
+                    result.AddCell(cell);
+                }
+
+                if (options.RetainTopology)
+                {
+                    result.Topology = volume;
+                    volume = null; // ownership transferred to the caller's result
+                }
+
+                result.BuildFaceAdjacencies();
+                return true;
+            }
+            finally
+            {
+                sewn?.Dispose();
+                volume?.Dispose();
+                sewResult.Dispose();
             }
         }
 

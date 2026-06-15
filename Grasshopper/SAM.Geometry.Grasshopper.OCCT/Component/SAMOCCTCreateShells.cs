@@ -18,7 +18,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("89f9c336-e4dc-4908-bb87-b7b10ee84245");
 
-        public override string LatestComponentVersion => "0.1.0";
+        public override string LatestComponentVersion => "0.2.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -42,6 +42,14 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Number fuzzyTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "fuzzyTolerance_", NickName = "fuzzyTolerance_", Description = "OCCT fuzzy tolerance", Access = GH_ParamAccess.item };
                 fuzzyTolerance.SetPersistentData(Tolerance.MacroDistance);
                 result.Add(new GH_SAMParam(fuzzyTolerance, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Boolean sewBeforeBuild = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "sewBeforeBuild_", NickName = "sewBeforeBuild_", Description = "When true, the faces are first sewn+healed (BRepBuilderAPI_Sewing + ShapeFix) and only then closed by MakerVolume (issue #37), so triangulated / near-touching faces close instead of relying on the fuzzy tolerance alone. A hard MakerVolume failure also auto-retries via sew regardless of this flag, using sewingTolerance_.", Access = GH_ParamAccess.item };
+                sewBeforeBuild.SetPersistentData(false);
+                result.Add(new GH_SAMParam(sewBeforeBuild, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number sewingTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "sewingTolerance_", NickName = "sewingTolerance_", Description = "OCCT sewing tolerance used by sewBeforeBuild_ and by the automatic sew-then-rebuild retry: coincident / near-touching face edges within this distance are joined. Leave 0 to fall back to tolerance_.", Access = GH_ParamAccess.item };
+                sewingTolerance.SetPersistentData(0.0);
+                result.Add(new GH_SAMParam(sewingTolerance, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Boolean run = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "_run", NickName = "_run", Description = "Run", Access = GH_ParamAccess.item };
                 run.SetPersistentData(false);
@@ -102,6 +110,20 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 dataAccess.GetData(index, ref fuzzyTolerance);
             }
 
+            bool sewBeforeBuild = false;
+            index = Params.IndexOfInputParam("sewBeforeBuild_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref sewBeforeBuild);
+            }
+
+            double sewingTolerance = 0.0;
+            index = Params.IndexOfInputParam("sewingTolerance_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref sewingTolerance);
+            }
+
             List<Face3D> face3Ds = new List<Face3D>();
             foreach (GH_ObjectWrapper objectWrapper in objectWrappers)
             {
@@ -111,7 +133,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 }
             }
 
-            List<Shell> shells = Geometry.OCCT.Create.Shells(face3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance });
+            List<Shell> shells = Geometry.OCCT.Create.Shells(face3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, SewBeforeBuild = sewBeforeBuild, SewingTolerance = sewingTolerance });
             List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList();
 
             index = Params.IndexOfOutputParam("Shells");
