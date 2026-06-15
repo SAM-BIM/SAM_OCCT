@@ -513,6 +513,10 @@ If the shells still do not close:
 
 ### Diagnosing And Closing Failures (Validate, Sew, Glue)
 
+> Step-by-step Grasshopper recipes for the three components below (with the
+> expected outputs and diagnostics) are in
+> [`Examples-Validate-Sew-Glue.md`](Examples-Validate-Sew-Glue.md).
+
 When a model will not close, work it in this order (issue #37):
 
 1. **`SAMOCCT.Validate` - find out *why* and *where*.** Feed it the same faces
