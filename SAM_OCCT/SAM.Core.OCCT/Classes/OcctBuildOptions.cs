@@ -41,6 +41,19 @@ namespace SAM.Core.OCCT
         /// </summary>
         public bool SewBeforeBuild { get; set; } = false;
 
+        /// <summary>
+        /// BOP glue mode for the cell-complex build (issue #37 follow-on). When
+        /// not <see cref="OcctGlueMode.Off"/> (the default), the builder asks the
+        /// boolean kernel to treat coincident faces as shared and skip their
+        /// pairwise intersection - a throughput win on cell complexes with many
+        /// coincident shared walls. Because glue corrupts merely-near-coincident
+        /// faces, it is applied ONLY when a watertightness pre-check reports the
+        /// input as clean; otherwise the build silently degrades to the glue-off
+        /// path with a diagnostic. Also degrades when the native library predates
+        /// the glue ABI (v3).
+        /// </summary>
+        public OcctGlueMode GlueMode { get; set; } = OcctGlueMode.Off;
+
         public OcctBuildOptions()
         {
         }
@@ -60,6 +73,7 @@ namespace SAM.Core.OCCT
             RetainTopology = occtBuildOptions.RetainTopology;
             SewingTolerance = occtBuildOptions.SewingTolerance;
             SewBeforeBuild = occtBuildOptions.SewBeforeBuild;
+            GlueMode = occtBuildOptions.GlueMode;
         }
 
         /// <summary>

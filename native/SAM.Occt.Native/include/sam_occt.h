@@ -219,6 +219,86 @@ SAM_OCCT_API int sam_occt_shape_sew(
     int make_solid,
     void** shape_handle_out);
 
+/* ---- validation & watertightness diagnostics (issue #37 follow-on) ----
+   Runs BRepCheck_Analyzer + ShapeAnalysis_FreeBounds (+ optional
+   BOPAlgo_ArgumentAnalyzer self-intersection test) over the shape and returns a
+   caller-owned validation handle listing the located, categorised issues
+   (naked edge w/ XYZ + gap length, self-intersection, small/invalid face).
+   Query it with the sam_occt_validation_* accessors and free it with
+   sam_occt_free_validation. check_self_intersections=1 enables the costly
+   pairwise self-interference test. A status of 0 means the report was produced,
+   NOT that the shape is valid - inspect is_valid / is_watertight / the issues.
+   This is the native safety net the BOP-glue path is gated on and the teeth
+   behind OcctBuildOptions.ValidateInput. Status: 0 ok, 10 null output pointer,
+   50 invalid shape handle, 99 exception. */
+SAM_OCCT_API int sam_occt_shape_validate(
+    void* shape_handle,
+    double tolerance,
+    int check_self_intersections,
+    void** validation_handle);
+
+/* 1 valid / 0 invalid / -1 invalid handle (BRepCheck + argument analyzer). */
+SAM_OCCT_API int sam_occt_validation_is_valid(void* validation_handle);
+
+/* 1 watertight / 0 has free (naked) bounds / -1 invalid handle. */
+SAM_OCCT_API int sam_occt_validation_is_watertight(void* validation_handle);
+
+/* Number of located issues; -1 on an invalid handle. */
+SAM_OCCT_API int sam_occt_validation_issue_count(void* validation_handle);
+
+/* Reads one issue: category (see the managed OcctValidationIssueCategory), an
+   XYZ location and a size (naked-edge length / face area / 0). All out pointers
+   are required. Status: 0 ok, 10 null out pointer, 40 index out of range,
+   50 invalid handle. */
+SAM_OCCT_API int sam_occt_validation_issue(
+    void* validation_handle,
+    int index,
+    int* category,
+    double* x,
+    double* y,
+    double* z,
+    double* size);
+
+/* Frees a validation handle. Safe no-op on null or foreign pointers. */
+SAM_OCCT_API void sam_occt_free_validation(void* validation_handle);
+
+/* ---- BOP glue (issue #37 follow-on, ABI v3) ----
+   Glue-enabled overloads of the cell-complex / volume builders. glue_mode:
+   0 off (identical to the non-_ex entry point), 1 shift (BOPAlgo_GlueShift),
+   2 full (BOPAlgo_GlueFull). Glue assumes coincident faces are truly shared and
+   skips their pairwise intersection - a large throughput win for cell complexes
+   with thousands of coincident shared walls - but it CORRUPTS merely-near-
+   coincident faces, so a caller must gate it on a clean validation report. A
+   stale native build that predates ABI v3 lacks these symbols, so managed
+   callers probe sam_occt_abi_version and degrade to the non-_ex path.
+   Status as the corresponding non-_ex entry point. */
+SAM_OCCT_API int sam_occt_shape_create_cell_complex_ex(
+    const double* coordinates,
+    int point_count,
+    const int* loop_point_counts,
+    int loop_count,
+    const int* face_loop_counts,
+    int face_count,
+    double fuzzy_tolerance,
+    int run_parallel,
+    int avoid_internal_shapes,
+    int glue_mode,
+    void** shape_handle);
+
+SAM_OCCT_API int sam_occt_shape_make_volume_ex(
+    void* shape_handle,
+    const double* coordinates,
+    int point_count,
+    const int* loop_point_counts,
+    int loop_count,
+    const int* face_loop_counts,
+    int face_count,
+    double fuzzy_tolerance,
+    int run_parallel,
+    int avoid_internal_shapes,
+    int glue_mode,
+    void** shape_handle_out);
+
 /* Number of solids in the shape; negative on an invalid handle. */
 SAM_OCCT_API int sam_occt_shape_solid_count(void* shape_handle);
 

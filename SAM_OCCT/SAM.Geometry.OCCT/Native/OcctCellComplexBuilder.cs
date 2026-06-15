@@ -298,6 +298,16 @@ namespace SAM.Geometry.OCCT.Native
                 return false;
             }
 
+            // issue #37 follow-on: BOP glue path. Glue is a throughput win on cell
+            // complexes with many coincident shared walls but corrupts merely-near-
+            // coincident faces, so it runs only when a watertightness pre-check
+            // reports no gaps (naked edges); otherwise it degrades to the glue-off
+            // path below (and likewise when the native build predates the glue ABI).
+            if (options.GlueMode != OcctGlueMode.Off && TryGluedBuild(face3DList, options, result))
+            {
+                return true;
+            }
+
             // issue #37: optionally heal the face soup into a watertight shell
             // BEFORE MakerVolume, so triangulated / near-touching faces close
             // first instead of relying on MakerVolume's fuzzy-tolerance guesswork.
@@ -343,7 +353,7 @@ namespace SAM.Geometry.OCCT.Native
 
                     // The faces did not bound a volume; report where the shell is
                     // open so the failure is actionable instead of an opaque code.
-                    OcctOpenShellAnalysis.Report(face3DList, options, result);
+                    ReportInputDiagnostics(face3DList, options, result);
                     return false;
                 }
 
@@ -425,6 +435,181 @@ namespace SAM.Geometry.OCCT.Native
                 volume?.Dispose();
                 sewResult.Dispose();
             }
+        }
+
+        /// <summary>
+        /// The glue gate (issue #37 follow-on): glue is safe only on gap-free
+        /// input (near-coincident faces beyond tolerance show up as gaps). Prefers
+        /// the native validation report - the safety net this feature is built on -
+        /// and falls back to the pure-managed naked-edge check when the native
+        /// validator is unavailable. Non-manifold (shared-wall) edges, which are
+        /// exactly what glue accelerates, never block it. Adds a Warning (not an
+        /// Error, so the glue-off success still reads as success) when it skips.
+        /// </summary>
+        private static bool IsInputCleanForGlue(List<Face3D> face3Ds, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            // Native gate: sew the soup and run the kernel watertightness check.
+            OcctCellComplexResult validateResult = new OcctCellComplexResult();
+            try
+            {
+                if (OcctShapeBuilder.TryValidateFaces(face3Ds, true, options, validateResult, out OcctValidationReport report) && report != null)
+                {
+                    if (report.IsWatertight)
+                    {
+                        return true;
+                    }
+
+                    result.AddDiagnostic(
+                        OcctDiagnosticSeverity.Warning,
+                        "SAM_OCCT_GLUE_SKIPPED",
+                        string.Format("BOP glue ({0}) was requested but native validation found {1} naked (free) edge(s); building without glue to avoid corrupting near-coincident faces.", options.GlueMode, report.CountOf(OcctValidationIssueCategory.NakedEdge)));
+                    return false;
+                }
+            }
+            finally
+            {
+                validateResult.Dispose();
+            }
+
+            // Managed fallback (no native validator): the welded-edge naked-edge check.
+            OcctOpenShellAnalysis.WatertightnessSummary summary = OcctOpenShellAnalysis.AnalyzeWatertightness(face3Ds, options);
+            if (summary.IsCleanForGlue)
+            {
+                return true;
+            }
+
+            result.AddDiagnostic(
+                OcctDiagnosticSeverity.Warning,
+                "SAM_OCCT_GLUE_SKIPPED",
+                string.Format("BOP glue ({0}) was requested but the input has {1} naked (free) edge(s); building without glue to avoid corrupting near-coincident faces.", options.GlueMode, summary.NakedEdgeCount));
+            return false;
+        }
+
+        /// <summary>
+        /// The BOP-glue cell-complex build (issue #37 follow-on). Gated on a clean
+        /// watertightness report (glue corrupts merely-near-coincident
+        /// faces), then run natively via the _ex entry point in an isolated result
+        /// so a degrade (dirty input, glued build failure, or a native build
+        /// predating the glue ABI) leaves no Error diagnostics on the caller's
+        /// result; only a fully successful glued build is merged back and only
+        /// then is <c>true</c> returned, so the caller falls through to the
+        /// glue-off path otherwise.
+        /// </summary>
+        private static bool TryGluedBuild(List<Face3D> face3Ds, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            // Gate: glue corrupts merely-near-coincident faces, so it must run only
+            // on input with no gaps (naked edges). Non-manifold edges - the shared
+            // walls glue exists to accelerate - are fine and do NOT block it.
+            if (!IsInputCleanForGlue(face3Ds, options, result))
+            {
+                return false;
+            }
+
+            OcctCellComplexResult glueResult = new OcctCellComplexResult();
+            OcctTopology topology = null;
+            try
+            {
+                if (!OcctShapeBuilder.TryCreateCellComplexGlued(face3Ds, options.GlueMode, options, glueResult, out topology)
+                    || !OcctShapeBuilder.TryDecode(topology, options, glueResult))
+                {
+                    // Propagate native availability so graceful-degradation
+                    // reporting stays accurate, then degrade with a Warning (not
+                    // an Error, which would make the later glue-off success read
+                    // as a failure).
+                    result.NativeAvailable = glueResult.NativeAvailable;
+                    result.NativeVersion = glueResult.NativeVersion;
+                    result.AddDiagnostic(
+                        OcctDiagnosticSeverity.Warning,
+                        "SAM_OCCT_GLUE_DEGRADED",
+                        string.Format("BOP glue ({0}) did not complete (the native build may predate the glue ABI v3); building without glue.", options.GlueMode));
+                    return false;
+                }
+
+                result.NativeAvailable = true;
+                result.NativeVersion = glueResult.NativeVersion;
+                foreach (OcctCell cell in glueResult.Cells)
+                {
+                    result.AddCell(cell);
+                }
+
+                if (options.RetainTopology)
+                {
+                    result.Topology = topology;
+                    topology = null; // ownership transferred to the caller's result
+                }
+
+                result.BuildFaceAdjacencies();
+                result.AddDiagnostic(
+                    OcctDiagnosticSeverity.Info,
+                    "SAM_OCCT_GLUE_SUCCESS",
+                    string.Format("Built the cell complex with BOP glue ({0}) on validated-clean input.", options.GlueMode));
+                return true;
+            }
+            finally
+            {
+                topology?.Dispose();
+                glueResult.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Reports why a cell-complex build failed to close (issue #37 follow-on).
+        /// When <c>ValidateInput</c> is set and the native library is available,
+        /// the input face soup is sewn and validated so the diagnostics carry
+        /// kernel-grade located issues (naked edges with XYZ, self-intersections) -
+        /// the teeth behind <c>ValidateInput</c>. Falls back to the pure-managed
+        /// naked-edge analysis when native validation is unavailable or disabled.
+        /// </summary>
+        private static void ReportInputDiagnostics(List<Face3D> face3Ds, OcctBuildOptions options, OcctCellComplexResult result)
+        {
+            if (options.ValidateInput)
+            {
+                OcctCellComplexResult validateResult = new OcctCellComplexResult();
+                try
+                {
+                    if (OcctShapeBuilder.TryValidateFaces(face3Ds, true, options, validateResult, out OcctValidationReport report) && report != null)
+                    {
+                        EmitValidationDiagnostics(report, result);
+                        return;
+                    }
+                }
+                finally
+                {
+                    validateResult.Dispose();
+                }
+            }
+
+            // Managed fallback: the welded-edge naked-edge analysis, which needs
+            // no native library.
+            OcctOpenShellAnalysis.Report(face3Ds, options, result);
+        }
+
+        private static void EmitValidationDiagnostics(OcctValidationReport report, OcctCellComplexResult result)
+        {
+            if (report.IsWatertight && report.IsValid)
+            {
+                result.AddDiagnostic(
+                    OcctDiagnosticSeverity.Info,
+                    "SAM_OCCT_VALIDATE_SUCCESS",
+                    "Native validation found the sewn input valid and watertight, so OCCT failed to close it for another reason (e.g. a sliver below tolerance).");
+                return;
+            }
+
+            int nakedCount = report.CountOf(OcctValidationIssueCategory.NakedEdge);
+            OcctValidationIssue sample = report.IssuesOf(OcctValidationIssueCategory.NakedEdge).FirstOrDefault();
+            Point3D location = sample?.Location;
+            int selfIntersections = report.CountOf(OcctValidationIssueCategory.SelfIntersection);
+
+            result.AddDiagnostic(
+                OcctDiagnosticSeverity.Warning,
+                "SAM_OCCT_VALIDATE_INPUT",
+                string.Format(
+                    "Native validation of the input: {0}, {1}; {2} naked edge(s){3}, {4} self-intersection(s). This is why OCCT could not build a closed volume.",
+                    report.IsValid ? "valid" : "INVALID",
+                    report.IsWatertight ? "watertight" : "NOT watertight",
+                    nakedCount,
+                    location == null ? string.Empty : string.Format(" (e.g. near ({0:0.###}, {1:0.###}, {2:0.###}))", location.X, location.Y, location.Z),
+                    selfIntersections));
         }
 
         public static bool TryTriangulate(IEnumerable<Face3D> face3Ds, OcctBuildOptions options, double linearDeflection, double angularDeflection, bool relativeDeflection, OcctCellComplexResult result, out List<Triangle3D> triangles)

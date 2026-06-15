@@ -179,6 +179,68 @@ namespace SAM.Geometry.OCCT.Native
             int makeSolid,
             out OcctTopology shapeHandleOut);
 
+        // ---- validation & watertightness diagnostics (issue #37 follow-on) ----
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_validate(
+            OcctTopology shapeHandle,
+            double tolerance,
+            int checkSelfIntersections,
+            out IntPtr validationHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_validation_is_valid(IntPtr validationHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_validation_is_watertight(IntPtr validationHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_validation_issue_count(IntPtr validationHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_validation_issue(
+            IntPtr validationHandle,
+            int index,
+            out int category,
+            out double x,
+            out double y,
+            out double z,
+            out double size);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void sam_occt_free_validation(IntPtr validationHandle);
+
+        // ---- BOP glue overloads (issue #37 follow-on, ABI v3) ----
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_create_cell_complex_ex(
+            [In] double[] coordinates,
+            int pointCount,
+            [In] int[] loopPointCounts,
+            int loopCount,
+            [In] int[] faceLoopCounts,
+            int faceCount,
+            double fuzzyTolerance,
+            int runParallel,
+            int avoidInternalShapes,
+            int glueMode,
+            out OcctTopology shapeHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_make_volume_ex(
+            OcctTopology shapeHandle,
+            [In] double[] coordinates,
+            int pointCount,
+            [In] int[] loopPointCounts,
+            int loopCount,
+            [In] int[] faceLoopCounts,
+            int faceCount,
+            double fuzzyTolerance,
+            int runParallel,
+            int avoidInternalShapes,
+            int glueMode,
+            out OcctTopology shapeHandleOut);
+
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sam_occt_shape_solid_count(OcctTopology shapeHandle);
 

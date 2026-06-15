@@ -8,6 +8,7 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BOPAlgo_GlueEnum.hxx>
 #include <BOPAlgo_MakerVolume.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
@@ -504,11 +505,25 @@ namespace sam_occt
         return !faces.IsEmpty();
     }
 
+    // Maps the ABI glue selector (0/1/2) to the BOPAlgo glue enum. Unknown
+    // values fall back to "off" so a future managed value can never enable glue
+    // accidentally against an older native build.
+    BOPAlgo_GlueEnum to_glue(int glue)
+    {
+        switch (glue)
+        {
+            case 1: return BOPAlgo_GlueShift;
+            case 2: return BOPAlgo_GlueFull;
+            default: return BOPAlgo_GlueOff;
+        }
+    }
+
     int make_volume_from_faces(
         const TopTools_ListOfShape& faces,
         double fuzzy_tolerance,
         int run_parallel,
         int avoid_internal_shapes,
+        int glue,
         TopoDS_Shape& out_shape)
     {
         BOPAlgo_MakerVolume maker;
@@ -517,6 +532,7 @@ namespace sam_occt
         maker.SetFuzzyValue(fuzzy_tolerance);
         maker.SetRunParallel(run_parallel != 0);
         maker.SetAvoidInternalShapes(avoid_internal_shapes != 0);
+        maker.SetGlue(to_glue(glue));
         maker.Perform();
 
         if (maker.HasErrors())
@@ -570,7 +586,9 @@ int sam_occt_build_cell_complex(
         }
 
         TopoDS_Shape shape;
-        const int volume_status = make_volume_from_faces(arguments, fuzzy_tolerance, run_parallel, avoid_internal_shapes, shape);
+        // The legacy decode-and-free path stays glue-off; glue is opt-in through
+        // the shape-handle _ex entry points (issue #37 follow-on).
+        const int volume_status = make_volume_from_faces(arguments, fuzzy_tolerance, run_parallel, avoid_internal_shapes, 0, shape);
         if (volume_status != 0)
         {
             return volume_status;

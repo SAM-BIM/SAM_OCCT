@@ -130,13 +130,126 @@ namespace
 
         return 0;
     }
+
+    // Shared implementation behind sam_occt_shape_create_cell_complex and its
+    // glue-enabled _ex overload (issue #37 follow-on). glue: 0 off, 1 shift,
+    // 2 full.
+    int create_cell_complex_impl(
+        const double* coordinates,
+        const int* loop_point_counts,
+        const int* face_loop_counts,
+        int point_count,
+        int loop_count,
+        int face_count,
+        double fuzzy_tolerance,
+        int run_parallel,
+        int avoid_internal_shapes,
+        int glue,
+        void** shape_handle)
+    {
+        if (shape_handle != nullptr)
+        {
+            *shape_handle = nullptr;
+        }
+
+        if (coordinates == nullptr || loop_point_counts == nullptr || face_loop_counts == nullptr || shape_handle == nullptr)
+        {
+            return 10;
+        }
+
+        if (point_count <= 0 || loop_count <= 0 || face_count <= 0)
+        {
+            return 11;
+        }
+
+        try
+        {
+            TopTools_ListOfShape faces;
+            if (!make_faces_from_arrays(coordinates, loop_point_counts, face_loop_counts, face_count, faces))
+            {
+                return 20;
+            }
+
+            TopoDS_Shape shape;
+            const int volume_status = make_volume_from_faces(faces, fuzzy_tolerance, run_parallel, avoid_internal_shapes, glue, shape);
+            if (volume_status != 0)
+            {
+                return volume_status;
+            }
+
+            return wrap_shape(shape, shape_handle);
+        }
+        catch (...)
+        {
+            return 99;
+        }
+    }
+
+    // Shared implementation behind sam_occt_shape_make_volume and its
+    // glue-enabled _ex overload (issue #37 follow-on).
+    int make_volume_impl(
+        void* shape_handle,
+        const double* coordinates,
+        int point_count,
+        const int* loop_point_counts,
+        int loop_count,
+        const int* face_loop_counts,
+        int face_count,
+        double fuzzy_tolerance,
+        int run_parallel,
+        int avoid_internal_shapes,
+        int glue,
+        void** shape_handle_out)
+    {
+        Shape* shape = nullptr;
+        const int argument_status = validate_op_arguments(shape_handle_out, shape_handle, shape);
+        if (argument_status != 0)
+        {
+            return argument_status;
+        }
+
+        try
+        {
+            TopTools_ListOfShape faces;
+            for (TopExp_Explorer face_explorer(shape->shape, TopAbs_FACE); face_explorer.More(); face_explorer.Next())
+            {
+                faces.Append(face_explorer.Current());
+            }
+
+            // Optional extra faces (the same flattened-array contract).
+            const bool has_extra_faces = coordinates != nullptr && loop_point_counts != nullptr && face_loop_counts != nullptr
+                && point_count > 0 && loop_count > 0 && face_count > 0;
+            if (has_extra_faces && !make_faces_from_arrays(coordinates, loop_point_counts, face_loop_counts, face_count, faces))
+            {
+                return 20;
+            }
+
+            if (faces.IsEmpty())
+            {
+                return 20;
+            }
+
+            TopoDS_Shape volume_shape;
+            const int volume_status = make_volume_from_faces(faces, fuzzy_tolerance, run_parallel, avoid_internal_shapes, glue, volume_shape);
+            if (volume_status != 0)
+            {
+                return volume_status;
+            }
+
+            return wrap_shape(volume_shape, shape_handle_out);
+        }
+        catch (...)
+        {
+            return 99;
+        }
+    }
 }
 
 extern "C" {
 
 int sam_occt_abi_version(void)
 {
-    return 2;
+    return 3;
 }
 
 void sam_occt_shape_release(void* shape_handle)
@@ -165,42 +278,29 @@ int sam_occt_shape_create_cell_complex(
     int avoid_internal_shapes,
     void** shape_handle)
 {
-    if (shape_handle != nullptr)
-    {
-        *shape_handle = nullptr;
-    }
+    return create_cell_complex_impl(
+        coordinates, loop_point_counts, face_loop_counts,
+        point_count, loop_count, face_count,
+        fuzzy_tolerance, run_parallel, avoid_internal_shapes, 0, shape_handle);
+}
 
-    if (coordinates == nullptr || loop_point_counts == nullptr || face_loop_counts == nullptr || shape_handle == nullptr)
-    {
-        return 10;
-    }
-
-    if (point_count <= 0 || loop_count <= 0 || face_count <= 0)
-    {
-        return 11;
-    }
-
-    try
-    {
-        TopTools_ListOfShape faces;
-        if (!make_faces_from_arrays(coordinates, loop_point_counts, face_loop_counts, face_count, faces))
-        {
-            return 20;
-        }
-
-        TopoDS_Shape shape;
-        const int volume_status = make_volume_from_faces(faces, fuzzy_tolerance, run_parallel, avoid_internal_shapes, shape);
-        if (volume_status != 0)
-        {
-            return volume_status;
-        }
-
-        return wrap_shape(shape, shape_handle);
-    }
-    catch (...)
-    {
-        return 99;
-    }
+int sam_occt_shape_create_cell_complex_ex(
+    const double* coordinates,
+    int point_count,
+    const int* loop_point_counts,
+    int loop_count,
+    const int* face_loop_counts,
+    int face_count,
+    double fuzzy_tolerance,
+    int run_parallel,
+    int avoid_internal_shapes,
+    int glue_mode,
+    void** shape_handle)
+{
+    return create_cell_complex_impl(
+        coordinates, loop_point_counts, face_loop_counts,
+        point_count, loop_count, face_count,
+        fuzzy_tolerance, run_parallel, avoid_internal_shapes, glue_mode, shape_handle);
 }
 
 int sam_occt_shape_create_shells(
@@ -574,47 +674,30 @@ int sam_occt_shape_make_volume(
     int avoid_internal_shapes,
     void** shape_handle_out)
 {
-    Shape* shape = nullptr;
-    const int argument_status = validate_op_arguments(shape_handle_out, shape_handle, shape);
-    if (argument_status != 0)
-    {
-        return argument_status;
-    }
+    return make_volume_impl(
+        shape_handle, coordinates, point_count, loop_point_counts, loop_count,
+        face_loop_counts, face_count, fuzzy_tolerance, run_parallel,
+        avoid_internal_shapes, 0, shape_handle_out);
+}
 
-    const bool has_extra_faces = coordinates != nullptr && loop_point_counts != nullptr && face_loop_counts != nullptr
-        && point_count > 0 && loop_count > 0 && face_count > 0;
-
-    try
-    {
-        TopTools_ListOfShape faces;
-        for (TopExp_Explorer face_explorer(shape->shape, TopAbs_FACE); face_explorer.More(); face_explorer.Next())
-        {
-            faces.Append(face_explorer.Current());
-        }
-
-        if (has_extra_faces && !make_faces_from_arrays(coordinates, loop_point_counts, face_loop_counts, face_count, faces))
-        {
-            return 20;
-        }
-
-        if (faces.IsEmpty())
-        {
-            return 20;
-        }
-
-        TopoDS_Shape volume_shape;
-        const int volume_status = make_volume_from_faces(faces, fuzzy_tolerance, run_parallel, avoid_internal_shapes, volume_shape);
-        if (volume_status != 0)
-        {
-            return volume_status;
-        }
-
-        return wrap_shape(volume_shape, shape_handle_out);
-    }
-    catch (...)
-    {
-        return 99;
-    }
+int sam_occt_shape_make_volume_ex(
+    void* shape_handle,
+    const double* coordinates,
+    int point_count,
+    const int* loop_point_counts,
+    int loop_count,
+    const int* face_loop_counts,
+    int face_count,
+    double fuzzy_tolerance,
+    int run_parallel,
+    int avoid_internal_shapes,
+    int glue_mode,
+    void** shape_handle_out)
+{
+    return make_volume_impl(
+        shape_handle, coordinates, point_count, loop_point_counts, loop_count,
+        face_loop_counts, face_count, fuzzy_tolerance, run_parallel,
+        avoid_internal_shapes, glue_mode, shape_handle_out);
 }
 
 int sam_occt_shape_solid_count(void* shape_handle)

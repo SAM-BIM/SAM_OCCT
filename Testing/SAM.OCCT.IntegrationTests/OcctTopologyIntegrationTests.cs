@@ -32,10 +32,11 @@ namespace SAM.OCCT.IntegrationTests
             // Act
             GeometryQuery.ShellsUnion(shells, out OcctCellComplexResult result, new OcctBuildOptions());
 
-            // Assert - the committed native build must expose ABI revision 2
-            // (sam_occt_abi_version) so the shape-handle entry points exist.
+            // Assert - the committed native build must expose ABI revision 3
+            // (sam_occt_abi_version) so the shape-handle, validation and BOP-glue
+            // (_ex) entry points all exist.
             Assert.True(result.NativeAvailable);
-            Assert.Equal("2", result.NativeVersion);
+            Assert.Equal("3", result.NativeVersion);
         }
 
         [SkippableFact]

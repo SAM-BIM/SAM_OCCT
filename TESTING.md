@@ -100,8 +100,36 @@ Contract:
   `Dispose`/finalization may occur on another thread.
 - **Topology keys** are only comparable within one decoded result.
 - **ABI probe** - `OcctCellComplexResult.NativeVersion` reports
-  `sam_occt_abi_version` ("2"); a stale native build degrades to diagnostics
+  `sam_occt_abi_version` ("3"); a stale native build degrades to diagnostics
   (`SAM_OCCT_NATIVE_ENTRYPOINT_MISSING`) instead of crashing.
+
+## Validation, watertightness diagnostics & BOP glue (issue #37 follow-on, native ABI v3)
+
+ABI v3 adds two co-operating features (validation must precede glue):
+
+- **Native validation** - `Query.Validate(shells / faces / topology, out OcctValidationReport, out result)`
+  runs `BRepCheck_Analyzer` + `ShapeAnalysis_FreeBounds` (+ an optional
+  `BOPAlgo_ArgumentAnalyzer` self-intersection test) and returns
+  `IsValid` / `IsWatertight` plus the located, categorised
+  `OcctValidationIssue`s (naked edge with XYZ + gap length, self-intersection,
+  small/invalid face). It is the teeth behind `OcctBuildOptions.ValidateInput`:
+  on a hard `Create.Shells` close failure the input is sewn and validated so the
+  diagnostics carry kernel-grade locations, falling back to the pure-managed
+  `OcctOpenShellAnalysis` naked-edge analysis when the native validator is
+  unavailable.
+- **BOP glue** - `OcctBuildOptions.GlueMode` (`Off` / `Shift` / `Full`, default
+  `Off`) routes `Create.Shells` through the glue-aware `_ex` cell-complex builder
+  (`BOPAlgo_MakerVolume::SetGlue`). Glue is a throughput win on cell complexes
+  with many coincident shared walls but corrupts merely-near-coincident faces,
+  so it is applied **only** when the watertightness gate reports no gaps (naked
+  edges); non-manifold shared-wall edges - exactly what glue accelerates - do not
+  block it. Glue also degrades to the glue-off path (with a
+  `SAM_OCCT_GLUE_SKIPPED` / `SAM_OCCT_GLUE_DEGRADED` warning) when the input is
+  not gap-free or the native build predates ABI v3.
+
+Guard / mapping / report logic is unit-tested (`ValidateGuardTests`,
+`WatertightnessSummaryTests`, `OcctBuildOptionsTests`); the real kernel paths are
+native-gated integration tests (`ValidateIntegrationTests`, `GlueIntegrationTests`).
 
 Guard tests live in `OcctTopologyGuardTests` (unit); lifecycle, parity,
 chaining and point-in-solid coverage lives in `OcctTopologyIntegrationTests`

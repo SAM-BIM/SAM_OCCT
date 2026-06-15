@@ -59,6 +59,7 @@ add_library(SAM.Occt.Native SHARED
     src/ShapeExtrude.cpp
     src/ShapeOffset.cpp
     src/ShapeSew.cpp
+    src/ShapeValidate.cpp
 )
 
 target_compile_definitions(SAM.Occt.Native PRIVATE SAM_OCCT_NATIVE_EXPORTS)
