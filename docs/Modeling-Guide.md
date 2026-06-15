@@ -511,6 +511,50 @@ If the shells still do not close:
 - Run `SAMOCCT.ShellsRepair` on the chunks that fail.
 - Pre-split neighbouring surfaces so they share exact edges before triangulating.
 
+### Diagnosing And Closing Failures (Validate, Sew, Glue)
+
+When a model will not close, work it in this order (issue #37):
+
+1. **`SAMOCCT.Validate` - find out *why* and *where*.** Feed it the same faces
+   (or shells) you give `SAMOCCT.CreateShells`. It runs the OCCT kernel checks
+   (`BRepCheck_Analyzer` + `ShapeAnalysis_FreeBounds` + an optional
+   self-intersection test) and returns:
+
+   - `IsValid` / `IsWatertight` - a quick yes/no on validity and gaps.
+   - `IssueLocations` - a point at each problem you can bake to *see* where the
+     hole / self-intersection / sliver is.
+   - `Issues` - a text description of each (naked edge with its gap length,
+     self-intersection, small/invalid face).
+
+   A non-watertight report with naked edges tells you the gap is larger than the
+   tolerance - either pre-split the surfaces there or raise the sewing tolerance
+   below.
+
+2. **`SAMOCCT.Sew` - close triangulated / near-touching faces.** Unlike
+   `CreateShells` it does not need the faces to already bound a volume; it sews
+   and heals (`BRepBuilderAPI_Sewing` + `ShapeFix`) to bridge the seams a fuzzy
+   tolerance alone misses. Raise `sewingTolerance_` to bridge larger gaps. You
+   can also stay in `SAMOCCT.CreateShells` and set `sewBeforeBuild_ = true`
+   (with a `sewingTolerance_`); a hard close failure there also auto-retries via
+   sew.
+
+3. **`glueMode_` on `SAMOCCT.CreateShells` - speed up big cell complexes.** For
+   models with thousands of *coincident shared walls* (large adjacency
+   clusters), set `glueMode_ = 2` (full) to let the boolean kernel treat the
+   shared walls as shared instead of re-intersecting them. It is a throughput
+   optimisation, **not** a closing fix: glue is applied only when a
+   watertightness check finds no gaps, and otherwise silently degrades to the
+   normal build (look for a `SAM_OCCT_GLUE_SKIPPED` remark). Run
+   `SAMOCCT.Validate` first and only enable glue once the input is watertight.
+
+```text
+faces that will not close
+-> SAMOCCT.Validate            (IsWatertight? where are the naked edges?)
+-> SAMOCCT.Sew                 (or CreateShells with sewBeforeBuild_ = true)
+-> watertight Shells
+-> (large clusters) SAMOCCT.CreateShells with glueMode_ = 2 on clean input
+```
+
 ## Merging Coplanar Faces
 
 `SAMOCCT.MergeCoplanarFace3Ds` and `SAMOCCT.MergeCoplanarShells` are the inverse
