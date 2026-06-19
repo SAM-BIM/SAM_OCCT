@@ -74,7 +74,17 @@ Each `_shells` list item is one intended space/cell. A mesh is not a closed Brep
 its triangle faces are assembled into a single `Shell` (one mesh = one volume). You
 can mix meshes, Shells, and closed Breps in the same list.
 
-Because a mesh is a triangle soup, two things happen automatically:
+Because a mesh is a triangle soup, three things happen automatically:
+
+- **Welding** (`weldMesh_`, default on). A mesh exported unwelded repeats each shared
+  corner once per face (e.g. 1594 vertices for ~499 unique positions). The triangles
+  are rebuilt through a shared vertex list at `tolerance_` so coincident corners
+  become one vertex and shared edges line up exactly, and degenerate slivers are
+  dropped. Reported as `SAM_OCCT_ANALYTICAL_SHELL_MESH_WELD`. This cleans unwelded
+  meshes but **cannot** fix T-junctions (a vertex sitting partway along another
+  triangle's edge) or self-intersecting/overlapping faces — those must be repaired on
+  the source mesh (in Rhino: `Weld`, mesh check/repair, `FillMeshHoles`, or
+  `QuadRemesh` to regenerate a clean conforming mesh).
 
 - **Sewing is always on for mesh input.** The faces are run through native
   sew-and-heal before `BOPAlgo_MakerVolume`, so coincident triangle edges become
@@ -145,6 +155,8 @@ Useful diagnostics:
 - `SAM_OCCT_ANALYTICAL_SHELL_MESH_INPUT`: reports how many shells were assembled
   from mesh input (Rhino Mesh / SAM Mesh3D / meshed Brep) and how many the
   watertightness pre-check flagged as open.
+- `SAM_OCCT_ANALYTICAL_SHELL_MESH_WELD`: reports that mesh input was welded to a
+  shared vertex set (`weldMesh_`), with the resulting vertex and triangle counts.
 - `SAM_OCCT_ANALYTICAL_SHELL_MESH_OPEN`: warns that a specific mesh input shell is
   not a closed volume, with its naked-edge / non-manifold counts so you know which
   mesh to repair.

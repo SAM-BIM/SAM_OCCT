@@ -20,7 +20,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("d6950fec-cea4-4b48-9099-8943a7765e81");
 
-        public override string LatestComponentVersion => "0.5.0";
+        public override string LatestComponentVersion => "0.6.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -85,6 +85,14 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Number meshDeflection = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "meshDeflection_", NickName = "meshDeflection_", Description = "Max chord deviation (model units) for meshInput_: how far a planar mesh triangle may deviate from the true curved surface. Smaller hugs curvature with more triangles; larger is coarser. Flat faces are unaffected (kept coarse). Default 0.1.", Access = GH_ParamAccess.item };
                 meshDeflection.SetPersistentData(0.1);
                 result.Add(new GH_SAMParam(meshDeflection, ParamVisibility.Voluntary));
+
+                // weldMesh_ merges coincident-but-duplicate mesh vertices (e.g. an unwelded mesh with
+                // 1594 vertices but only ~499 unique positions) into shared topology before the build,
+                // at tolerance_, dropping only genuinely degenerate slivers. It cannot fix T-junctions
+                // or self-intersections - those need repair at the source mesh.
+                global::Grasshopper.Kernel.Parameters.Param_Boolean weldMesh = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "weldMesh_", NickName = "weldMesh_", Description = "Weld coincident duplicate vertices of mesh input (Rhino Mesh / SAM Mesh3D / meshed Brep) into shared topology at tolerance_ before the build. Cleans unwelded meshes; does not fix T-junctions or self-intersecting faces. Default true.", Access = GH_ParamAccess.item };
+                weldMesh.SetPersistentData(true);
+                result.Add(new GH_SAMParam(weldMesh, ParamVisibility.Voluntary));
 
                 GooSpaceParam spaces = new GooSpaceParam() { Name = "spaces_", NickName = "spaces_", Description = "Optional existing Spaces to match into shell cells. If supplied, matching spaces preserve metadata and names.", Access = GH_ParamAccess.list, Optional = true };
                 spaces.DataMapping = GH_DataMapping.Flatten;
@@ -176,6 +184,13 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref meshDeflection);
             }
 
+            bool weldMesh = true;
+            index = Params.IndexOfInputParam("weldMesh_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref weldMesh);
+            }
+
             // OcctBuildOptions reused for the watertightness pre-check (tolerance = welding distance)
             // and the cell build below, so both agree on tolerance.
             OcctBuildOptions buildOptions = new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance };
@@ -217,6 +232,32 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 // and a SAM Mesh3D, returning each mesh triangle as a Face3D.
                 if (global::SAM.Geometry.Grasshopper.Query.TryGetSAMGeometries(effectiveWrapper, out List<Face3D> face3Ds) && face3Ds != null && face3Ds.Count != 0)
                 {
+                    // Weld pass: a mesh exported unwelded repeats each shared corner once per face
+                    // (e.g. 1594 vertices for ~499 unique positions). Rebuild the triangles through a
+                    // shared vertex list at tolerance_ so coincident corners become one vertex and
+                    // shared edges line up exactly; degenerate slivers are dropped. This does NOT fix
+                    // T-junctions or self-intersecting faces - those must be repaired on the source mesh.
+                    if (weldMesh)
+                    {
+                        List<Triangle3D> triangle3Ds = new List<Triangle3D>();
+                        foreach (Face3D face3D in face3Ds)
+                        {
+                            List<Triangle3D> triangle3Ds_Temp = global::SAM.Geometry.Spatial.Query.Triangulate(face3D, tolerance);
+                            if (triangle3Ds_Temp != null)
+                            {
+                                triangle3Ds.AddRange(triangle3Ds_Temp);
+                            }
+                        }
+
+                        Mesh3D welded = global::SAM.Geometry.Spatial.Create.Mesh3D(triangle3Ds, tolerance);
+                        List<Triangle3D> weldedTriangle3Ds = welded?.GetTriangles();
+                        if (weldedTriangle3Ds != null && weldedTriangle3Ds.Count != 0)
+                        {
+                            diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_MESH_WELD: Welded mesh input [{0}] to {1} shared vertex/vertices; {2} triangle(s) in, {3} after weld.", meshShellCount, welded.PointsCount, face3Ds.Count, weldedTriangle3Ds.Count));
+                            face3Ds = weldedTriangle3Ds.ConvertAll(x => new Face3D(x));
+                        }
+                    }
+
                     // Prefer merging coplanar mesh triangles into clean planar faces; if that fails
                     // (e.g. a non-watertight mesh), fall back to the raw triangle faces and let the
                     // OCCT MakerVolume + UnifySameDomain pass merge/heal them.

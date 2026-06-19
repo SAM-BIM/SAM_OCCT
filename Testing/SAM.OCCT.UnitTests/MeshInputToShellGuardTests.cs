@@ -82,5 +82,31 @@ namespace SAM.OCCT.UnitTests
             Shell shell = global::SAM.Geometry.Spatial.Create.Shell(new List<Face3D>(), Core.Tolerance.MacroDistance, Core.Tolerance.Distance);
             Assert.Null(shell);
         }
+
+        [Fact]
+        public void WeldMesh_UnweldedBoxTriangles_CollapseToEightSharedVertices()
+        {
+            // Arrange - an unwelded box: each of the 6 faces carries its own copies of the
+            // shared corners, so triangulating them yields triangles that reference many
+            // duplicate Point3D instances at only 8 unique positions (the weldMesh_ case).
+            List<Triangle3D> triangle3Ds = new List<Triangle3D>();
+            foreach (Face3D face3D in TestGeometry.CreateClosedBoxFaces())
+            {
+                List<Triangle3D> triangle3Ds_Temp = global::SAM.Geometry.Spatial.Query.Triangulate(face3D, Core.Tolerance.Distance);
+                Assert.NotNull(triangle3Ds_Temp);
+                triangle3Ds.AddRange(triangle3Ds_Temp);
+            }
+
+            Assert.Equal(12, triangle3Ds.Count); // 6 quad faces -> 12 triangles
+
+            // Act - the weld the component performs: rebuild through a shared vertex list.
+            Mesh3D welded = global::SAM.Geometry.Spatial.Create.Mesh3D(triangle3Ds, Core.Tolerance.Distance);
+
+            // Assert - the 36 raw triangle corners weld down to the box's 8 unique vertices,
+            // and all 12 faces survive (no real face dropped).
+            Assert.NotNull(welded);
+            Assert.Equal(8, welded.PointsCount);
+            Assert.Equal(12, welded.TrianglesCount);
+        }
     }
 }
