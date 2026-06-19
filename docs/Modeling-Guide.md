@@ -63,6 +63,67 @@ Do not union adjacent room shells before creating an adjacency cluster if each
 room should remain a separate space. Union is for merging volumes into a larger
 solid, not for preserving individual rooms.
 
+### Mesh Input (Rhino Mesh / SAM Mesh3D)
+
+`SAMOCCT.CreateAdjacencyClusterByShells` accepts more than SAM `Shell`s and closed
+Rhino Breps on `_shells`. It also takes **Rhino Meshes** and **SAM `Mesh3D`s**, so
+you can drive the analytical model straight from mesh massing (SubD output, imported
+meshes, mesh-based conceptual tools) without first converting to Breps.
+
+Each `_shells` list item is one intended space/cell. A mesh is not a closed Brep, so
+its triangle faces are assembled into a single `Shell` (one mesh = one volume). You
+can mix meshes, Shells, and closed Breps in the same list.
+
+Because a mesh is a triangle soup, three things happen automatically:
+
+- **Welding** (`weldMesh_`, default on). A mesh exported unwelded repeats each shared
+  corner once per face (e.g. 1594 vertices for ~499 unique positions). The triangles
+  are rebuilt through a shared vertex list at `tolerance_` so coincident corners
+  become one vertex and shared edges line up exactly, and degenerate slivers are
+  dropped. Reported as `SAM_OCCT_ANALYTICAL_SHELL_MESH_WELD`. This cleans unwelded
+  meshes but **cannot** fix T-junctions (a vertex sitting partway along another
+  triangle's edge) or self-intersecting/overlapping faces — those must be repaired on
+  the source mesh (in Rhino: `Weld`, mesh check/repair, `FillMeshHoles`, or
+  `QuadRemesh` to regenerate a clean conforming mesh).
+
+- **Sewing is always on for mesh input.** The faces are run through native
+  sew-and-heal before `BOPAlgo_MakerVolume`, so coincident triangle edges become
+  shared topology instead of relying on MakerVolume's fuzzy-tolerance guesswork. The
+  `sew_` toggle additionally forces sewing for Shell / closed Brep input.
+- **A watertightness pre-check runs per mesh.** A mesh that is not a closed volume
+  is the commonest cause of an opaque build failure, so each mesh shell is checked
+  for naked (open) edges up-front and reported on `Diagnostics`
+  (`SAM_OCCT_ANALYTICAL_SHELL_MESH_OPEN`) before the build. If a mesh is open,
+  repair it so it is watertight (close holes, weld vertices) — sewing will try to
+  bridge small gaps but cannot invent a missing face.
+
+The downstream OCCT build merges the coplanar triangles back into clean planar
+panels (`UnifySameDomain`), so a 600-triangle mesh box still yields 6 wall panels,
+not 600. For a meshed curved surface, expect one planar panel per facet — there is
+no NURBS recovery from a mesh.
+
+#### Breps with curved faces — `meshInput_`
+
+A Brep whose faces are curved (NURBS) often **fails** to build directly. The
+Brep → SAM `Shell` conversion approximates each curved face with planar faces, and
+those can come out self-intersecting and not watertight, so OCCT's `MakerVolume`
+returns status 40 and the diagnostics report something like *"INVALID, NOT
+watertight; 128 naked edges, 194 self-intersections"*.
+
+Set `meshInput_ = true` to fix this: the component tessellates each Brep/surface
+with Rhino's `BRepMesh`, then **welds the seams, fills small gaps, and unifies
+winding** into one clean watertight planar triangle mesh **before** the OCCT build,
+bypassing the lossy Brep → Shell conversion. The mesh then follows the mesh path
+above (always sewn, watertightness pre-checked). `meshDeflection_` controls how
+closely the mesh hugs curvature (smaller = finer; flat faces stay coarse). Rhino
+Meshes and SAM Shells/Mesh3Ds are unaffected by this toggle. If a Brep will not
+mesh into a closed solid even after repair (e.g. the source is open or has gaps
+wider than `meshDeflection_`), that is reported as
+`SAM_OCCT_ANALYTICAL_SHELL_MESH_BREP_OPEN`.
+
+Use it whenever curved-face Breps will not close; leave it off for clean planar
+Breps, where the direct Shell path is exact and cheaper.
+
 ### Space Names And Metadata
 
 `SAMOCCT.CreateAdjacencyClusterByShells` can create spaces directly from shells,
@@ -88,6 +149,19 @@ creates names like `Cell 1`, `Cell 2`, and so on.
 
 Useful diagnostics:
 
+- `SAM_OCCT_ANALYTICAL_SHELL_MESH_BREP`: reports how many Brep/surface inputs
+  `meshInput_` tessellated with Rhino's mesher before the build, and at what
+  deflection.
+- `SAM_OCCT_ANALYTICAL_SHELL_MESH_INPUT`: reports how many shells were assembled
+  from mesh input (Rhino Mesh / SAM Mesh3D / meshed Brep) and how many the
+  watertightness pre-check flagged as open.
+- `SAM_OCCT_ANALYTICAL_SHELL_MESH_WELD`: reports that mesh input was welded to a
+  shared vertex set (`weldMesh_`), with the resulting vertex and triangle counts.
+- `SAM_OCCT_ANALYTICAL_SHELL_MESH_OPEN`: warns that a specific mesh input shell is
+  not a closed volume, with its naked-edge / non-manifold counts so you know which
+  mesh to repair.
+- `SAM_OCCT_ANALYTICAL_SHELL_SEW`: reports that sew-and-heal before MakerVolume is
+  on (always for mesh input, or when `sew_` is set for Shell / Brep input).
 - `SAM_OCCT_ANALYTICAL_SHELL_METADATA`: reports supplied spaces/names and the
   shell-native matching/naming strategy.
 - `SAM_OCCT_ANALYTICAL_PANEL_METADATA`: reports supplied panels/spaces and the
