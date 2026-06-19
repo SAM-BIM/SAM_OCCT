@@ -92,6 +92,24 @@ panels (`UnifySameDomain`), so a 600-triangle mesh box still yields 6 wall panel
 not 600. For a meshed curved surface, expect one planar panel per facet — there is
 no NURBS recovery from a mesh.
 
+#### Breps with curved faces — `meshInput_`
+
+A Brep whose faces are curved (NURBS) often **fails** to build directly. The
+Brep → SAM `Shell` conversion approximates each curved face with planar faces, and
+those can come out self-intersecting and not watertight, so OCCT's `MakerVolume`
+returns status 40 and the diagnostics report something like *"INVALID, NOT
+watertight; 128 naked edges, 194 self-intersections"*.
+
+Set `meshInput_ = true` to fix this: the component tessellates each Brep/surface
+with Rhino's `BRepMesh` into a clean, watertight planar triangle mesh **before** the
+OCCT build, bypassing the lossy Brep → Shell conversion. The mesh then follows the
+mesh path above (always sewn, watertightness pre-checked). `meshDeflection_`
+controls how closely the mesh hugs curvature (smaller = finer; flat faces stay
+coarse). Rhino Meshes and SAM Shells/Mesh3Ds are unaffected by this toggle.
+
+Use it whenever curved-face Breps will not close; leave it off for clean planar
+Breps, where the direct Shell path is exact and cheaper.
+
 ### Space Names And Metadata
 
 `SAMOCCT.CreateAdjacencyClusterByShells` can create spaces directly from shells,
@@ -117,9 +135,12 @@ creates names like `Cell 1`, `Cell 2`, and so on.
 
 Useful diagnostics:
 
+- `SAM_OCCT_ANALYTICAL_SHELL_MESH_BREP`: reports how many Brep/surface inputs
+  `meshInput_` tessellated with Rhino's mesher before the build, and at what
+  deflection.
 - `SAM_OCCT_ANALYTICAL_SHELL_MESH_INPUT`: reports how many shells were assembled
-  from mesh input (Rhino Mesh / SAM Mesh3D) and how many the watertightness
-  pre-check flagged as open.
+  from mesh input (Rhino Mesh / SAM Mesh3D / meshed Brep) and how many the
+  watertightness pre-check flagged as open.
 - `SAM_OCCT_ANALYTICAL_SHELL_MESH_OPEN`: warns that a specific mesh input shell is
   not a closed volume, with its naked-edge / non-manifold counts so you know which
   mesh to repair.

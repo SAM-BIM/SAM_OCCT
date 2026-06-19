@@ -20,7 +20,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("d6950fec-cea4-4b48-9099-8943a7765e81");
 
-        public override string LatestComponentVersion => "0.4.0";
+        public override string LatestComponentVersion => "0.5.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -73,6 +73,18 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Boolean sew = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "sew_", NickName = "sew_", Description = "Sew-and-heal faces before the OCCT volume build. Mesh input is always sewn (it is a triangle soup); set this true to also sew SAM Shell / closed Brep input. Default false.", Access = GH_ParamAccess.item };
                 sew.SetPersistentData(false);
                 result.Add(new GH_SAMParam(sew, ParamVisibility.Voluntary));
+
+                // meshInput_ tessellates Brep/surface input with Rhino's mesher before building,
+                // instead of converting the Brep straight to a SAM Shell. A curved (NURBS) Brep face
+                // often converts to self-intersecting, non-watertight planar SAM faces that OCCT
+                // cannot close (MakerVolume status 40); a clean planar mesh of the same Brep closes.
+                global::Grasshopper.Kernel.Parameters.Param_Boolean meshInput = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "meshInput_", NickName = "meshInput_", Description = "Mesh Brep/surface input (Rhino BRepMesh) into a planar triangle soup before the OCCT build, rather than converting the Brep directly to a SAM Shell. Turn this on when Breps with curved/NURBS faces fail to build a watertight volume. Rhino Meshes and SAM Shells/Mesh3Ds are unaffected. Default false.", Access = GH_ParamAccess.item };
+                meshInput.SetPersistentData(false);
+                result.Add(new GH_SAMParam(meshInput, ParamVisibility.Binding));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number meshDeflection = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "meshDeflection_", NickName = "meshDeflection_", Description = "Max chord deviation (model units) for meshInput_: how far a planar mesh triangle may deviate from the true curved surface. Smaller hugs curvature with more triangles; larger is coarser. Flat faces are unaffected (kept coarse). Default 0.1.", Access = GH_ParamAccess.item };
+                meshDeflection.SetPersistentData(0.1);
+                result.Add(new GH_SAMParam(meshDeflection, ParamVisibility.Voluntary));
 
                 GooSpaceParam spaces = new GooSpaceParam() { Name = "spaces_", NickName = "spaces_", Description = "Optional existing Spaces to match into shell cells. If supplied, matching spaces preserve metadata and names.", Access = GH_ParamAccess.list, Optional = true };
                 spaces.DataMapping = GH_DataMapping.Flatten;
@@ -150,6 +162,20 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref sew);
             }
 
+            bool meshInput = false;
+            index = Params.IndexOfInputParam("meshInput_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref meshInput);
+            }
+
+            double meshDeflection = 0.1;
+            index = Params.IndexOfInputParam("meshDeflection_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref meshDeflection);
+            }
+
             // OcctBuildOptions reused for the watertightness pre-check (tolerance = welding distance)
             // and the cell build below, so both agree on tolerance.
             OcctBuildOptions buildOptions = new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance };
@@ -163,9 +189,20 @@ namespace SAM.Analytical.Grasshopper.OCCT
             List<Shell> shells = new List<Shell>();
             int meshShellCount = 0;
             int openMeshShellCount = 0;
+            int meshedBrepCount = 0;
             foreach (GH_ObjectWrapper objectWrapper in objectWrappers)
             {
-                if (global::SAM.Geometry.Grasshopper.Query.TryGetSAMGeometries(objectWrapper, out List<Shell> shells_Temp) && shells_Temp != null && shells_Temp.Count != 0)
+                GH_ObjectWrapper effectiveWrapper = objectWrapper;
+
+                // meshInput_: tessellate a Brep/surface up-front with Rhino's mesher and process the
+                // mesh instead of the Brep. This bypasses the Brep -> SAM Shell conversion, which for
+                // curved/NURBS faces can produce self-intersecting, non-watertight faces OCCT rejects.
+                if (meshInput && TryMeshBrep(objectWrapper?.Value, meshDeflection, out GH_ObjectWrapper meshWrapper))
+                {
+                    effectiveWrapper = meshWrapper;
+                    meshedBrepCount++;
+                }
+                else if (global::SAM.Geometry.Grasshopper.Query.TryGetSAMGeometries(objectWrapper, out List<Shell> shells_Temp) && shells_Temp != null && shells_Temp.Count != 0)
                 {
                     shells.AddRange(shells_Temp);
                     continue;
@@ -173,7 +210,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
                 // Mesh fallback: Face3D extraction handles both a Rhino GH_Mesh (via Convert.ToSAM)
                 // and a SAM Mesh3D, returning each mesh triangle as a Face3D.
-                if (global::SAM.Geometry.Grasshopper.Query.TryGetSAMGeometries(objectWrapper, out List<Face3D> face3Ds) && face3Ds != null && face3Ds.Count != 0)
+                if (global::SAM.Geometry.Grasshopper.Query.TryGetSAMGeometries(effectiveWrapper, out List<Face3D> face3Ds) && face3Ds != null && face3Ds.Count != 0)
                 {
                     // Prefer merging coplanar mesh triangles into clean planar faces; if that fails
                     // (e.g. a non-watertight mesh), fall back to the raw triangle faces and let the
@@ -199,9 +236,13 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 }
             }
 
+            if (meshedBrepCount != 0)
+            {
+                diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_MESH_BREP: meshInput_ tessellated {0} Brep/surface input(s) with Rhino's mesher (deflection {1:0.######}) before the OCCT build.", meshedBrepCount, meshDeflection));
+            }
             if (meshShellCount != 0)
             {
-                diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_MESH_INPUT: Assembled {0} shell(s) from mesh input (Rhino Mesh / SAM Mesh3D); {1} reported open by the watertightness pre-check.", meshShellCount, openMeshShellCount));
+                diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_MESH_INPUT: Assembled {0} shell(s) from mesh input (Rhino Mesh / SAM Mesh3D / meshed Brep); {1} reported open by the watertightness pre-check.", meshShellCount, openMeshShellCount));
             }
 
             // Sewing heals a triangulated / near-touching face soup before MakerVolume. A mesh is
@@ -322,6 +363,89 @@ namespace SAM.Analytical.Grasshopper.OCCT
             {
                 AddRuntimeMessage(adjacencyCluster == null ? GH_RuntimeMessageLevel.Warning : GH_RuntimeMessageLevel.Remark, diagnostic);
             }
+        }
+
+        /// <summary>
+        /// Meshes a Brep/surface input with Rhino's BRepMesh into a single welded triangle
+        /// mesh and wraps it as a GH_Mesh, so the existing mesh-to-Shell path handles it.
+        /// Returns false when the value is not a Brep/surface (e.g. a SAM Shell or Mesh),
+        /// leaving the caller to process it normally. Flat faces stay coarse (SimplePlanes);
+        /// curvature is tessellated to within <paramref name="meshDeflection"/>.
+        /// </summary>
+        private static bool TryMeshBrep(object value, double meshDeflection, out GH_ObjectWrapper meshWrapper)
+        {
+            meshWrapper = null;
+
+            Rhino.Geometry.Brep brep = ToBrep(value);
+            if (brep == null)
+            {
+                return false;
+            }
+
+            Rhino.Geometry.MeshingParameters meshingParameters = new Rhino.Geometry.MeshingParameters
+            {
+                SimplePlanes = true,            // keep flat faces coarse instead of over-triangulating them
+                JaggedSeams = false,            // match tessellation across shared edges so the mesh stays watertight
+                ClosedObjectPostProcess = true, // help a closed Brep mesh into a closed mesh
+                Tolerance = meshDeflection > 0 ? meshDeflection : 0.1
+            };
+
+            Rhino.Geometry.Mesh[] meshes = Rhino.Geometry.Mesh.CreateFromBrep(brep, meshingParameters);
+            if (meshes == null || meshes.Length == 0)
+            {
+                return false;
+            }
+
+            Rhino.Geometry.Mesh combined = new Rhino.Geometry.Mesh();
+            foreach (Rhino.Geometry.Mesh mesh in meshes)
+            {
+                if (mesh != null)
+                {
+                    combined.Append(mesh);
+                }
+            }
+
+            if (combined.Faces.Count == 0)
+            {
+                return false;
+            }
+
+            combined.Faces.ConvertQuadsToTriangles();
+            combined.Vertices.CombineIdentical(true, true); // weld coincident vertices across faces -> watertight
+            combined.Compact();
+
+            meshWrapper = new GH_ObjectWrapper(new GH_Mesh(combined));
+            return true;
+        }
+
+        /// <summary>
+        /// Extracts a Rhino Brep from a Grasshopper/Rhino value (GH_Brep, GH_Surface, raw
+        /// Brep/Surface, or anything GH can convert to a Brep). Returns null otherwise, so
+        /// SAM Shells / Meshes are left for the normal path.
+        /// </summary>
+        private static Rhino.Geometry.Brep ToBrep(object value)
+        {
+            switch (value)
+            {
+                case null:
+                    return null;
+                case GH_Brep ghBrep:
+                    return ghBrep.Value;
+                case GH_Surface ghSurface:
+                    return ghSurface.Value;
+                case Rhino.Geometry.Brep brep:
+                    return brep;
+                case Rhino.Geometry.Surface surface:
+                    return surface.ToBrep();
+            }
+
+            Rhino.Geometry.Brep converted = null;
+            if (GH_Convert.ToBrep(value, ref converted, GH_Conversion.Both))
+            {
+                return converted;
+            }
+
+            return null;
         }
     }
 }
