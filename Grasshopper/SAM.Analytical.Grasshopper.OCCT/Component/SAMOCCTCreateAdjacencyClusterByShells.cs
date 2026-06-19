@@ -20,7 +20,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("d6950fec-cea4-4b48-9099-8943a7765e81");
 
-        public override string LatestComponentVersion => "0.3.4";
+        public override string LatestComponentVersion => "0.4.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -65,6 +65,14 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT and SAM model tolerance", Access = GH_ParamAccess.item };
                 tolerance.SetPersistentData(Tolerance.Distance);
                 result.Add(new GH_SAMParam(tolerance, ParamVisibility.Voluntary));
+
+                // Sewing heals a triangulated / near-touching face soup into shared topology BEFORE
+                // MakerVolume, instead of relying on MakerVolume's fuzzy-tolerance guesswork. It is
+                // always applied to mesh-derived shells (a mesh is exactly such a soup); this toggle
+                // additionally forces it on for SAM Shell / closed Brep input.
+                global::Grasshopper.Kernel.Parameters.Param_Boolean sew = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "sew_", NickName = "sew_", Description = "Sew-and-heal faces before the OCCT volume build. Mesh input is always sewn (it is a triangle soup); set this true to also sew SAM Shell / closed Brep input. Default false.", Access = GH_ParamAccess.item };
+                sew.SetPersistentData(false);
+                result.Add(new GH_SAMParam(sew, ParamVisibility.Voluntary));
 
                 GooSpaceParam spaces = new GooSpaceParam() { Name = "spaces_", NickName = "spaces_", Description = "Optional existing Spaces to match into shell cells. If supplied, matching spaces preserve metadata and names.", Access = GH_ParamAccess.list, Optional = true };
                 spaces.DataMapping = GH_DataMapping.Flatten;
@@ -135,12 +143,26 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref tolerance);
             }
 
+            bool sew = false;
+            index = Params.IndexOfInputParam("sew_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref sew);
+            }
+
+            // OcctBuildOptions reused for the watertightness pre-check (tolerance = welding distance)
+            // and the cell build below, so both agree on tolerance.
+            OcctBuildOptions buildOptions = new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance };
+
+            List<string> diagnostics = new List<string>();
+
             // Each list item is treated as one intended space/cell. SAM Shells and closed
             // Rhino Breps/polysurfaces convert directly to a Shell. A Rhino Mesh or SAM Mesh3D
             // is not a closed Brep, so it never resolves to a Shell on its own; instead we pull
             // its triangle Face3Ds and assemble them into a single Shell (one mesh = one volume).
             List<Shell> shells = new List<Shell>();
             int meshShellCount = 0;
+            int openMeshShellCount = 0;
             foreach (GH_ObjectWrapper objectWrapper in objectWrappers)
             {
                 if (global::SAM.Geometry.Grasshopper.Query.TryGetSAMGeometries(objectWrapper, out List<Shell> shells_Temp) && shells_Temp != null && shells_Temp.Count != 0)
@@ -157,19 +179,40 @@ namespace SAM.Analytical.Grasshopper.OCCT
                     // (e.g. a non-watertight mesh), fall back to the raw triangle faces and let the
                     // OCCT MakerVolume + UnifySameDomain pass merge/heal them.
                     Shell shell = global::SAM.Geometry.Spatial.Create.Shell(face3Ds, fuzzyTolerance, tolerance) ?? new Shell(face3Ds);
-                    if (shell != null)
+                    if (shell == null)
                     {
-                        shells.Add(shell);
-                        meshShellCount++;
+                        continue;
+                    }
+
+                    shells.Add(shell);
+                    meshShellCount++;
+
+                    // Watertightness pre-check: a mesh that is not a closed volume is the
+                    // commonest cause of an opaque OCCT build failure. Report it up-front,
+                    // per mesh, so the user knows which input to fix and that sewing will
+                    // try to close it.
+                    if (global::SAM.Geometry.OCCT.Query.Watertightness(shell.Face3Ds, buildOptions, out int edgeCount, out int nakedEdgeCount, out int nonManifoldEdgeCount) && nakedEdgeCount != 0)
+                    {
+                        openMeshShellCount++;
+                        diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_MESH_OPEN: Mesh input shell [{0}] is not a closed volume: {1} naked (open) edge(s) of {2} (and {3} non-manifold). Sewing will attempt to close it; if the cell is still dropped, repair the mesh so it is watertight.", meshShellCount - 1, nakedEdgeCount, edgeCount, nonManifoldEdgeCount));
                     }
                 }
             }
 
-            List<string> diagnostics = new List<string>();
             if (meshShellCount != 0)
             {
-                diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_MESH_INPUT: Assembled {0} shell(s) from mesh input (Rhino Mesh / SAM Mesh3D).", meshShellCount));
+                diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_MESH_INPUT: Assembled {0} shell(s) from mesh input (Rhino Mesh / SAM Mesh3D); {1} reported open by the watertightness pre-check.", meshShellCount, openMeshShellCount));
             }
+
+            // Sewing heals a triangulated / near-touching face soup before MakerVolume. A mesh is
+            // exactly such a soup, so always sew mesh-derived shells; the sew_ toggle additionally
+            // forces sewing for SAM Shell / closed Brep input.
+            buildOptions.SewBeforeBuild = sew || meshShellCount != 0;
+            if (buildOptions.SewBeforeBuild)
+            {
+                diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_SEW: Sew-and-heal before MakerVolume is ON (sew_={0}, mesh input={1}).", sew, meshShellCount != 0));
+            }
+
             if (shells.Count == 0)
             {
                 diagnostics.Add("SAM_OCCT_ANALYTICAL_SHELL_INPUT_EMPTY: No shells could be built from the supplied input (expected SAM Shells, closed Rhino Breps, Rhino Meshes, or SAM Mesh3Ds).");
@@ -232,7 +275,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 inputSpaces,
                 out OcctCellComplexResult cellComplexResult,
                 log,
-                new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance },
+                buildOptions,
                 names,
                 minArea: minArea,
                 maxAngle: maxAngle);

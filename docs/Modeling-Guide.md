@@ -63,6 +63,35 @@ Do not union adjacent room shells before creating an adjacency cluster if each
 room should remain a separate space. Union is for merging volumes into a larger
 solid, not for preserving individual rooms.
 
+### Mesh Input (Rhino Mesh / SAM Mesh3D)
+
+`SAMOCCT.CreateAdjacencyClusterByShells` accepts more than SAM `Shell`s and closed
+Rhino Breps on `_shells`. It also takes **Rhino Meshes** and **SAM `Mesh3D`s**, so
+you can drive the analytical model straight from mesh massing (SubD output, imported
+meshes, mesh-based conceptual tools) without first converting to Breps.
+
+Each `_shells` list item is one intended space/cell. A mesh is not a closed Brep, so
+its triangle faces are assembled into a single `Shell` (one mesh = one volume). You
+can mix meshes, Shells, and closed Breps in the same list.
+
+Because a mesh is a triangle soup, two things happen automatically:
+
+- **Sewing is always on for mesh input.** The faces are run through native
+  sew-and-heal before `BOPAlgo_MakerVolume`, so coincident triangle edges become
+  shared topology instead of relying on MakerVolume's fuzzy-tolerance guesswork. The
+  `sew_` toggle additionally forces sewing for Shell / closed Brep input.
+- **A watertightness pre-check runs per mesh.** A mesh that is not a closed volume
+  is the commonest cause of an opaque build failure, so each mesh shell is checked
+  for naked (open) edges up-front and reported on `Diagnostics`
+  (`SAM_OCCT_ANALYTICAL_SHELL_MESH_OPEN`) before the build. If a mesh is open,
+  repair it so it is watertight (close holes, weld vertices) — sewing will try to
+  bridge small gaps but cannot invent a missing face.
+
+The downstream OCCT build merges the coplanar triangles back into clean planar
+panels (`UnifySameDomain`), so a 600-triangle mesh box still yields 6 wall panels,
+not 600. For a meshed curved surface, expect one planar panel per facet — there is
+no NURBS recovery from a mesh.
+
 ### Space Names And Metadata
 
 `SAMOCCT.CreateAdjacencyClusterByShells` can create spaces directly from shells,
@@ -88,6 +117,14 @@ creates names like `Cell 1`, `Cell 2`, and so on.
 
 Useful diagnostics:
 
+- `SAM_OCCT_ANALYTICAL_SHELL_MESH_INPUT`: reports how many shells were assembled
+  from mesh input (Rhino Mesh / SAM Mesh3D) and how many the watertightness
+  pre-check flagged as open.
+- `SAM_OCCT_ANALYTICAL_SHELL_MESH_OPEN`: warns that a specific mesh input shell is
+  not a closed volume, with its naked-edge / non-manifold counts so you know which
+  mesh to repair.
+- `SAM_OCCT_ANALYTICAL_SHELL_SEW`: reports that sew-and-heal before MakerVolume is
+  on (always for mesh input, or when `sew_` is set for Shell / Brep input).
 - `SAM_OCCT_ANALYTICAL_SHELL_METADATA`: reports supplied spaces/names and the
   shell-native matching/naming strategy.
 - `SAM_OCCT_ANALYTICAL_PANEL_METADATA`: reports supplied panels/spaces and the
