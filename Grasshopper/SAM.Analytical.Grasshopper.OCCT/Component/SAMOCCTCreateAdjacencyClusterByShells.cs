@@ -194,13 +194,18 @@ namespace SAM.Analytical.Grasshopper.OCCT
             {
                 GH_ObjectWrapper effectiveWrapper = objectWrapper;
 
-                // meshInput_: tessellate a Brep/surface up-front with Rhino's mesher and process the
-                // mesh instead of the Brep. This bypasses the Brep -> SAM Shell conversion, which for
-                // curved/NURBS faces can produce self-intersecting, non-watertight faces OCCT rejects.
-                if (meshInput && TryMeshBrep(objectWrapper?.Value, meshDeflection, out GH_ObjectWrapper meshWrapper))
+                // meshInput_: tessellate a Brep/surface up-front with Rhino's mesher (then weld /
+                // fill / unify into one watertight mesh) and process the mesh instead of the Brep.
+                // This bypasses the Brep -> SAM Shell conversion, which for curved/NURBS faces can
+                // produce self-intersecting, non-watertight faces OCCT rejects.
+                if (meshInput && TryMeshBrep(objectWrapper?.Value, meshDeflection, out GH_ObjectWrapper meshWrapper, out bool meshIsClosed))
                 {
                     effectiveWrapper = meshWrapper;
                     meshedBrepCount++;
+                    if (!meshIsClosed)
+                    {
+                        diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_MESH_BREP_OPEN: Brep/surface input [{0}] did not mesh into a closed solid even after weld/fill repair. Sewing will still try to close it; if the cell is dropped, the source Brep is likely open or has gaps wider than meshDeflection_.", meshedBrepCount - 1));
+                    }
                 }
                 else if (global::SAM.Geometry.Grasshopper.Query.TryGetSAMGeometries(objectWrapper, out List<Shell> shells_Temp) && shells_Temp != null && shells_Temp.Count != 0)
                 {
@@ -372,9 +377,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
         /// leaving the caller to process it normally. Flat faces stay coarse (SimplePlanes);
         /// curvature is tessellated to within <paramref name="meshDeflection"/>.
         /// </summary>
-        private static bool TryMeshBrep(object value, double meshDeflection, out GH_ObjectWrapper meshWrapper)
+        private static bool TryMeshBrep(object value, double meshDeflection, out GH_ObjectWrapper meshWrapper, out bool meshIsClosed)
         {
             meshWrapper = null;
+            meshIsClosed = false;
 
             Rhino.Geometry.Brep brep = ToBrep(value);
             if (brep == null)
@@ -410,9 +416,18 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 return false;
             }
 
+            // Repair pass: Rhino meshes a Brep face-by-face, so the per-face meshes meet at
+            // coincident-but-separate vertices and can leave hairline gaps. Weld the seams,
+            // fill any small holes, and unify winding so the result is a single watertight
+            // mesh the OCCT volume build can close, rather than a soup OCCT must heal.
+            combined.Vertices.CombineIdentical(true, true); // weld coincident vertices across faces
             combined.Faces.ConvertQuadsToTriangles();
-            combined.Vertices.CombineIdentical(true, true); // weld coincident vertices across faces -> watertight
+            combined.FillHoles();                           // close small tessellation gaps along seams
+            combined.UnifyNormals();                        // consistent face winding
+            combined.RebuildNormals();
             combined.Compact();
+
+            meshIsClosed = combined.IsClosed;
 
             meshWrapper = new GH_ObjectWrapper(new GH_Mesh(combined));
             return true;

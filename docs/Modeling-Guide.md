@@ -101,11 +101,15 @@ returns status 40 and the diagnostics report something like *"INVALID, NOT
 watertight; 128 naked edges, 194 self-intersections"*.
 
 Set `meshInput_ = true` to fix this: the component tessellates each Brep/surface
-with Rhino's `BRepMesh` into a clean, watertight planar triangle mesh **before** the
-OCCT build, bypassing the lossy Brep → Shell conversion. The mesh then follows the
-mesh path above (always sewn, watertightness pre-checked). `meshDeflection_`
-controls how closely the mesh hugs curvature (smaller = finer; flat faces stay
-coarse). Rhino Meshes and SAM Shells/Mesh3Ds are unaffected by this toggle.
+with Rhino's `BRepMesh`, then **welds the seams, fills small gaps, and unifies
+winding** into one clean watertight planar triangle mesh **before** the OCCT build,
+bypassing the lossy Brep → Shell conversion. The mesh then follows the mesh path
+above (always sewn, watertightness pre-checked). `meshDeflection_` controls how
+closely the mesh hugs curvature (smaller = finer; flat faces stay coarse). Rhino
+Meshes and SAM Shells/Mesh3Ds are unaffected by this toggle. If a Brep will not
+mesh into a closed solid even after repair (e.g. the source is open or has gaps
+wider than `meshDeflection_`), that is reported as
+`SAM_OCCT_ANALYTICAL_SHELL_MESH_BREP_OPEN`.
 
 Use it whenever curved-face Breps will not close; leave it off for clean planar
 Breps, where the direct Shell path is exact and cheaper.
