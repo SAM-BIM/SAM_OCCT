@@ -20,7 +20,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("d6950fec-cea4-4b48-9099-8943a7765e81");
 
-        public override string LatestComponentVersion => "0.3.3";
+        public override string LatestComponentVersion => "0.3.4";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -35,7 +35,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
             {
                 List<GH_SAMParam> result = new List<GH_SAMParam>();
 
-                global::Grasshopper.Kernel.Parameters.Param_GenericObject shells = new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "_shells", NickName = "_shells", Description = "Closed space volumes. Accepts SAM Shells or closed Rhino Breps/polysurfaces that convert to SAM Shells. One shell should represent one intended space/cell.", Access = GH_ParamAccess.list };
+                global::Grasshopper.Kernel.Parameters.Param_GenericObject shells = new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "_shells", NickName = "_shells", Description = "Closed space volumes. Accepts SAM Shells, closed Rhino Breps/polysurfaces, Rhino Meshes, or SAM Mesh3Ds. Each item should represent one intended space/cell: meshes have their faces assembled into a single Shell.", Access = GH_ParamAccess.list };
                 shells.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(shells, ParamVisibility.Binding));
 
@@ -119,19 +119,60 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 return;
             }
 
+            // Tolerances are read up-front because they are needed when assembling SAM Shells
+            // from mesh faces below (see the Mesh3D/Rhino Mesh fallback in the parsing loop).
+            double fuzzyTolerance = Tolerance.MacroDistance;
+            index = Params.IndexOfInputParam("fuzzyTolerance_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref fuzzyTolerance);
+            }
+
+            double tolerance = Tolerance.Distance;
+            index = Params.IndexOfInputParam("tolerance_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref tolerance);
+            }
+
+            // Each list item is treated as one intended space/cell. SAM Shells and closed
+            // Rhino Breps/polysurfaces convert directly to a Shell. A Rhino Mesh or SAM Mesh3D
+            // is not a closed Brep, so it never resolves to a Shell on its own; instead we pull
+            // its triangle Face3Ds and assemble them into a single Shell (one mesh = one volume).
             List<Shell> shells = new List<Shell>();
+            int meshShellCount = 0;
             foreach (GH_ObjectWrapper objectWrapper in objectWrappers)
             {
-                if (global::SAM.Geometry.Grasshopper.Query.TryGetSAMGeometries(objectWrapper, out List<Shell> shells_Temp) && shells_Temp != null)
+                if (global::SAM.Geometry.Grasshopper.Query.TryGetSAMGeometries(objectWrapper, out List<Shell> shells_Temp) && shells_Temp != null && shells_Temp.Count != 0)
                 {
                     shells.AddRange(shells_Temp);
+                    continue;
+                }
+
+                // Mesh fallback: Face3D extraction handles both a Rhino GH_Mesh (via Convert.ToSAM)
+                // and a SAM Mesh3D, returning each mesh triangle as a Face3D.
+                if (global::SAM.Geometry.Grasshopper.Query.TryGetSAMGeometries(objectWrapper, out List<Face3D> face3Ds) && face3Ds != null && face3Ds.Count != 0)
+                {
+                    // Prefer merging coplanar mesh triangles into clean planar faces; if that fails
+                    // (e.g. a non-watertight mesh), fall back to the raw triangle faces and let the
+                    // OCCT MakerVolume + UnifySameDomain pass merge/heal them.
+                    Shell shell = global::SAM.Geometry.Spatial.Create.Shell(face3Ds, fuzzyTolerance, tolerance) ?? new Shell(face3Ds);
+                    if (shell != null)
+                    {
+                        shells.Add(shell);
+                        meshShellCount++;
+                    }
                 }
             }
 
             List<string> diagnostics = new List<string>();
+            if (meshShellCount != 0)
+            {
+                diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_SHELL_MESH_INPUT: Assembled {0} shell(s) from mesh input (Rhino Mesh / SAM Mesh3D).", meshShellCount));
+            }
             if (shells.Count == 0)
             {
-                diagnostics.Add("SAM_OCCT_ANALYTICAL_SHELL_INPUT_EMPTY: No SAM shells were supplied.");
+                diagnostics.Add("SAM_OCCT_ANALYTICAL_SHELL_INPUT_EMPTY: No shells could be built from the supplied input (expected SAM Shells, closed Rhino Breps, Rhino Meshes, or SAM Mesh3Ds).");
                 if (index_Diagnostics != -1)
                 {
                     dataAccess.SetDataList(index_Diagnostics, diagnostics);
@@ -161,25 +202,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref maxAngle);
             }
 
-            double fuzzyTolerance = Tolerance.MacroDistance;
-            index = Params.IndexOfInputParam("fuzzyTolerance_");
-            if (index != -1)
-            {
-                dataAccess.GetData(index, ref fuzzyTolerance);
-            }
-
             double minArea = 0.01;
             index = Params.IndexOfInputParam("minArea_");
             if (index != -1)
             {
                 dataAccess.GetData(index, ref minArea);
-            }
-
-            double tolerance = Tolerance.Distance;
-            index = Params.IndexOfInputParam("tolerance_");
-            if (index != -1)
-            {
-                dataAccess.GetData(index, ref tolerance);
             }
 
             List<Space> inputSpaces = new List<Space>();
