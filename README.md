@@ -295,8 +295,11 @@ hosted zip of the official OpenCASCADE 8.0.0 vc14 64-bit package (LGPL, so the
 runtime DLLs are redistributable). It is cached on the runner under `C:\OCCT`
 (cache key `occt-sdk-8.0.0-vc14-64`), matching the local SDK layout above. If the
 secret is unset, the native step **skips with a warning**: the managed assemblies
-and Grasshopper nodes still ship, but OCCT operations report native status 64
-until the engine is present.
+and Grasshopper nodes still ship, but `SAM.Occt.Native.dll` is absent, so OCCT
+operations take the missing-native path (`NativeAvailable == false` /
+`SAM_OCCT_NATIVE_MISSING`) until the engine is present. (Native status 64 is a
+different failure mode — it means the library loaded but the STEP/IGES Data
+Exchange DLLs are missing.)
 
 This mirrors SAM_OCCT's own `build.yml`, which sets `SAM_OCCT_SKIP_NATIVE_BUILD=true`
 and validates the managed assemblies + (native-gated) tests only.
