@@ -273,6 +273,37 @@ If using vcpkg, `build-native.ps1` can install the `opencascade` dependency
 from `vcpkg.json`. If Windows policy blocks vcpkg's downloaded tools, provide
 an approved Ninja executable with `-NinjaPath`.
 
+## Deployment (SAM_Deploy installer)
+
+SAM_OCCT ships as part of the SAM-BIM installer. It is referenced as a submodule
+of `SAM_Deploy` (tracking `sow/2026-Q2`) and built there in two halves:
+
+- **Managed assemblies + Grasshopper components** are built by
+  `BuildAll_Release_net.csproj` right after `SAM` (references resolve against the
+  sibling `SAM\build\*.dll`). The `.OCCT` Grasshopper post-build copies the DLLs
+  and `.gha` files into `%APPDATA%\SAM`, which the installer packages.
+- **The native engine** (`SAM.Occt.Native.dll` + the OpenCASCADE `TK*.dll`
+  runtime) is built by a dedicated step in `SAM_Deploy/.github/workflows/installer.yml`.
+  Because OpenCASCADE is not on the GitHub runner, that step does **not** build it
+  from source via vcpkg. Instead it drives CMake directly against a **prebuilt
+  OCCT 8.0 SDK** (no vcpkg manifest-mode build), then deploys the wrapper plus the
+  `TK*.dll` / third-party runtime into `%APPDATA%\SAM` so it is packaged alongside
+  the managed assemblies.
+
+The SDK is fetched from the `OCCT_SDK_URL` repository secret on `SAM_Deploy` — a
+hosted zip of the official OpenCASCADE 8.0.0 vc14 64-bit package (LGPL, so the
+runtime DLLs are redistributable). It is cached on the runner under `C:\OCCT`
+(cache key `occt-sdk-8.0.0-vc14-64`), matching the local SDK layout above. If the
+secret is unset, the native step **skips with a warning**: the managed assemblies
+and Grasshopper nodes still ship, but `SAM.Occt.Native.dll` is absent, so OCCT
+operations take the missing-native path (`NativeAvailable == false` /
+`SAM_OCCT_NATIVE_MISSING`) until the engine is present. (Native status 64 is a
+different failure mode — it means the library loaded but the STEP/IGES Data
+Exchange DLLs are missing.)
+
+This mirrors SAM_OCCT's own `build.yml`, which sets `SAM_OCCT_SKIP_NATIVE_BUILD=true`
+and validates the managed assemblies + (native-gated) tests only.
+
 ## Native Operations
 
 The native bridge currently uses:
