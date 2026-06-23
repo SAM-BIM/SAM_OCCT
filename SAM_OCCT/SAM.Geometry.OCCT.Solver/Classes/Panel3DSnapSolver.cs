@@ -281,14 +281,41 @@ namespace SAM.Geometry.OCCT.Solver
                     }
                 }
 
-                if (nearestCap == null)
+                if (nearestCap != null)
                 {
-                    continue;
+                    // Extend past the highest point of that cap (the ridge, for a pitched roof) so the
+                    // native trim cuts the wall cleanly along the cap.
+                    wall.ExtendTopTo(nearestCap.Max.Z + overshoot, toleranceDistance);
                 }
 
-                // Extend past the highest point of that cap (the ridge, for a pitched roof) so the
-                // native trim cuts the wall cleanly along the cap.
-                wall.ExtendTopTo(nearestCap.Max.Z + overshoot, toleranceDistance);
+                // ...and down to the nearest cap below, so the wall reaches the floor of its level and the
+                // room can close at the bottom (the "between floors" case).
+                double wallBottomZ = wallBox.Min.Z;
+                BoundingBox3D nearestBelow = null;
+                double nearestEndZ = double.MinValue;
+                foreach (BoundingBox3D cap in caps)
+                {
+                    if (cap.Max.Z > wallBottomZ + toleranceDistance)
+                    {
+                        continue; // not below the wall
+                    }
+
+                    if (!OverlapsInPlan(cap, wallBox, toleranceDistance))
+                    {
+                        continue;
+                    }
+
+                    if (cap.Max.Z > nearestEndZ)
+                    {
+                        nearestEndZ = cap.Max.Z;
+                        nearestBelow = cap;
+                    }
+                }
+
+                if (nearestBelow != null)
+                {
+                    wall.ExtendBottomTo(nearestBelow.Min.Z - overshoot, toleranceDistance);
+                }
             }
         }
 

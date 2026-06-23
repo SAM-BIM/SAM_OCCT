@@ -344,6 +344,58 @@ namespace SAM.Geometry.OCCT.Solver
             return true;
         }
 
+        /// <summary>
+        /// Lengthens this (vertical) panel downward so its base reaches <paramref name="targetZ"/>, by
+        /// re-extruding its top edge down to the new height. The mirror of <see cref="ExtendTopTo"/>: a wall
+        /// that stops short of the floor below is grown down so the native kernel can trim it against that
+        /// floor and close the room. Only the base moves; the top and supporting plane are preserved.
+        /// </summary>
+        /// <returns>True when the panel was extended to a valid taller face.</returns>
+        public bool ExtendBottomTo(double targetZ, double tolerance)
+        {
+            if (face3D == null || plane == null)
+            {
+                return false;
+            }
+
+            BoundingBox3D boundingBox3D = face3D.GetBoundingBox();
+            if (boundingBox3D == null)
+            {
+                return false;
+            }
+
+            double baseZ = boundingBox3D.Min.Z;
+            double topZ = boundingBox3D.Max.Z;
+            if (targetZ >= baseZ - tolerance)
+            {
+                return false; // already low enough
+            }
+
+            // Recover the horizontal base edge, then drop it to the target elevation.
+            Plane basePlane = Geometry.Spatial.Create.Plane(baseZ + tolerance);
+            Segment3D baseSegment3D = Geometry.Spatial.Query.MaxIntersectionSegment3D(basePlane, face3D);
+            if (baseSegment3D == null || baseSegment3D.GetLength() <= tolerance)
+            {
+                return false;
+            }
+
+            Point3D start = baseSegment3D.GetStart();
+            Point3D end = baseSegment3D.GetEnd();
+            Segment3D loweredSegment3D = new Segment3D(
+                new Point3D(start.X, start.Y, targetZ),
+                new Point3D(end.X, end.Y, targetZ));
+
+            Face3D extended = Geometry.Spatial.Create.Face3D(loweredSegment3D, new Vector3D(0, 0, topZ - targetZ));
+            if (extended == null || !extended.IsValid())
+            {
+                return false;
+            }
+
+            face3D = extended;
+            plane = extended.GetPlane();
+            return true;
+        }
+
         private static IClosedPlanar3D ProjectLoop(IClosedPlanar3D loop, Plane backerPlane)
         {
             List<Point3D> point3Ds = (loop as ISegmentable3D)?.GetPoints();
