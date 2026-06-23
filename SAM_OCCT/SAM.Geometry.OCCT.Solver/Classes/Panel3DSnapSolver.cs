@@ -479,6 +479,17 @@ namespace SAM.Geometry.OCCT.Solver
                     .Select(x => x.Location)
                     .ToList();
             }
+
+            // Close the residual holes: build a Face3D over each naked-boundary loop. These are added to the
+            // air-panel candidates so every space is fully enclosed.
+            if (FillHoles && NakedEdgePoint3Ds.Count != 0)
+            {
+                List<Face3D> gapFace3Ds = GapFill.NakedLoopFace3Ds(resolved, NakedEdgePoint3Ds, 0.01);
+                if (gapFace3Ds.Count != 0)
+                {
+                    HoleFillFace3Ds = (HoleFillFace3Ds ?? new List<Face3D>()).Concat(gapFace3Ds).ToList();
+                }
+            }
         }
 
         private static List<SnappedPanel> Register(List<Face3D> face3Ds, List<double> bucketSizes, List<double> weights, List<double> maxExtensions)

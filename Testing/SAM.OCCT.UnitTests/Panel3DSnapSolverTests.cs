@@ -411,6 +411,26 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void GapFill_OpenBoxMissingTop_FillsTheOpening()
+        {
+            // Unit cube with no ceiling: floor + 4 walls. The 4 top edges form one naked loop.
+            List<Face3D> faces = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(new Point3D(0,0,0), new Point3D(1,0,0), new Point3D(1,1,0), new Point3D(0,1,0)), // floor
+                TestGeometry.CreatePlanarFace(new Point3D(0,0,0), new Point3D(1,0,0), new Point3D(1,0,1), new Point3D(0,0,1)), // y=0
+                TestGeometry.CreatePlanarFace(new Point3D(0,1,0), new Point3D(1,1,0), new Point3D(1,1,1), new Point3D(0,1,1)), // y=1
+                TestGeometry.CreatePlanarFace(new Point3D(0,0,0), new Point3D(0,1,0), new Point3D(0,1,1), new Point3D(0,0,1)), // x=0
+                TestGeometry.CreatePlanarFace(new Point3D(1,0,0), new Point3D(1,1,0), new Point3D(1,1,1), new Point3D(1,0,1)), // x=1
+            };
+
+            List<Face3D> fill = GapFill.NakedLoopFace3Ds(faces, null, 1e-3);
+
+            Assert.Single(fill);
+            Assert.Equal(1.0, fill[0].GetArea(), 2);            // the 1x1 opening
+            Assert.Equal(1.0, fill[0].GetBoundingBox().Max.Z, 3); // at the top, z = 1
+        }
+
+        [Fact]
         public void CreateHoleFillFace3Ds_SolidPanel_CreatesNone()
         {
             SnappedPanel solid = MakeWallPanel(0); // no internal hole
