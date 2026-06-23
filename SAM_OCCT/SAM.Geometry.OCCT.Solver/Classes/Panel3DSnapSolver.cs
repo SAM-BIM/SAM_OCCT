@@ -73,6 +73,10 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Angle within which a panel's normal counts as horizontal, so the panel is "vertical" (a wall).</summary>
         public double VerticalAngleTolerance { get; set; } = 20 * (System.Math.PI / 180);
 
+        /// <summary>Also extend walls up to a sloped roof above (not just horizontal floor caps), so the kernel
+        /// can cut them at the pitch and enclose the under-roof space. Default true.</summary>
+        public bool ExtendToRoofs { get; set; } = true;
+
         /// <summary>The registered panels after the managed snap stage. Carries source mapping.</summary>
         public List<SnappedPanel> SnappedPanels { get; private set; } = new List<SnappedPanel>();
 
@@ -144,7 +148,7 @@ namespace SAM.Geometry.OCCT.Solver
             // Step 3: extend walls up to the floor/roof above so the kernel can trim them and close the volume.
             if (ExtendToCaps)
             {
-                Extend(SnappedPanels, VerticalAngleTolerance, ExtendOvershoot, ToleranceDistance);
+                Extend(SnappedPanels, VerticalAngleTolerance, ExtendOvershoot, ToleranceDistance, ExtendToRoofs);
             }
 
             List<Face3D> snappedFace3Ds = SnappedPanels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
@@ -212,7 +216,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// under a pitched roof is over-extended past the ridge so the roof faces split it at the pitch.
         /// Walls with no cap above (true parapets/outer tops) are left untouched.
         /// </summary>
-        public static void Extend(List<SnappedPanel> panels, double verticalAngleTolerance, double overshoot, double toleranceDistance)
+        public static void Extend(List<SnappedPanel> panels, double verticalAngleTolerance, double overshoot, double toleranceDistance, bool includeRoofs = true)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -232,12 +236,15 @@ namespace SAM.Geometry.OCCT.Solver
                 if (panel.IsVertical(verticalAngleTolerance))
                 {
                     walls.Add(panel);
+                    continue;
                 }
-                else if (boundingBox3D.Max.Z - boundingBox3D.Min.Z <= toleranceDistance + 0.1)
+
+                // Floors/flat ceilings are always caps. Sloped roofs are caps only when includeRoofs:
+                // a wall under the roof is over-extended past the ridge so the kernel cuts it at the pitch
+                // and encloses the under-roof space. With it off, a roof would bury the wall in a tall box.
+                bool horizontal = boundingBox3D.Max.Z - boundingBox3D.Min.Z <= toleranceDistance + 0.1;
+                if (horizontal || includeRoofs)
                 {
-                    // Only (near) horizontal caps - floors/flat ceilings - drive wall extension. A sloped
-                    // roof's ridge is far above its eave; extending walls to the ridge would bury the roof
-                    // inside a tall box and the kernel would drop it. Sloped-roof wall-trim is a later step.
                     caps.Add(boundingBox3D);
                 }
             }
