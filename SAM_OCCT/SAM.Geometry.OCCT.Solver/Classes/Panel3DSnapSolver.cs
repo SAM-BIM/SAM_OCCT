@@ -82,6 +82,9 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>True when the native OCCT kernel ran the resolve stage; false for a managed-only result.</summary>
         public bool NativeResolved { get; private set; }
 
+        /// <summary>Number of closed cells (rooms/levels) the native MakerVolume formed. 1 = single space; 0 = none.</summary>
+        public int ResolvedCellCount { get; private set; }
+
         public Panel3DSnapSolver(
             IEnumerable<Face3D> face3Ds,
             IEnumerable<double> bucketSizes = null,
@@ -377,6 +380,7 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             NativeResolved = true;
+            ResolvedCellCount = cellResult.Cells?.Count ?? 0;
 
             List<Face3D> resolved = shells == null
                 ? new List<Face3D>()

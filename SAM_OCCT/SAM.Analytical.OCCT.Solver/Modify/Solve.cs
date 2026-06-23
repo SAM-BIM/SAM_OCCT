@@ -97,10 +97,11 @@ namespace SAM.Analytical.OCCT.Solver
             }
 
             diagnostics.Add(string.Format(
-                "SAM_OCCT_SOLVE3D_RESULT: Solved {0} panel(s) into {1} resolved panel(s); nativeResolved={2}; {3} naked edge(s).",
+                "SAM_OCCT_SOLVE3D_RESULT: Solved {0} panel(s) into {1} resolved panel(s); nativeResolved={2}; {3} cell(s); {4} naked edge(s).",
                 face3Ds.Count,
                 result.Count,
                 solver.NativeResolved,
+                solver.ResolvedCellCount,
                 nakedPoint3Ds.Count));
 
             return result;
