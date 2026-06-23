@@ -81,6 +81,7 @@ namespace SAM.OCCT.IntegrationTests
                 new List<Face3D> { backer, candidate },
                 new List<double> { 0.3, 0.3 },
                 new List<double> { 2.0, 1.0 });
+            solver.DedupCoincident = false; // isolate snap; dedup would collapse the two now-coincident walls
             solver.Execute(new OcctBuildOptions());
 
             // Managed snap: lower-weight panel projected onto backer plane

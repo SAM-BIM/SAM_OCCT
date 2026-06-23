@@ -256,6 +256,7 @@ namespace SAM.OCCT.UnitTests
                 new List<Face3D> { wall0, wall1 },
                 buckets,
                 weights);
+            solver.DedupCoincident = false; // isolate the snap stage; dedup would collapse the two now-coincident walls
 
             solver.Execute();
 
@@ -341,6 +342,61 @@ namespace SAM.OCCT.UnitTests
 
             Assert.Equal(3.0, wallA.GetBoundingBox().Max.Z, 3);
             Assert.Equal(3.0, wallB.GetBoundingBox().Max.Z, 3);
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // 3D bucket dedup (step 1) + fill caps to walls (step 2)
+        // ──────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void Dedup_TwoCoincidentCoplanarWalls_CollapsesToOne()
+        {
+            SnappedPanel a = MakeWallPanel(0, weight: 2);
+            SnappedPanel b = MakeWallPanel(0, weight: 1); // identical face, same plane
+
+            List<SnappedPanel> kept = Panel3DSnapSolver.Dedup(
+                new List<SnappedPanel> { a, b }, angleTolerance: 0.1, distanceTolerance: 0.01);
+
+            Assert.Single(kept);
+            Assert.Equal(2, kept[0].Weight); // the higher-weight panel is kept
+        }
+
+        [Fact]
+        public void Dedup_DistinctWalls_KeepsBoth()
+        {
+            SnappedPanel a = MakeWallPanel(0, weight: 2);
+            SnappedPanel b = MakeWallPanel(1.0, weight: 1); // 1 m apart — not coincident
+
+            List<SnappedPanel> kept = Panel3DSnapSolver.Dedup(
+                new List<SnappedPanel> { a, b }, angleTolerance: 0.1, distanceTolerance: 0.01);
+
+            Assert.Equal(2, kept.Count);
+        }
+
+        [Fact]
+        public void GrowOutward_Floor_IncreasesArea()
+        {
+            SnappedPanel floor = MakeFloorPanel(0); // unit 1x1 floor, area 1
+            double areaBefore = floor.GetArea();
+
+            bool grown = floor.GrowOutward(0.5, 1e-6);
+
+            Assert.True(grown);
+            Assert.True(floor.GetArea() > areaBefore, "Grown floor should have larger area");
+        }
+
+        [Fact]
+        public void Fill_GrowsCapsButNotWalls()
+        {
+            SnappedPanel wall = MakeWallPanel(0);
+            SnappedPanel floor = MakeFloorPanel(0);
+            double wallAreaBefore = wall.GetArea();
+            double floorAreaBefore = floor.GetArea();
+
+            Panel3DSnapSolver.Fill(new List<SnappedPanel> { wall, floor }, 20 * (System.Math.PI / 180), margin: 0.5, toleranceDistance: 1e-6);
+
+            Assert.Equal(wallAreaBefore, wall.GetArea(), 3);          // wall untouched
+            Assert.True(floor.GetArea() > floorAreaBefore);          // floor grown
         }
 
         // ──────────────────────────────────────────────────────────────

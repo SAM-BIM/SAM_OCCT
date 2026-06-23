@@ -58,6 +58,15 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>How far past the cap a wall is over-extended so the native trim cuts cleanly (metres).</summary>
         public double ExtendOvershoot { get; set; } = 0.05;
 
+        /// <summary>Step 1: drop coincident coplanar duplicate panels before the resolve. Default true.</summary>
+        public bool DedupCoincident { get; set; } = true;
+
+        /// <summary>Step 2: grow floors/roofs out to the surrounding walls (close floor-to-wall gaps). Default true.</summary>
+        public bool FillCapsToWalls { get; set; } = true;
+
+        /// <summary>How far a floor/roof is grown outward so it overshoots the walls and trims cleanly (metres).</summary>
+        public double FillMargin { get; set; } = 0.3;
+
         /// <summary>Angle within which a panel's normal counts as horizontal, so the panel is "vertical" (a wall).</summary>
         public double VerticalAngleTolerance { get; set; } = 20 * (System.Math.PI / 180);
 
@@ -103,8 +112,22 @@ namespace SAM.Geometry.OCCT.Solver
 
             SnappedPanels = Register(face3Ds, bucketSizes_Adjusted, weights_Adjusted, maxExtensions_Adjusted);
 
+            // Step 0: bucket/snap - project lower-weight panels onto higher-weight backer planes.
             Snap(SnappedPanels, ToleranceAngle, ToleranceArcAngle);
 
+            // Step 1: 3D bucket dedup - drop coincident coplanar duplicates (a major self-intersection source).
+            if (DedupCoincident)
+            {
+                SnappedPanels = Dedup(SnappedPanels, ToleranceAngle, ToleranceDistance);
+            }
+
+            // Step 2: fill floors/roofs out to the walls so the floor/roof-to-wall gaps close.
+            if (FillCapsToWalls)
+            {
+                Fill(SnappedPanels, VerticalAngleTolerance, FillMargin, ToleranceDistance);
+            }
+
+            // Step 3: extend walls up to the floor/roof above so the kernel can trim them and close the volume.
             if (ExtendToCaps)
             {
                 Extend(SnappedPanels, VerticalAngleTolerance, ExtendOvershoot, ToleranceDistance);
@@ -144,9 +167,12 @@ namespace SAM.Geometry.OCCT.Solver
                 {
                     walls.Add(panel);
                 }
-                else
+                else if (boundingBox3D.Max.Z - boundingBox3D.Min.Z <= toleranceDistance + 0.1)
                 {
-                    caps.Add(boundingBox3D); // floors and roofs are the caps walls extend to
+                    // Only (near) horizontal caps - floors/flat ceilings - drive wall extension. A sloped
+                    // roof's ridge is far above its eave; extending walls to the ridge would bury the roof
+                    // inside a tall box and the kernel would drop it. Sloped-roof wall-trim is a later step.
+                    caps.Add(boundingBox3D);
                 }
             }
 
@@ -190,6 +216,59 @@ namespace SAM.Geometry.OCCT.Solver
                 // Extend past the highest point of that cap (the ridge, for a pitched roof) so the
                 // native trim cuts the wall cleanly along the cap.
                 wall.ExtendTopTo(nearestCap.Max.Z + overshoot, toleranceDistance);
+            }
+        }
+
+        /// <summary>
+        /// Step 1 - 3D bucket dedup: collapse coincident coplanar duplicate panels into one (keeping the
+        /// highest-weight, absorbing the rest's source references). Layered/doubled Revit faces project
+        /// onto the same plane during Snap and then self-intersect; removing the duplicates is the cheapest
+        /// way to cut the coplanar share of MakerVolume's self-intersection count.
+        /// </summary>
+        public static List<SnappedPanel> Dedup(List<SnappedPanel> panels, double angleTolerance, double distanceTolerance)
+        {
+            if (panels == null || panels.Count < 2)
+            {
+                return panels;
+            }
+
+            List<SnappedPanel> kept = new List<SnappedPanel>();
+            foreach (SnappedPanel panel in panels.OrderByDescending(x => x.Weight))
+            {
+                SnappedPanel duplicate = kept.FirstOrDefault(k =>
+                    k.IsCoplanarWith(panel, angleTolerance, distanceTolerance) && k.IsNearDuplicateOf(panel, distanceTolerance));
+
+                if (duplicate != null)
+                {
+                    duplicate.Absorb(panel);
+                }
+                else
+                {
+                    kept.Add(panel);
+                }
+            }
+
+            return kept;
+        }
+
+        /// <summary>
+        /// Step 2 - fill floors/roofs to walls: grow each (non-vertical) cap outward in its plane so it
+        /// overshoots the surrounding walls, closing the floor/roof-to-wall gaps that otherwise leave naked
+        /// edges and prevent any cell from closing. The native resolve trims the overshoot back at the walls.
+        /// </summary>
+        public static void Fill(List<SnappedPanel> panels, double verticalAngleTolerance, double margin, double toleranceDistance)
+        {
+            if (panels == null || panels.Count == 0 || margin <= toleranceDistance)
+            {
+                return;
+            }
+
+            foreach (SnappedPanel panel in panels)
+            {
+                if (!panel.IsVertical(verticalAngleTolerance)) // floors and roofs are the caps
+                {
+                    panel.GrowOutward(margin, toleranceDistance);
+                }
             }
         }
 
@@ -261,8 +340,35 @@ namespace SAM.Geometry.OCCT.Solver
                 return;
             }
 
+            // Healing defaults for the solver use-case: sew near-touching faces before the volume build
+            // (bridges residual sub-mm gaps the managed fill leaves) and keep internal floors/partitions as
+            // shared cell faces (a zoned complex, not just the outer envelope). Callers can override.
+            if (options == null)
+            {
+                options = new OcctBuildOptions
+                {
+                    AvoidInternalShapes = false,
+                    SewBeforeBuild = true,
+                    SewingTolerance = 0.01 // 1 cm: bridges the cm-scale floor/wall gaps typical of Revit exports
+                };
+            }
+
+            // Step 1 (native): coplanar pre-merge BEFORE the volume build. Collapsing coplanar overlaps
+            // (the share of self-intersections MakerVolume cannot otherwise digest) is what lets the kernel
+            // form a zoned cell complex instead of a single envelope cell - the actual "3D bucket".
+            List<Face3D> buildFace3Ds = snappedFace3Ds;
+            if (DedupCoincident)
+            {
+                List<Face3D> preMerged = GeometryQuery.MergeCoplanarFace3Ds(snappedFace3Ds, out OcctCellComplexResult preMergeResult, ToleranceAngle, options);
+                preMergeResult?.Dispose();
+                if (preMerged != null && preMerged.Count != 0)
+                {
+                    buildFace3Ds = preMerged;
+                }
+            }
+
             // MakerVolume: split panels at mutual intersections and resolve 3-way junctions.
-            List<Shell> shells = GeometryCreate.Shells(snappedFace3Ds, out OcctCellComplexResult cellResult, options);
+            List<Shell> shells = GeometryCreate.Shells(buildFace3Ds, out OcctCellComplexResult cellResult, options);
             if (cellResult == null || !cellResult.NativeAvailable)
             {
                 // Native kernel not present (e.g. non-Windows agent): keep the managed snap result.
@@ -279,8 +385,8 @@ namespace SAM.Geometry.OCCT.Solver
 
             if (resolved.Count == 0)
             {
-                // No closed cells formed (open wall soup): fall back to imprinting the raw faces.
-                resolved = snappedFace3Ds;
+                // No closed cells formed (open wall soup): fall back to the pre-merged faces.
+                resolved = buildFace3Ds;
             }
 
             // Merge resolved coplanar neighbours (the colinear-merge analogue).

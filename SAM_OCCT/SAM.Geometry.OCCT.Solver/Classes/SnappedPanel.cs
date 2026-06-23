@@ -202,6 +202,86 @@ namespace SAM.Geometry.OCCT.Solver
             return face3D?.GetBoundingBox();
         }
 
+        /// <summary>Planar area of the current boundary (0 when degenerate). Used by coincident dedup.</summary>
+        public double GetArea()
+        {
+            return face3D?.GetArea() ?? 0;
+        }
+
+        /// <summary>Centre of the current boundary's bounds (null when degenerate). Used by coincident dedup.</summary>
+        public Point3D GetCentroid()
+        {
+            return face3D?.GetBoundingBox()?.GetCentroid();
+        }
+
+        /// <summary>
+        /// True when <paramref name="other"/> is a near-duplicate of this panel: coplanar (handled by the
+        /// caller) plus matching area and coincident centre within tolerance. Coincident duplicates are the
+        /// main source of coplanar self-intersections in Revit exports (layered walls, doubled faces).
+        /// </summary>
+        public bool IsNearDuplicateOf(SnappedPanel other, double distanceTolerance)
+        {
+            if (other == null)
+            {
+                return false;
+            }
+
+            Point3D centroid = GetCentroid();
+            Point3D otherCentroid = other.GetCentroid();
+            if (centroid == null || otherCentroid == null)
+            {
+                return false;
+            }
+
+            if (centroid.Distance(otherCentroid) > distanceTolerance)
+            {
+                return false;
+            }
+
+            double area = GetArea();
+            double otherArea = other.GetArea();
+            double areaTolerance = System.Math.Max(area, otherArea) * 0.05 + distanceTolerance;
+            return System.Math.Abs(area - otherArea) <= areaTolerance;
+        }
+
+        /// <summary>
+        /// Grows a (horizontal/sloped) cap - a floor or roof - outward in its own plane by
+        /// <paramref name="margin"/> metres, so it overshoots the surrounding walls and the native kernel
+        /// can trim it back at them (closing the floor/roof-to-wall gap). Only the external boundary is
+        /// offset; holes are preserved. No-op when the offset fails or shrinks the face.
+        /// </summary>
+        /// <returns>True when the cap was grown to a valid larger face.</returns>
+        public bool GrowOutward(double margin, double tolerance)
+        {
+            if (face3D == null || plane == null || margin <= tolerance)
+            {
+                return false;
+            }
+
+            Geometry.Planar.Face2D face2D = plane.Convert(face3D);
+            if (face2D == null)
+            {
+                return false;
+            }
+
+            List<Geometry.Planar.Face2D> offset = Geometry.Planar.Query.Offset(face2D, margin, true, true, tolerance);
+            Geometry.Planar.Face2D grown = offset?.OrderByDescending(x => x.GetArea()).FirstOrDefault();
+            if (grown == null || grown.GetArea() <= face2D.GetArea())
+            {
+                return false; // offset went inward or failed
+            }
+
+            Face3D grown3D = plane.Convert(grown);
+            if (grown3D == null || !grown3D.IsValid())
+            {
+                return false;
+            }
+
+            face3D = grown3D;
+            plane = grown3D.GetPlane();
+            return true;
+        }
+
         /// <summary>
         /// True when the supporting plane is (near) vertical - the normal lies (near) horizontal,
         /// i.e. |normal.Z| is within <paramref name="angleTolerance"/> of zero. Walls are vertical;
