@@ -85,6 +85,10 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Number of closed cells (rooms/levels) the native MakerVolume formed. 1 = single space; 0 = none.</summary>
         public int ResolvedCellCount { get; private set; }
 
+        /// <summary>The face set fed to the native MakerVolume - after snap, dedup, fill, extend and the
+        /// coplanar pre-merge ("after bucket merge"). Exposed for visual debugging of the pre-resolve state.</summary>
+        public List<Face3D> BucketMergedFace3Ds { get; private set; } = new List<Face3D>();
+
         public Panel3DSnapSolver(
             IEnumerable<Face3D> face3Ds,
             IEnumerable<double> bucketSizes = null,
@@ -369,6 +373,8 @@ namespace SAM.Geometry.OCCT.Solver
                     buildFace3Ds = preMerged;
                 }
             }
+
+            BucketMergedFace3Ds = buildFace3Ds; // expose the MakerVolume input for debugging
 
             // MakerVolume: split panels at mutual intersections and resolve 3-way junctions.
             List<Shell> shells = GeometryCreate.Shells(buildFace3Ds, out OcctCellComplexResult cellResult, options);
