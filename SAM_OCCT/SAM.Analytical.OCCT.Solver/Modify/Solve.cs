@@ -96,6 +96,27 @@ namespace SAM.Analytical.OCCT.Solver
                 }
             }
 
+            // Hole-fill faces become air panels: each closed opening is emitted as a PanelType.Air panel
+            // (null construction), so the opening is represented as a virtual boundary rather than solid wall.
+            int airCount = 0;
+            foreach (Face3D holeFace3D in solver.HoleFillFace3Ds ?? new List<Face3D>())
+            {
+                if (holeFace3D == null || !holeFace3D.IsValid())
+                {
+                    continue;
+                }
+
+                Panel airPanel = global::SAM.Analytical.Create.Panel(null, PanelType.Air, holeFace3D);
+                if (airPanel != null)
+                {
+                    result.Add(airPanel);
+                    airCount++;
+                }
+            }
+
+            diagnostics.Add(string.Format(
+                "SAM_OCCT_SOLVE3D_AIR: Created {0} air panel(s) from closed holes.", airCount));
+
             diagnostics.Add(string.Format(
                 "SAM_OCCT_SOLVE3D_RESULT: Solved {0} panel(s) into {1} resolved panel(s); nativeResolved={2}; {3} cell(s); {4} naked edge(s).",
                 face3Ds.Count,

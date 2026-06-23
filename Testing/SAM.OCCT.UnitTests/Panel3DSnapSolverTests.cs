@@ -386,6 +386,39 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void CreateHoleFillFace3Ds_PanelWithHole_CreatesOneFace()
+        {
+            // Wall in the XZ plane (y = 0): 4x4 external boundary with a 1x1 internal hole.
+            List<Point3D> external = new List<Point3D>
+            {
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 4), new Point3D(0, 0, 4)
+            };
+            List<Point3D> hole = new List<Point3D>
+            {
+                new Point3D(1, 0, 1), new Point3D(2, 0, 1), new Point3D(2, 0, 2), new Point3D(1, 0, 2)
+            };
+            Face3D faceWithHole = Face3D.Create(new List<IClosedPlanar3D>
+            {
+                new Polygon3D(external), new Polygon3D(hole)
+            });
+            SnappedPanel panel = new SnappedPanel(0, faceWithHole, 1, 0.3, 0.5);
+
+            List<Face3D> holeFaces = Panel3DSnapSolver.CreateHoleFillFace3Ds(new List<SnappedPanel> { panel });
+
+            Assert.Single(holeFaces);
+            Assert.True(holeFaces[0].IsValid());
+            Assert.Equal(1.0, holeFaces[0].GetArea(), 3); // the 1x1 opening
+        }
+
+        [Fact]
+        public void CreateHoleFillFace3Ds_SolidPanel_CreatesNone()
+        {
+            SnappedPanel solid = MakeWallPanel(0); // no internal hole
+            List<Face3D> holeFaces = Panel3DSnapSolver.CreateHoleFillFace3Ds(new List<SnappedPanel> { solid });
+            Assert.Empty(holeFaces);
+        }
+
+        [Fact]
         public void Fill_GrowsCapsButNotWalls()
         {
             SnappedPanel wall = MakeWallPanel(0);

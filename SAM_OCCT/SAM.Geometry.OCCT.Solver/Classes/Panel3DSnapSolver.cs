@@ -67,6 +67,9 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>How far a floor/roof is grown outward so it overshoots the walls and trims cleanly (metres).</summary>
         public double FillMargin { get; set; } = 0.3;
 
+        /// <summary>Create a new Face3D over every hole (internal opening) so the model closes; these become air panels. Default true.</summary>
+        public bool FillHoles { get; set; } = true;
+
         /// <summary>Angle within which a panel's normal counts as horizontal, so the panel is "vertical" (a wall).</summary>
         public double VerticalAngleTolerance { get; set; } = 20 * (System.Math.PI / 180);
 
@@ -88,6 +91,10 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>The face set fed to the native MakerVolume - after snap, dedup, fill, extend and the
         /// coplanar pre-merge ("after bucket merge"). Exposed for visual debugging of the pre-resolve state.</summary>
         public List<Face3D> BucketMergedFace3Ds { get; private set; } = new List<Face3D>();
+
+        /// <summary>New faces created to close holes (internal openings) in the input panels. These are the
+        /// air-panel candidates: the analytical wrapper turns them into <c>PanelType.Air</c> panels.</summary>
+        public List<Face3D> HoleFillFace3Ds { get; private set; } = new List<Face3D>();
 
         public Panel3DSnapSolver(
             IEnumerable<Face3D> face3Ds,
@@ -141,9 +148,61 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             List<Face3D> snappedFace3Ds = SnappedPanels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
+
+            // Step 4: close holes (openings) with a new coplanar Face3D each, so the model is watertight.
+            // These are the air-panel candidates; they are fed to the build (to seal the wall) and exposed.
+            HoleFillFace3Ds = new List<Face3D>();
+            if (FillHoles)
+            {
+                HoleFillFace3Ds = CreateHoleFillFace3Ds(SnappedPanels);
+                if (HoleFillFace3Ds.Count != 0)
+                {
+                    snappedFace3Ds = snappedFace3Ds.Concat(HoleFillFace3Ds).ToList();
+                }
+            }
+
             ResolvedFace3Ds = snappedFace3Ds;
 
             Resolve(snappedFace3Ds, options);
+        }
+
+        /// <summary>
+        /// Creates a new Face3D over each hole (internal opening loop) of every panel. The opening is closed
+        /// by a coplanar face that the analytical wrapper later tags as an air panel. Sealing the openings is
+        /// what makes the panel set watertight for the volume build.
+        /// </summary>
+        public static List<Face3D> CreateHoleFillFace3Ds(List<SnappedPanel> panels)
+        {
+            List<Face3D> result = new List<Face3D>();
+            if (panels == null)
+            {
+                return result;
+            }
+
+            foreach (SnappedPanel panel in panels)
+            {
+                List<IClosedPlanar3D> holes = panel?.Face3D?.GetInternalEdge3Ds();
+                if (holes == null)
+                {
+                    continue;
+                }
+
+                foreach (IClosedPlanar3D hole in holes)
+                {
+                    if (hole == null)
+                    {
+                        continue;
+                    }
+
+                    Face3D holeFace3D = Geometry.Spatial.Create.Face3D(hole);
+                    if (holeFace3D != null && holeFace3D.IsValid())
+                    {
+                        result.Add(holeFace3D);
+                    }
+                }
+            }
+
+            return result;
         }
 
         /// <summary>
