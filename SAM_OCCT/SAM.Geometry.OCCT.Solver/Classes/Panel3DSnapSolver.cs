@@ -55,8 +55,12 @@ namespace SAM.Geometry.OCCT.Solver
         /// </summary>
         public bool ExtendToCaps { get; set; } = true;
 
-        /// <summary>How far past the cap a wall is over-extended so the native trim cuts cleanly (metres).</summary>
+        /// <summary>How far past a flat floor cap a wall is over-extended so the native trim cuts cleanly (metres).</summary>
         public double ExtendOvershoot { get; set; } = 0.05;
+
+        /// <summary>How far past a sloped roof's ridge an under-roof wall is over-extended, so it clears the
+        /// highest point of the roof and the kernel can cut it along the full pitch (metres).</summary>
+        public double RoofOvershoot { get; set; } = 0.5;
 
         /// <summary>Step 1: drop coincident coplanar duplicate panels before the resolve. Default true.</summary>
         public bool DedupCoincident { get; set; } = true;
@@ -64,8 +68,9 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Step 2: grow floors/roofs out to the surrounding walls (close floor-to-wall gaps). Default true.</summary>
         public bool FillCapsToWalls { get; set; } = true;
 
-        /// <summary>How far a floor/roof is grown outward so it overshoots the walls and trims cleanly (metres).</summary>
-        public double FillMargin { get; set; } = 0.3;
+        /// <summary>How far a floor/roof is grown outward so it overshoots the walls (and a roof reaches the
+        /// ridge / the next roof slope) and trims cleanly (metres).</summary>
+        public double FillMargin { get; set; } = 0.6;
 
         /// <summary>Create a new Face3D over every hole (internal opening) so the model closes; these become air panels. Default true.</summary>
         public bool FillHoles { get; set; } = true;
@@ -148,7 +153,7 @@ namespace SAM.Geometry.OCCT.Solver
             // Step 3: extend walls up to the floor/roof above so the kernel can trim them and close the volume.
             if (ExtendToCaps)
             {
-                Extend(SnappedPanels, VerticalAngleTolerance, ExtendOvershoot, ToleranceDistance, ExtendToRoofs);
+                Extend(SnappedPanels, VerticalAngleTolerance, ExtendOvershoot, ToleranceDistance, RoofOvershoot, ExtendToRoofs);
             }
 
             List<Face3D> snappedFace3Ds = SnappedPanels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
@@ -216,7 +221,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// under a pitched roof is over-extended past the ridge so the roof faces split it at the pitch.
         /// Walls with no cap above (true parapets/outer tops) are left untouched.
         /// </summary>
-        public static void Extend(List<SnappedPanel> panels, double verticalAngleTolerance, double overshoot, double toleranceDistance, bool includeRoofs = true)
+        public static void Extend(List<SnappedPanel> panels, double verticalAngleTolerance, double overshoot, double toleranceDistance, double roofOvershoot = 0.5, bool includeRoofs = true)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -225,6 +230,7 @@ namespace SAM.Geometry.OCCT.Solver
 
             List<SnappedPanel> walls = new List<SnappedPanel>();
             List<BoundingBox3D> caps = new List<BoundingBox3D>();
+            double roofMaxZ = double.NaN; // the highest point of the roof system (the ridge)
             foreach (SnappedPanel panel in panels)
             {
                 BoundingBox3D boundingBox3D = panel.GetBoundingBox();
@@ -246,6 +252,11 @@ namespace SAM.Geometry.OCCT.Solver
                 if (horizontal || includeRoofs)
                 {
                     caps.Add(boundingBox3D);
+                }
+
+                if (!horizontal && (double.IsNaN(roofMaxZ) || boundingBox3D.Max.Z > roofMaxZ))
+                {
+                    roofMaxZ = boundingBox3D.Max.Z;
                 }
             }
 
@@ -283,9 +294,12 @@ namespace SAM.Geometry.OCCT.Solver
 
                 if (nearestCap != null)
                 {
-                    // Extend past the highest point of that cap (the ridge, for a pitched roof) so the
-                    // native trim cuts the wall cleanly along the cap.
-                    wall.ExtendTopTo(nearestCap.Max.Z + overshoot, toleranceDistance);
+                    // Extend to the top of the covering cap (a roof slope's ridge, or a flat floor) plus an
+                    // overshoot so the kernel trims the wall cleanly along the cap. A roof gets a larger
+                    // overshoot so the under-roof wall clears the pitch.
+                    bool capIsRoof = nearestCap.Max.Z - nearestCap.Min.Z > toleranceDistance + 0.1;
+                    double os = capIsRoof ? roofOvershoot : overshoot;
+                    wall.ExtendTopTo(nearestCap.Max.Z + os, toleranceDistance);
                 }
 
                 // ...and down to the nearest cap below, so the wall reaches the floor of its level and the
