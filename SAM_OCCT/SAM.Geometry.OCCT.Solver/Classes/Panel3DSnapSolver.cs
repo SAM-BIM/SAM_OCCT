@@ -47,6 +47,20 @@ namespace SAM.Geometry.OCCT.Solver
         public double ToleranceArcAngle { get; set; } = 0.3 * (System.Math.PI / 180);
         public double ToleranceDistance { get; set; } = Tolerance.Distance;
 
+        /// <summary>
+        /// When true, walls that stop short of the floor/roof above are extended up to that cap before
+        /// the native resolve, so the kernel can trim them (e.g. split a gable wall at the roof pitch)
+        /// and close the under-roof volume. The floor/roof elevations a wall is extended to become the
+        /// implicit levels. Default true.
+        /// </summary>
+        public bool ExtendToCaps { get; set; } = true;
+
+        /// <summary>How far past the cap a wall is over-extended so the native trim cuts cleanly (metres).</summary>
+        public double ExtendOvershoot { get; set; } = 0.05;
+
+        /// <summary>Angle within which a panel's normal counts as horizontal, so the panel is "vertical" (a wall).</summary>
+        public double VerticalAngleTolerance { get; set; } = 20 * (System.Math.PI / 180);
+
         /// <summary>The registered panels after the managed snap stage. Carries source mapping.</summary>
         public List<SnappedPanel> SnappedPanels { get; private set; } = new List<SnappedPanel>();
 
@@ -91,10 +105,99 @@ namespace SAM.Geometry.OCCT.Solver
 
             Snap(SnappedPanels, ToleranceAngle, ToleranceArcAngle);
 
+            if (ExtendToCaps)
+            {
+                Extend(SnappedPanels, VerticalAngleTolerance, ExtendOvershoot, ToleranceDistance);
+            }
+
             List<Face3D> snappedFace3Ds = SnappedPanels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
             ResolvedFace3Ds = snappedFace3Ds;
 
             Resolve(snappedFace3Ds, options);
+        }
+
+        /// <summary>
+        /// Managed extend: grow each (vertical) wall up to the nearest cap - the floor or roof that
+        /// sits above it and covers it in plan - so the native resolve can trim the wall against that
+        /// cap and close the volume. The cap a wall reaches defines its implicit upper level; a wall
+        /// under a pitched roof is over-extended past the ridge so the roof faces split it at the pitch.
+        /// Walls with no cap above (true parapets/outer tops) are left untouched.
+        /// </summary>
+        public static void Extend(List<SnappedPanel> panels, double verticalAngleTolerance, double overshoot, double toleranceDistance)
+        {
+            if (panels == null || panels.Count < 2)
+            {
+                return;
+            }
+
+            List<SnappedPanel> walls = new List<SnappedPanel>();
+            List<BoundingBox3D> caps = new List<BoundingBox3D>();
+            foreach (SnappedPanel panel in panels)
+            {
+                BoundingBox3D boundingBox3D = panel.GetBoundingBox();
+                if (boundingBox3D == null)
+                {
+                    continue;
+                }
+
+                if (panel.IsVertical(verticalAngleTolerance))
+                {
+                    walls.Add(panel);
+                }
+                else
+                {
+                    caps.Add(boundingBox3D); // floors and roofs are the caps walls extend to
+                }
+            }
+
+            foreach (SnappedPanel wall in walls)
+            {
+                BoundingBox3D wallBox = wall.GetBoundingBox();
+                if (wallBox == null)
+                {
+                    continue;
+                }
+
+                double wallTopZ = wallBox.Max.Z;
+
+                // The nearest cap that starts above the wall top and covers it in plan.
+                BoundingBox3D nearestCap = null;
+                double nearestStartZ = double.MaxValue;
+                foreach (BoundingBox3D cap in caps)
+                {
+                    if (cap.Min.Z < wallTopZ - toleranceDistance)
+                    {
+                        continue; // not above the wall
+                    }
+
+                    if (!OverlapsInPlan(cap, wallBox, toleranceDistance))
+                    {
+                        continue;
+                    }
+
+                    if (cap.Min.Z < nearestStartZ)
+                    {
+                        nearestStartZ = cap.Min.Z;
+                        nearestCap = cap;
+                    }
+                }
+
+                if (nearestCap == null)
+                {
+                    continue;
+                }
+
+                // Extend past the highest point of that cap (the ridge, for a pitched roof) so the
+                // native trim cuts the wall cleanly along the cap.
+                wall.ExtendTopTo(nearestCap.Max.Z + overshoot, toleranceDistance);
+            }
+        }
+
+        /// <summary>True when the two boxes overlap in the XY (plan) projection within a tolerance.</summary>
+        private static bool OverlapsInPlan(BoundingBox3D a, BoundingBox3D b, double tolerance)
+        {
+            return a.Min.X <= b.Max.X + tolerance && a.Max.X >= b.Min.X - tolerance
+                && a.Min.Y <= b.Max.Y + tolerance && a.Max.Y >= b.Min.Y - tolerance;
         }
 
         /// <summary>

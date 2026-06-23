@@ -276,6 +276,74 @@ namespace SAM.OCCT.UnitTests
         }
 
         // ──────────────────────────────────────────────────────────────
+        // SnappedPanel: vertical predicate + top extension
+        // ──────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void IsVertical_Wall_ReturnsTrue()
+        {
+            SnappedPanel wall = MakeWallPanel(0);
+            Assert.True(wall.IsVertical(20 * (System.Math.PI / 180)));
+        }
+
+        [Fact]
+        public void IsVertical_Floor_ReturnsFalse()
+        {
+            SnappedPanel floor = MakeFloorPanel(0);
+            Assert.False(floor.IsVertical(20 * (System.Math.PI / 180)));
+        }
+
+        [Fact]
+        public void ExtendTopTo_TallerTarget_RaisesTopAndReturnsTrue()
+        {
+            SnappedPanel wall = MakeWallPanel(0); // top at z = 3
+            bool extended = wall.ExtendTopTo(5.0, 1e-6);
+
+            Assert.True(extended);
+            Assert.Equal(5.0, wall.GetBoundingBox().Max.Z, 3);
+            Assert.Equal(0.0, wall.GetBoundingBox().Min.Z, 3); // base preserved
+        }
+
+        [Fact]
+        public void ExtendTopTo_TargetBelowCurrentTop_NoChangeAndReturnsFalse()
+        {
+            SnappedPanel wall = MakeWallPanel(0); // top at z = 3
+            bool extended = wall.ExtendTopTo(2.0, 1e-6);
+
+            Assert.False(extended);
+            Assert.Equal(3.0, wall.GetBoundingBox().Max.Z, 3);
+        }
+
+        [Fact]
+        public void Extend_WallUnderFloorCap_ExtendsUpToCap()
+        {
+            // Wall z 0..3; floor cap at z = 4 directly above it.
+            SnappedPanel wall = MakeWallPanel(0);
+            SnappedPanel cap = MakeFloorPanel(4.0);
+
+            List<SnappedPanel> panels = new List<SnappedPanel> { wall, cap };
+            Panel3DSnapSolver.Extend(panels, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6);
+
+            // Wall top should now reach just past the cap; cap is unchanged.
+            Assert.True(wall.GetBoundingBox().Max.Z > 3.5, "Wall should have been extended toward the cap");
+            Assert.Equal(4.0, cap.GetBoundingBox().Max.Z, 3);
+        }
+
+        [Fact]
+        public void Extend_WallWithNoCapAbove_LeftUntouched()
+        {
+            // Two parallel walls, no horizontal cap above either.
+            SnappedPanel wallA = MakeWallPanel(0);
+            SnappedPanel wallB = MakeWallPanel(2.0);
+
+            List<SnappedPanel> panels = new List<SnappedPanel> { wallA, wallB };
+            Panel3DSnapSolver.Extend(panels, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6);
+
+            Assert.Equal(3.0, wallA.GetBoundingBox().Max.Z, 3);
+            Assert.Equal(3.0, wallB.GetBoundingBox().Max.Z, 3);
+        }
+
+        // ──────────────────────────────────────────────────────────────
         // helpers
         // ──────────────────────────────────────────────────────────────
 

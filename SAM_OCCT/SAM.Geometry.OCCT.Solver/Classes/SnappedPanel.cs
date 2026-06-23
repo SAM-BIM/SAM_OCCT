@@ -196,6 +196,74 @@ namespace SAM.Geometry.OCCT.Solver
             SourceFace3Ds.AddRange(other.SourceFace3Ds);
         }
 
+        /// <summary>The axis-aligned bounds of the current boundary, or null when degenerate.</summary>
+        public BoundingBox3D GetBoundingBox()
+        {
+            return face3D?.GetBoundingBox();
+        }
+
+        /// <summary>
+        /// True when the supporting plane is (near) vertical - the normal lies (near) horizontal,
+        /// i.e. |normal.Z| is within <paramref name="angleTolerance"/> of zero. Walls are vertical;
+        /// floors and roofs are not. Used to decide which panels are extended up to a cap.
+        /// </summary>
+        public bool IsVertical(double angleTolerance)
+        {
+            if (plane == null)
+            {
+                return false;
+            }
+
+            return System.Math.Abs(plane.Normal.Unit.Z) <= System.Math.Sin(angleTolerance);
+        }
+
+        /// <summary>
+        /// Lengthens this (vertical) panel upward so its top reaches <paramref name="targetZ"/>, by
+        /// re-extruding its base edge to the new height. The 3D analogue of the 2D solver's
+        /// extend-to-junction: a wall that stops short of the floor/roof above is grown so the native
+        /// kernel can trim it against that cap (e.g. split a gable wall at the roof pitch). Only the
+        /// top moves; the base footprint and supporting plane are preserved.
+        /// </summary>
+        /// <returns>True when the panel was extended to a valid taller face.</returns>
+        public bool ExtendTopTo(double targetZ, double tolerance)
+        {
+            if (face3D == null || plane == null)
+            {
+                return false;
+            }
+
+            BoundingBox3D boundingBox3D = face3D.GetBoundingBox();
+            if (boundingBox3D == null)
+            {
+                return false;
+            }
+
+            double baseZ = boundingBox3D.Min.Z;
+            double topZ = boundingBox3D.Max.Z;
+            if (targetZ <= topZ + tolerance)
+            {
+                return false; // already tall enough
+            }
+
+            // Recover the horizontal base edge: the panel cut just above its foot.
+            Plane basePlane = Geometry.Spatial.Create.Plane(baseZ + tolerance);
+            Segment3D baseSegment3D = Geometry.Spatial.Query.MaxIntersectionSegment3D(basePlane, face3D);
+            if (baseSegment3D == null || baseSegment3D.GetLength() <= tolerance)
+            {
+                return false;
+            }
+
+            Face3D extended = Geometry.Spatial.Create.Face3D(baseSegment3D, new Vector3D(0, 0, targetZ - baseZ));
+            if (extended == null || !extended.IsValid())
+            {
+                return false;
+            }
+
+            face3D = extended;
+            plane = extended.GetPlane();
+            return true;
+        }
+
         private static IClosedPlanar3D ProjectLoop(IClosedPlanar3D loop, Plane backerPlane)
         {
             List<Point3D> point3Ds = (loop as ISegmentable3D)?.GetPoints();
