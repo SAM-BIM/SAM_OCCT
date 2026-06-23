@@ -31,7 +31,7 @@ namespace SAM.Analytical.OCCT.Solver
             out List<Point3D> nakedPoint3Ds,
             out List<string> diagnostics,
             IEnumerable<double> weights = null,
-            double minBucketSize = 0.2,
+            double minBucketSize = 0.4,
             double thicknessFactor = 0.6,
             OcctBuildOptions options = null)
         {
