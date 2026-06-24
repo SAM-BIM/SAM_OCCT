@@ -41,6 +41,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          $org   = 'SAM-BIM'
+          $token = '${{ secrets.ORG_REPO_TOKEN }}'
+
           $deps = @(
             'SAM'
             'SAM_Solver'
@@ -55,11 +58,14 @@ jobs:
 
           foreach ($r in $deps) {
             if (Test-Path $r) { continue }
+            # Token URL so private deps (e.g. SAM_Solver) don't prompt for credentials;
+            # SAM is public so the bare URL would also work for it.
+            $url = if ($token) { "https://$token@github.com/$org/$r.git" } else { "https://github.com/$org/$r.git" }
             Write-Host "Cloning $r @ $depBranch"
-            git clone --depth 1 --branch $depBranch "https://github.com/SAM-BIM/$r.git" $r
+            git clone --depth 1 --branch $depBranch $url $r
             if ($LASTEXITCODE -ne 0) {
               Write-Host "::warning::Branch '$depBranch' not found for $r; falling back to default branch."
-              git clone --depth 1 "https://github.com/SAM-BIM/$r.git" $r
+              git clone --depth 1 $url $r
             }
           }
 
