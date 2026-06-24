@@ -71,7 +71,11 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>How far a floor/roof is grown outward so it overshoots the walls (and a roof reaches the
         /// ridge / the next roof slope) and trims cleanly (metres).</summary>
-        public double FillMargin { get; set; } = 0.6;
+        public double FillMargin { get; set; } = 0.5;
+
+        /// <summary>Re-attach the (sloped) roof to the resolved output. MakerVolume cells cap at the top
+        /// ceiling and drop the roof lid above; this adds the clean roof slopes back. Default true.</summary>
+        public bool RetainRoof { get; set; } = true;
 
         /// <summary>Step 2: after the resolve, build a Face3D over each residual naked-boundary loop (air-panel
         /// candidate) so every space is fully enclosed. Default true. (Step 1 strips input holes outright.)</summary>
@@ -180,6 +184,30 @@ namespace SAM.Geometry.OCCT.Solver
             ResolvedFace3Ds = snappedFace3Ds;
 
             Resolve(snappedFace3Ds, options);
+
+            // The native cells enclose the rooms (floors + walls) but cap at the top ceiling, dropping the
+            // sloped roof above. Re-attach the clean roof slopes so the building envelope is complete.
+            if (RetainRoof && NativeResolved && ResolvedFace3Ds != null)
+            {
+                List<Face3D> roofSlopes = CleanFace3Ds.Where(IsSlopedRoof).ToList();
+                if (roofSlopes.Count != 0)
+                {
+                    ResolvedFace3Ds = ResolvedFace3Ds.Concat(roofSlopes).ToList();
+                }
+            }
+        }
+
+        /// <summary>True when the face is a sloped roof - normal neither (near) vertical nor (near) horizontal.</summary>
+        private static bool IsSlopedRoof(Face3D face3D)
+        {
+            Vector3D normal = face3D?.GetPlane()?.Normal.Unit;
+            if (normal == null)
+            {
+                return false;
+            }
+
+            double absZ = System.Math.Abs(normal.Z);
+            return absZ > 0.1 && absZ < 0.95;
         }
 
         /// <summary>
