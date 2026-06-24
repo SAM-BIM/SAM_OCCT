@@ -43,6 +43,7 @@ jobs:
 
           $deps = @(
             'SAM'
+            'SAM_Solver'
           )
 
           # Match the SAM dependency to this repo's line of development. The
@@ -87,8 +88,13 @@ jobs:
           # $common += '/p:Platform="Any CPU"'
 
           # Keep this repo LAST so its dependencies are built first.
+          # SAM_OCCT now references SAM_Solver's SAM.Analytical.Solver (shared SolverQuery.Slits
+          # detection + SolverParameter bucket/weight stamping). Build just that project - it pulls
+          # SAM.Geometry.Solver/SAM.Core.Solver and emits SAM_Solver\build\SAM.Analytical.Solver.dll -
+          # so we avoid the Grasshopper/Rhino projects in SAM_Solver.sln.
           $solutions = @(
             'SAM\SAM.sln'
+            'SAM_Solver\SAM_Solver\SAM.Analytical.Solver\SAM.Analytical.Solver.csproj'
             'SAM_OCCT\SAM_OCCT.sln'
           )
 
