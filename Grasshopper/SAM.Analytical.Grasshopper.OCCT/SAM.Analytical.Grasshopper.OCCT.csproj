@@ -37,6 +37,11 @@
     <Reference Include="SAM.Geometry.Grasshopper">
       <HintPath>..\..\..\SAM\build\SAM.Geometry.Grasshopper.dll</HintPath>
     </Reference>
+    <!-- SAM_Solver: the shared slit detection (Slits) + SolverParameter, so Clean3D/Solve3D can emit the
+         same slits/slitPanels diagnostics as AutoTuneSolver and feed SAMAnalytical.Visualize. -->
+    <Reference Include="SAM.Analytical.Solver">
+      <HintPath>..\..\..\SAM_Solver\build\SAM.Analytical.Solver.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\SAM_OCCT\SAM.Core.OCCT\SAM.Core.OCCT.csproj" />

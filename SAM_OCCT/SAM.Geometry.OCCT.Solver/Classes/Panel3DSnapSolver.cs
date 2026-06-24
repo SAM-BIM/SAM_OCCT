@@ -421,8 +421,13 @@ namespace SAM.Geometry.OCCT.Solver
                         continue;
                     }
 
-                    // Equal-weight panels do not dominate one another; lower-weight panels snap.
-                    if (candidate.Weight >= backer.Weight)
+                    // Within-bucket near-parallel panels snap onto the backer. Equal-weight neighbours
+                    // are absorbed too - the descending sort makes the earlier panel the backer, so
+                    // coincident/offset "double-wall" pairs of the same weight collapse onto one plane
+                    // (and then merge as coplanar). This matches the 2D TryBucketSnap and this method's
+                    // own contract; the sort guarantees candidate.Weight <= backer.Weight, so only a
+                    // strictly higher-weight candidate (never produced by the sort) is skipped.
+                    if (candidate.Weight > backer.Weight)
                     {
                         continue;
                     }

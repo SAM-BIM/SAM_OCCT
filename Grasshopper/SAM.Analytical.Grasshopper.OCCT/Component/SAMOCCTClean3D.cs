@@ -4,8 +4,11 @@
 using Grasshopper.Kernel;
 using SAM.Analytical;
 using SAM.Analytical.OCCT.Solver;
+using SAM.Analytical.Solver;
 using SAM.Core;
 using SAM.Core.Grasshopper;
+using SAM.Geometry.Grasshopper;
+using SAM.Geometry.Spatial;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -21,7 +24,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("8f2c1a47-6b39-4d2e-9a51-7c0e4b8d3f12");
 
-        public override string LatestComponentVersion => "0.1.0";
+        public override string LatestComponentVersion => "0.2.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -48,6 +51,18 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 thicknessFactor.SetPersistentData(0.6);
                 result.Add(new GH_SAMParam(thicknessFactor, ParamVisibility.Voluntary));
 
+                global::Grasshopper.Kernel.Parameters.Param_Number slitMinGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "slitMinGap_", NickName = "slitMinGap_", Description = "Minimum perpendicular gap (m) of a remaining double-wall/slit to report in the slits diagnostics.", Access = GH_ParamAccess.item };
+                slitMinGap.SetPersistentData(0.02);
+                result.Add(new GH_SAMParam(slitMinGap, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number slitMaxGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "slitMaxGap_", NickName = "slitMaxGap_", Description = "Maximum perpendicular gap (m) of a remaining double-wall/slit to report in the slits diagnostics.", Access = GH_ParamAccess.item };
+                slitMaxGap.SetPersistentData(0.5);
+                result.Add(new GH_SAMParam(slitMaxGap, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number slitMaxOverlap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "slitMaxOverlap_", NickName = "slitMaxOverlap_", Description = "Maximum parallel overlap length (m) reported as a slit. Longer side-by-side runs are ignored. 0 = no limit.", Access = GH_ParamAccess.item };
+                slitMaxOverlap.SetPersistentData(2.0);
+                result.Add(new GH_SAMParam(slitMaxOverlap, ParamVisibility.Voluntary));
+
                 global::Grasshopper.Kernel.Parameters.Param_Boolean run = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "_run", NickName = "_run", Description = "Run", Access = GH_ParamAccess.item };
                 run.SetPersistentData(false);
                 result.Add(new GH_SAMParam(run, ParamVisibility.Binding));
@@ -61,7 +76,9 @@ namespace SAM.Analytical.Grasshopper.OCCT
             get
             {
                 List<GH_SAMParam> result = new List<GH_SAMParam>();
-                result.Add(new GH_SAMParam(new GooPanelParam() { Name = "Panels", NickName = "Panels", Description = "Clean single panels (Step 1 output).", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
+                result.Add(new GH_SAMParam(new GooPanelParam() { Name = "Panels", NickName = "Panels", Description = "Clean single panels (Step 1 output). Carry BucketSize/Weight so SAMAnalytical.Visualize draws the capture slab (bucket) in the middle of each panel.", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
+                result.Add(new GH_SAMParam(new GooSAMGeometryParam() { Name = "Slits", NickName = "Slits", Description = "Remaining double-wall/slit diagnostics as short connector Segment3Ds between near-parallel wall axes in the clean panels. Same detection as AutoTuneSolver.", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
+                result.Add(new GH_SAMParam(new GooPanelParam() { Name = "SlitPanels", NickName = "SlitPanels", Description = "Clean panels whose section axes touch a remaining slit. Use these to spot double-wall/problem panels and target bucket-size overrides.", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "Diagnostics", NickName = "Diagnostics", Description = "Diagnostics", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "Successful", NickName = "Successful", Description = "Run successfully?", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
                 return result.ToArray();
@@ -107,12 +124,48 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref thicknessFactor);
             }
 
+            double slitMinGap = 0.02;
+            index = Params.IndexOfInputParam("slitMinGap_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref slitMinGap);
+            }
+
+            double slitMaxGap = 0.5;
+            index = Params.IndexOfInputParam("slitMaxGap_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref slitMaxGap);
+            }
+
+            double slitMaxOverlap = 2.0;
+            index = Params.IndexOfInputParam("slitMaxOverlap_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref slitMaxOverlap);
+            }
+
             List<Panel> cleanPanels = panels.Clean3D(out List<string> diagnostics, null, minBucketSize, thicknessFactor);
 
             index = Params.IndexOfOutputParam("Panels");
             if (index != -1)
             {
                 dataAccess.SetDataList(index, cleanPanels?.Select(x => new GooPanel(x)));
+            }
+
+            // Remaining double-wall/slit diagnostics on the clean panels (same detector as AutoTuneSolver).
+            List<Segment3D> slits = cleanPanels.Slits(out List<Panel> slitPanels, null, 0.2, slitMinGap, slitMaxGap, slitMaxOverlap);
+
+            index = Params.IndexOfOutputParam("Slits");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, slits?.Where(x => x != null).Select(x => new GooSAMGeometry(x)));
+            }
+
+            index = Params.IndexOfOutputParam("SlitPanels");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, slitPanels?.Where(x => x != null).Select(x => new GooPanel(x)));
             }
 
             index = Params.IndexOfOutputParam("Diagnostics");

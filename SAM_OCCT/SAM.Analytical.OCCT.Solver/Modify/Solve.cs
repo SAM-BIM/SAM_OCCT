@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
+using SAM.Analytical.Solver;
 using SAM.Core;
 using SAM.Core.OCCT;
 using SAM.Geometry.OCCT.Solver;
@@ -44,7 +45,9 @@ namespace SAM.Analytical.OCCT.Solver
                 return null;
             }
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, weights);
+            List<double> effectiveWeights = ResolveWeights(weights, sources);
+
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights);
             solver.Execute(options);
 
             nakedPoint3Ds = solver.NakedEdgePoint3Ds ?? new List<Point3D>();
@@ -57,7 +60,7 @@ namespace SAM.Analytical.OCCT.Solver
             }
 
             double tolerance = options?.Tolerance ?? Tolerance.Distance;
-            List<Panel> result = BuildPanels(resolved, sources, tolerance);
+            List<Panel> result = BuildPanels(resolved, sources, bucketSizes, effectiveWeights, tolerance);
 
             // Step-2 gap-fill faces (residual naked-boundary loops) become air panels: each is emitted as a
             // PanelType.Air panel (null construction), a virtual boundary rather than solid wall.
@@ -118,7 +121,9 @@ namespace SAM.Analytical.OCCT.Solver
                 return null;
             }
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, weights) { StopAfterClean = true };
+            List<double> effectiveWeights = ResolveWeights(weights, sources);
+
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights) { StopAfterClean = true };
             solver.Execute(null);
 
             List<Face3D> clean = solver.CleanFace3Ds;
@@ -128,7 +133,7 @@ namespace SAM.Analytical.OCCT.Solver
                 return new List<Panel>();
             }
 
-            List<Panel> result = BuildPanels(clean, sources, Tolerance.Distance);
+            List<Panel> result = BuildPanels(clean, sources, bucketSizes, effectiveWeights, Tolerance.Distance);
 
             diagnostics.Add(string.Format(
                 "SAM_OCCT_CLEAN3D_RESULT: Cleaned {0} panel(s) into {1} clean panel(s).",
@@ -168,23 +173,72 @@ namespace SAM.Analytical.OCCT.Solver
             return face3Ds.Count != 0;
         }
 
-        /// <summary>Rebuilds Panels from solved/clean faces, carrying construction/type from the nearest source.</summary>
-        private static List<Panel> BuildPanels(List<Face3D> face3Ds, List<Panel> sources, double tolerance)
+        /// <summary>
+        /// Rebuilds Panels from solved/clean faces, carrying construction/type from the nearest source and
+        /// stamping the backer <c>Weight</c> and capture-slab <c>BucketSize</c> that source used, so the
+        /// output feeds <c>SAMAnalytical.Visualize</c> (which reads those <see cref="SolverParameter"/>s).
+        /// </summary>
+        private static List<Panel> BuildPanels(List<Face3D> face3Ds, List<Panel> sources, List<double> bucketSizes, List<double> weights, double tolerance)
         {
             List<Panel> result = new List<Panel>();
             foreach (Face3D face3D in face3Ds)
             {
-                Panel source = NearestSource(face3D, sources, tolerance);
-                if (source == null)
+                int index = NearestSourceIndex(face3D, sources, tolerance);
+                if (index < 0)
                 {
                     continue;
                 }
 
+                Panel source = sources[index];
                 Panel panel = global::SAM.Analytical.Create.Panel(source.Construction, source.PanelType, face3D);
-                if (panel != null)
+                if (panel == null)
                 {
-                    result.Add(panel);
+                    continue;
                 }
+
+                // Stamp the bucket size + backer weight used for this panel so the capture slab can be
+                // drawn directly from the Clean3D/Solve3D output (the half-width band SAMAnalytical.Visualize
+                // renders in the middle of the panel).
+                if (bucketSizes != null && index < bucketSizes.Count)
+                {
+                    panel.SetValue(SolverParameter.BucketSize, bucketSizes[index]);
+                }
+
+                if (weights != null && index < weights.Count)
+                {
+                    panel.SetValue(SolverParameter.Weight, weights[index]);
+                }
+
+                result.Add(panel);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Resolves the per-panel backer weights: the caller's list when supplied, otherwise the canonical
+        /// length-based weights (longer/larger panels dominate as backers) derived via
+        /// <see cref="SAM.Analytical.Solver.Modify.SetWeights{T}(List{T}, bool, double)"/>. The metric runs
+        /// on throwaway clones so the caller's panels are not mutated.
+        /// </summary>
+        private static List<double> ResolveWeights(IEnumerable<double> weights, List<Panel> sources)
+        {
+            List<double> supplied = weights?.ToList();
+            if (supplied != null && supplied.Count != 0)
+            {
+                return supplied;
+            }
+
+            // Keep clones index-aligned 1:1 with sources so the weights line up with bucketSizes/sources.
+            List<Panel> clones = sources.Select(x => global::SAM.Analytical.Create.Panel(x)).ToList();
+            clones.SetWeights();
+
+            List<double> result = new List<double>(clones.Count);
+            foreach (Panel clone in clones)
+            {
+                result.Add(clone != null && clone.TryGetValue(SolverParameter.Weight, out double weight) && !double.IsNaN(weight)
+                    ? weight
+                    : Panel3DSnapSolver.DEFAULT_Weight);
             }
 
             return result;
@@ -203,24 +257,30 @@ namespace SAM.Analytical.OCCT.Solver
         }
 
         /// <summary>
-        /// Finds the source panel that best explains a resolved face: parallel supporting planes,
-        /// then the source whose centroid sits inside the resolved face's bounding box. Used to
-        /// carry construction/type forward, since native boolean resolution loses 1:1 source mapping.
+        /// Index of the source panel that best explains a resolved face: parallel supporting planes,
+        /// then the source whose centroid sits inside the resolved face's bounding box. Used to carry
+        /// construction/type (and the bucket/weight stamps) forward, since native boolean resolution
+        /// loses the 1:1 source mapping. Returns -1 only when there are no sources.
         /// </summary>
-        private static Panel NearestSource(Face3D face3D, List<Panel> sources, double tolerance)
+        private static int NearestSourceIndex(Face3D face3D, List<Panel> sources, double tolerance)
         {
-            Plane plane = face3D?.GetPlane();
-            if (plane == null || sources == null || sources.Count == 0)
+            if (sources == null || sources.Count == 0)
             {
-                return sources?.FirstOrDefault();
+                return -1;
+            }
+
+            Plane plane = face3D?.GetPlane();
+            if (plane == null)
+            {
+                return 0;
             }
 
             BoundingBox3D boundingBox3D = face3D.GetBoundingBox();
-            Panel best = null;
+            int best = -1;
             double bestDistance = double.MaxValue;
-            foreach (Panel source in sources)
+            for (int i = 0; i < sources.Count; i++)
             {
-                Face3D sourceFace3D = source?.GetFace3D();
+                Face3D sourceFace3D = sources[i]?.GetFace3D();
                 Plane sourcePlane = sourceFace3D?.GetPlane();
                 if (sourcePlane == null)
                 {
@@ -247,11 +307,11 @@ namespace SAM.Analytical.OCCT.Solver
                 if (distance < bestDistance)
                 {
                     bestDistance = distance;
-                    best = source;
+                    best = i;
                 }
             }
 
-            return best ?? sources.FirstOrDefault();
+            return best >= 0 ? best : 0;
         }
 
         private static bool Within(BoundingBox3D boundingBox3D, Point3D point3D, double tolerance)

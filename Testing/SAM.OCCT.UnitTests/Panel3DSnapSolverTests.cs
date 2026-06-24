@@ -194,17 +194,19 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
-        public void Snap_EqualWeightPanels_NeitherSnapped()
+        public void Snap_EqualWeightPanelsWithinBucket_LaterAbsorbedByEarlier()
         {
-            // Same weight — neither dominates
+            // Equal weight, within-bucket, near-parallel: the later panel is absorbed onto the earlier
+            // backer (deterministic by the stable descending-weight sort) so coincident/offset
+            // "double-wall" pairs of the same weight collapse onto one plane instead of staying apart.
             SnappedPanel a = MakeWallPanel(0, weight: 1, bucketSize: 0.3);
             SnappedPanel b = MakeWallPanel(0.15, weight: 1, bucketSize: 0.3);
             List<SnappedPanel> panels = new List<SnappedPanel> { a, b };
 
             Panel3DSnapSolver.Snap(panels, toleranceAngle: 0.1, toleranceArcAngle: 0.01);
 
-            Assert.False(a.Snapped);
-            Assert.False(b.Snapped);
+            Assert.False(a.Snapped, "The first equal-weight panel is the backer and stays put");
+            Assert.True(b.Snapped, "The second equal-weight panel within the bucket snaps onto the backer");
         }
 
         [Fact]
