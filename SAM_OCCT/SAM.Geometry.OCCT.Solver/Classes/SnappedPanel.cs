@@ -202,46 +202,45 @@ namespace SAM.Geometry.OCCT.Solver
             return face3D?.GetBoundingBox();
         }
 
-        /// <summary>Planar area of the current boundary (0 when degenerate). Used by coincident dedup.</summary>
+        /// <summary>Planar area of the current boundary (0 when degenerate).</summary>
         public double GetArea()
         {
             return face3D?.GetArea() ?? 0;
         }
 
-        /// <summary>Centre of the current boundary's bounds (null when degenerate). Used by coincident dedup.</summary>
-        public Point3D GetCentroid()
-        {
-            return face3D?.GetBoundingBox()?.GetCentroid();
-        }
-
         /// <summary>
-        /// True when <paramref name="other"/> is a near-duplicate of this panel: coplanar (handled by the
-        /// caller) plus matching area and coincident centre within tolerance. Coincident duplicates are the
-        /// main source of coplanar self-intersections in Revit exports (layered walls, doubled faces).
+        /// Discards any internal edges (holes / openings) so only the external shape of the panel remains.
+        /// Step 1 keeps clean single-loop panels; window/door openings are not carried into the bucket/merge.
         /// </summary>
-        public bool IsNearDuplicateOf(SnappedPanel other, double distanceTolerance)
+        /// <returns>True when holes were present and removed.</returns>
+        public bool StripInternalEdges()
         {
-            if (other == null)
+            if (face3D == null)
             {
                 return false;
             }
 
-            Point3D centroid = GetCentroid();
-            Point3D otherCentroid = other.GetCentroid();
-            if (centroid == null || otherCentroid == null)
+            List<IClosedPlanar3D> internalEdge3Ds = face3D.GetInternalEdge3Ds();
+            if (internalEdge3Ds == null || internalEdge3Ds.Count == 0)
+            {
+                return false; // already a clean external shape
+            }
+
+            IClosedPlanar3D external = face3D.GetExternalEdge3D();
+            if (external == null)
             {
                 return false;
             }
 
-            if (centroid.Distance(otherCentroid) > distanceTolerance)
+            Face3D stripped = Geometry.Spatial.Face3D.Create(new List<IClosedPlanar3D> { external });
+            if (stripped == null || !stripped.IsValid())
             {
                 return false;
             }
 
-            double area = GetArea();
-            double otherArea = other.GetArea();
-            double areaTolerance = System.Math.Max(area, otherArea) * 0.05 + distanceTolerance;
-            return System.Math.Abs(area - otherArea) <= areaTolerance;
+            face3D = stripped;
+            plane = stripped.GetPlane();
+            return true;
         }
 
         /// <summary>

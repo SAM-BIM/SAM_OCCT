@@ -62,8 +62,9 @@ namespace SAM.Geometry.OCCT.Solver
         /// highest point of the roof and the kernel can cut it along the full pitch (metres).</summary>
         public double RoofOvershoot { get; set; } = 0.5;
 
-        /// <summary>Step 1: drop coincident coplanar duplicate panels before the resolve. Default true.</summary>
-        public bool DedupCoincident { get; set; } = true;
+        /// <summary>Stop after Step 1 (clean bucket): return the clean single panels without fill/extend/resolve.
+        /// Lets bucket values be tuned and reviewed in isolation. Default false.</summary>
+        public bool StopAfterClean { get; set; } = false;
 
         /// <summary>Step 2: grow floors/roofs out to the surrounding walls (close floor-to-wall gaps). Default true.</summary>
         public bool FillCapsToWalls { get; set; } = true;
@@ -72,7 +73,8 @@ namespace SAM.Geometry.OCCT.Solver
         /// ridge / the next roof slope) and trims cleanly (metres).</summary>
         public double FillMargin { get; set; } = 0.6;
 
-        /// <summary>Create a new Face3D over every hole (internal opening) so the model closes; these become air panels. Default true.</summary>
+        /// <summary>Step 2: after the resolve, build a Face3D over each residual naked-boundary loop (air-panel
+        /// candidate) so every space is fully enclosed. Default true. (Step 1 strips input holes outright.)</summary>
         public bool FillHoles { get; set; } = true;
 
         /// <summary>Angle within which a panel's normal counts as horizontal, so the panel is "vertical" (a wall).</summary>
@@ -97,7 +99,11 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Number of closed cells (rooms/levels) the native MakerVolume formed. 1 = single space; 0 = none.</summary>
         public int ResolvedCellCount { get; private set; }
 
-        /// <summary>The face set fed to the native MakerVolume - after snap, dedup, fill, extend and the
+        /// <summary>Step 1 output: clean single panels - external shape only, within-bucket parallels snapped
+        /// onto one backer, contained/overlapping coplanar faces merged. The input to Step 2 (fill/extend).</summary>
+        public List<Face3D> CleanFace3Ds { get; private set; } = new List<Face3D>();
+
+        /// <summary>The face set fed to the native MakerVolume - after the clean bucket, fill, extend and the
         /// coplanar pre-merge ("after bucket merge"). Exposed for visual debugging of the pre-resolve state.</summary>
         public List<Face3D> BucketMergedFace3Ds { get; private set; } = new List<Face3D>();
 
@@ -120,9 +126,13 @@ namespace SAM.Geometry.OCCT.Solver
         public void Execute(OcctBuildOptions options = null)
         {
             SnappedPanels = new List<SnappedPanel>();
+            CleanFace3Ds = new List<Face3D>();
             ResolvedFace3Ds = new List<Face3D>();
             NakedEdgePoint3Ds = new List<Point3D>();
+            HoleFillFace3Ds = new List<Face3D>();
+            BucketMergedFace3Ds = new List<Face3D>();
             NativeResolved = false;
+            ResolvedCellCount = 0;
 
             if (face3Ds == null || face3Ds.Count == 0)
             {
@@ -135,83 +145,75 @@ namespace SAM.Geometry.OCCT.Solver
 
             SnappedPanels = Register(face3Ds, bucketSizes_Adjusted, weights_Adjusted, maxExtensions_Adjusted);
 
-            // Step 0: bucket/snap - project lower-weight panels onto higher-weight backer planes.
-            Snap(SnappedPanels, ToleranceAngle, ToleranceArcAngle);
+            // ---- Step 1: clean bucket (managed, native-free) ----
+            // Strip holes -> bucket-snap within-bucket parallels onto one backer -> merge coplanar (contained/overlap).
+            CleanFace3Ds = CleanBucket(SnappedPanels, ToleranceAngle, ToleranceArcAngle, ToleranceDistance);
 
-            // Step 1: 3D bucket dedup - drop coincident coplanar duplicates (a major self-intersection source).
-            if (DedupCoincident)
+            if (StopAfterClean)
             {
-                SnappedPanels = Dedup(SnappedPanels, ToleranceAngle, ToleranceDistance);
+                ResolvedFace3Ds = CleanFace3Ds;
+                return;
             }
 
-            // Step 2: fill floors/roofs out to the walls so the floor/roof-to-wall gaps close.
+            // ---- Step 2: extend + resolve ----
+            // Re-wrap the clean panels: Step 1 merged/removed panels, so the per-source weights no longer
+            // apply; the remaining stages are geometry-driven (orientation/elevation), not weight-driven.
+            SnappedPanels = Register(
+                CleanFace3Ds,
+                AdjustListLength(null, CleanFace3Ds.Count, DEFAULT_BucketSize),
+                AdjustListLength(null, CleanFace3Ds.Count, DEFAULT_Weight),
+                AdjustListLength(null, CleanFace3Ds.Count, DEFAULT_MaxExtension));
+
+            // Fill floors/roofs out to the walls so the floor/roof-to-wall gaps close.
             if (FillCapsToWalls)
             {
                 Fill(SnappedPanels, VerticalAngleTolerance, FillMargin, ToleranceDistance);
             }
 
-            // Step 3: extend walls up to the floor/roof above so the kernel can trim them and close the volume.
+            // Extend walls up to the floor/roof above and down to the floor below (the "between floors" case).
             if (ExtendToCaps)
             {
                 Extend(SnappedPanels, VerticalAngleTolerance, ExtendOvershoot, ToleranceDistance, RoofOvershoot, ExtendToRoofs);
             }
 
             List<Face3D> snappedFace3Ds = SnappedPanels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
-
-            // Step 4: close holes (openings) with a new coplanar Face3D each, so the model is watertight.
-            // These are the air-panel candidates; they are fed to the build (to seal the wall) and exposed.
-            HoleFillFace3Ds = new List<Face3D>();
-            if (FillHoles)
-            {
-                HoleFillFace3Ds = CreateHoleFillFace3Ds(SnappedPanels);
-                if (HoleFillFace3Ds.Count != 0)
-                {
-                    snappedFace3Ds = snappedFace3Ds.Concat(HoleFillFace3Ds).ToList();
-                }
-            }
-
             ResolvedFace3Ds = snappedFace3Ds;
 
             Resolve(snappedFace3Ds, options);
         }
 
         /// <summary>
-        /// Creates a new Face3D over each hole (internal opening loop) of every panel. The opening is closed
-        /// by a coplanar face that the analytical wrapper later tags as an air panel. Sealing the openings is
-        /// what makes the panel set watertight for the volume build.
+        /// Step 1 - clean bucket (managed, native-free). Produces clean single panels: each panel is reduced to
+        /// its external shape (internal openings stripped), within-bucket near-parallel lower-weight panels are
+        /// projected onto their backer plane, then coplanar faces - including a smaller panel contained in a
+        /// larger one - are merged via the managed union. The output feeds Step 2 (fill/extend), or is returned
+        /// as-is when only cleaning is wanted (<see cref="StopAfterClean"/>).
         /// </summary>
-        public static List<Face3D> CreateHoleFillFace3Ds(List<SnappedPanel> panels)
+        public static List<Face3D> CleanBucket(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance)
         {
-            List<Face3D> result = new List<Face3D>();
-            if (panels == null)
+            if (panels == null || panels.Count == 0)
             {
-                return result;
+                return new List<Face3D>();
             }
 
+            // 1. External shape only - drop window/door openings.
             foreach (SnappedPanel panel in panels)
             {
-                List<IClosedPlanar3D> holes = panel?.Face3D?.GetInternalEdge3Ds();
-                if (holes == null)
-                {
-                    continue;
-                }
-
-                foreach (IClosedPlanar3D hole in holes)
-                {
-                    if (hole == null)
-                    {
-                        continue;
-                    }
-
-                    Face3D holeFace3D = Geometry.Spatial.Create.Face3D(hole);
-                    if (holeFace3D != null && holeFace3D.IsValid())
-                    {
-                        result.Add(holeFace3D);
-                    }
-                }
+                panel.StripInternalEdges();
             }
 
-            return result;
+            // 2. Bucket snap - bring within-bucket near-parallel panels onto one backer plane (now coplanar).
+            Snap(panels, toleranceAngle, toleranceArcAngle);
+
+            // 3. Coplanar merge - union coplanar/overlapping faces so a contained smaller panel collapses into one.
+            List<Face3D> face3Ds = panels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
+            List<Face3D> merged = Geometry.Spatial.Query.Union(face3Ds, toleranceDistance);
+            if (merged == null || merged.Count == 0)
+            {
+                merged = face3Ds;
+            }
+
+            return merged.Where(x => x != null && x.IsValid()).ToList();
         }
 
         /// <summary>
@@ -334,38 +336,6 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
-        /// Step 1 - 3D bucket dedup: collapse coincident coplanar duplicate panels into one (keeping the
-        /// highest-weight, absorbing the rest's source references). Layered/doubled Revit faces project
-        /// onto the same plane during Snap and then self-intersect; removing the duplicates is the cheapest
-        /// way to cut the coplanar share of MakerVolume's self-intersection count.
-        /// </summary>
-        public static List<SnappedPanel> Dedup(List<SnappedPanel> panels, double angleTolerance, double distanceTolerance)
-        {
-            if (panels == null || panels.Count < 2)
-            {
-                return panels;
-            }
-
-            List<SnappedPanel> kept = new List<SnappedPanel>();
-            foreach (SnappedPanel panel in panels.OrderByDescending(x => x.Weight))
-            {
-                SnappedPanel duplicate = kept.FirstOrDefault(k =>
-                    k.IsCoplanarWith(panel, angleTolerance, distanceTolerance) && k.IsNearDuplicateOf(panel, distanceTolerance));
-
-                if (duplicate != null)
-                {
-                    duplicate.Absorb(panel);
-                }
-                else
-                {
-                    kept.Add(panel);
-                }
-            }
-
-            return kept;
-        }
-
-        /// <summary>
         /// Step 2 - fill floors/roofs to walls: grow each (non-vertical) cap outward in its plane so it
         /// overshoots the surrounding walls, closing the floor/roof-to-wall gaps that otherwise leave naked
         /// edges and prevent any cell from closing. The native resolve trims the overshoot back at the walls.
@@ -467,18 +437,16 @@ namespace SAM.Geometry.OCCT.Solver
                 };
             }
 
-            // Step 1 (native): coplanar pre-merge BEFORE the volume build. Collapsing coplanar overlaps
-            // (the share of self-intersections MakerVolume cannot otherwise digest) is what lets the kernel
-            // form a zoned cell complex instead of a single envelope cell - the actual "3D bucket".
+            // Native coplanar pre-merge BEFORE the volume build. After Step 2's fill/extend, extended walls
+            // and grown caps overlap coplanar neighbours; collapsing those overlaps (the share of
+            // self-intersections MakerVolume cannot otherwise digest) is what lets the kernel form a zoned
+            // cell complex instead of a single envelope cell.
             List<Face3D> buildFace3Ds = snappedFace3Ds;
-            if (DedupCoincident)
+            List<Face3D> preMerged = GeometryQuery.MergeCoplanarFace3Ds(snappedFace3Ds, out OcctCellComplexResult preMergeResult, ToleranceAngle, options);
+            preMergeResult?.Dispose();
+            if (preMerged != null && preMerged.Count != 0)
             {
-                List<Face3D> preMerged = GeometryQuery.MergeCoplanarFace3Ds(snappedFace3Ds, out OcctCellComplexResult preMergeResult, ToleranceAngle, options);
-                preMergeResult?.Dispose();
-                if (preMerged != null && preMerged.Count != 0)
-                {
-                    buildFace3Ds = preMerged;
-                }
+                buildFace3Ds = preMerged;
             }
 
             BucketMergedFace3Ds = buildFace3Ds; // expose the MakerVolume input for debugging

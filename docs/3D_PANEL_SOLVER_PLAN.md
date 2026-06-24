@@ -67,6 +67,35 @@ covered by MakerVolume + `ShellsImprint` + `MergeCoplanar` + `Validate` free-bou
 The only genuinely new logic is the **backer/width snapping** that pre-conditions the
 face set. We therefore do **not** port `ExtensionSolver.cs` or `GraphSolver.cs`.
 
+## Implemented pipeline — two steps
+
+The solver runs in two explicit steps so the clean geometry can be reviewed and the bucket
+tuned **before** any extend, mirroring `SAM_Solver`'s AutoTuneSolver shape (bucket-driven
+snap/merge that finds and outputs clean panels).
+
+**Step 1 — clean bucket (managed, native-free): `Panel3DSnapSolver.CleanBucket`**
+1. **Strip internal edges** (`SnappedPanel.StripInternalEdges`) — reduce every panel to its
+   external shape; window/door openings are discarded (not carried forward).
+2. **Bucket snap** (`Snap` + `SnappedPanel.SnapToBacker`) — project each lower-`Weight`
+   panel within a higher-`Weight` backer's `BucketSize` slab, and near-parallel, onto the
+   backer plane so within-bucket parallels become coplanar.
+3. **Coplanar merge** — managed `SAM.Geometry.Spatial.Query.Union(IEnumerable<Face3D>)`:
+   coplanar/overlapping faces (incl. a smaller panel contained in a larger one) collapse
+   into single panels.
+Output: `CleanFace3Ds` — clean single panels. Run in isolation via the analytical
+`Modify.Clean3D` entry point (or `Panel3DSnapSolver.StopAfterClean = true`) to tune bucket
+values and review the result before Step 2.
+
+**Step 2 — extend + resolve (consumes Step 1):**
+- **Fill** floors/roofs out to the walls (`Fill`/`GrowOutward`).
+- **Extend** walls between floors and up to roofs (`Extend`/`ExtendTopTo`/`ExtendBottomTo`).
+- **Resolve** through the native kernel: coplanar pre-merge → MakerVolume (`Create.Shells`)
+  → `MergeCoplanar` → `Validate`; residual naked-boundary loops are closed by `GapFill`
+  (air-panel candidates). `Modify.Solve3D` runs Step 1 then Step 2.
+
+Sloped-roof–specific heuristics remain out of scope; the kernel does all cutting (Step 1
+never splits faces).
+
 ## Design
 
 ### New projects (mirror SAM_OCCT conventions: `netstandard2.0`, SPDX header, output to `build/`)

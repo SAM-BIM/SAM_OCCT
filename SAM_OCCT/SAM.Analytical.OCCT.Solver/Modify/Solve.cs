@@ -38,33 +38,9 @@ namespace SAM.Analytical.OCCT.Solver
             nakedPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
 
-            // Air panels carry no real surface to snap to; drop them up front (Query.Air analogue).
-            List<Panel> panels_Temp = panels?.Where(x => x != null && x.PanelType != PanelType.Air).ToList();
-            if (panels_Temp == null || panels_Temp.Count == 0)
+            if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
             {
-                diagnostics.Add("SAM_OCCT_SOLVE3D_INPUT_EMPTY: No non-air panels were supplied.");
-                return null;
-            }
-
-            List<Face3D> face3Ds = new List<Face3D>();
-            List<double> bucketSizes = new List<double>();
-            List<Panel> sources = new List<Panel>();
-            foreach (Panel panel in panels_Temp)
-            {
-                Face3D face3D = panel.GetFace3D();
-                if (face3D == null || !face3D.IsValid())
-                {
-                    continue;
-                }
-
-                face3Ds.Add(face3D);
-                bucketSizes.Add(BucketSize(panel, minBucketSize, thicknessFactor));
-                sources.Add(panel);
-            }
-
-            if (face3Ds.Count == 0)
-            {
-                diagnostics.Add("SAM_OCCT_SOLVE3D_INPUT_EMPTY: No valid panel geometry was supplied.");
+                diagnostics.Add("SAM_OCCT_SOLVE3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.");
                 return null;
             }
 
@@ -80,24 +56,11 @@ namespace SAM.Analytical.OCCT.Solver
                 return new List<Panel>();
             }
 
-            List<Panel> result = new List<Panel>();
-            foreach (Face3D face3D in resolved)
-            {
-                Panel source = NearestSource(face3D, sources, options?.Tolerance ?? Tolerance.Distance);
-                if (source == null)
-                {
-                    continue;
-                }
+            double tolerance = options?.Tolerance ?? Tolerance.Distance;
+            List<Panel> result = BuildPanels(resolved, sources, tolerance);
 
-                Panel panel = global::SAM.Analytical.Create.Panel(source.Construction, source.PanelType, face3D);
-                if (panel != null)
-                {
-                    result.Add(panel);
-                }
-            }
-
-            // Hole-fill faces become air panels: each closed opening is emitted as a PanelType.Air panel
-            // (null construction), so the opening is represented as a virtual boundary rather than solid wall.
+            // Step-2 gap-fill faces (residual naked-boundary loops) become air panels: each is emitted as a
+            // PanelType.Air panel (null construction), a virtual boundary rather than solid wall.
             int airCount = 0;
             foreach (Face3D holeFace3D in solver.HoleFillFace3Ds ?? new List<Face3D>())
             {
@@ -115,7 +78,7 @@ namespace SAM.Analytical.OCCT.Solver
             }
 
             diagnostics.Add(string.Format(
-                "SAM_OCCT_SOLVE3D_AIR: Created {0} air panel(s) from closed holes.", airCount));
+                "SAM_OCCT_SOLVE3D_AIR: Created {0} air panel(s) from closed gaps.", airCount));
 
             diagnostics.Add(string.Format(
                 "SAM_OCCT_SOLVE3D_RESULT: Solved {0} panel(s) into {1} resolved panel(s); nativeResolved={2}; {3} cell(s); {4} naked edge(s).",
@@ -124,6 +87,105 @@ namespace SAM.Analytical.OCCT.Solver
                 solver.NativeResolved,
                 solver.ResolvedCellCount,
                 nakedPoint3Ds.Count));
+
+            return result;
+        }
+
+        /// <summary>
+        /// Step 1 only - the clean bucket. Skips air panels, derives the capture width from construction
+        /// thickness, then returns clean single panels: external shape only (openings stripped), within-bucket
+        /// near-parallel panels snapped onto one backer, and contained/overlapping coplanar panels merged. No
+        /// fill/extend/native-resolve is run, so bucket values can be tuned and reviewed in isolation.
+        /// </summary>
+        /// <param name="panels">Panels to clean. Not modified; new panels are returned.</param>
+        /// <param name="diagnostics">Coded diagnostics describing the clean pass.</param>
+        /// <param name="weights">Optional per-panel backer weights (aligned with the non-air panel order); null uses the default.</param>
+        /// <param name="minBucketSize">Lower bound on the capture half-width, in metres.</param>
+        /// <param name="thicknessFactor">Fraction of construction thickness used as the capture half-width.</param>
+        /// <returns>The clean panels, or null when no usable panels were supplied.</returns>
+        public static List<Panel> Clean3D(
+            this IEnumerable<Panel> panels,
+            out List<string> diagnostics,
+            IEnumerable<double> weights = null,
+            double minBucketSize = 0.4,
+            double thicknessFactor = 0.6)
+        {
+            diagnostics = new List<string>();
+
+            if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
+            {
+                diagnostics.Add("SAM_OCCT_CLEAN3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.");
+                return null;
+            }
+
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, weights) { StopAfterClean = true };
+            solver.Execute(null);
+
+            List<Face3D> clean = solver.CleanFace3Ds;
+            if (clean == null || clean.Count == 0)
+            {
+                diagnostics.Add("SAM_OCCT_CLEAN3D_NO_RESULT: The clean bucket produced no panels.");
+                return new List<Panel>();
+            }
+
+            List<Panel> result = BuildPanels(clean, sources, Tolerance.Distance);
+
+            diagnostics.Add(string.Format(
+                "SAM_OCCT_CLEAN3D_RESULT: Cleaned {0} panel(s) into {1} clean panel(s).",
+                face3Ds.Count,
+                result.Count));
+
+            return result;
+        }
+
+        /// <summary>Drops air panels and collects valid Face3Ds + thickness-derived bucket sizes + source panels.</summary>
+        private static bool PrepareInput(IEnumerable<Panel> panels, double minBucketSize, double thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources)
+        {
+            face3Ds = new List<Face3D>();
+            bucketSizes = new List<double>();
+            sources = new List<Panel>();
+
+            // Air panels carry no real surface to snap to; drop them up front (Query.Air analogue).
+            List<Panel> panels_Temp = panels?.Where(x => x != null && x.PanelType != PanelType.Air).ToList();
+            if (panels_Temp == null || panels_Temp.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (Panel panel in panels_Temp)
+            {
+                Face3D face3D = panel.GetFace3D();
+                if (face3D == null || !face3D.IsValid())
+                {
+                    continue;
+                }
+
+                face3Ds.Add(face3D);
+                bucketSizes.Add(BucketSize(panel, minBucketSize, thicknessFactor));
+                sources.Add(panel);
+            }
+
+            return face3Ds.Count != 0;
+        }
+
+        /// <summary>Rebuilds Panels from solved/clean faces, carrying construction/type from the nearest source.</summary>
+        private static List<Panel> BuildPanels(List<Face3D> face3Ds, List<Panel> sources, double tolerance)
+        {
+            List<Panel> result = new List<Panel>();
+            foreach (Face3D face3D in face3Ds)
+            {
+                Panel source = NearestSource(face3D, sources, tolerance);
+                if (source == null)
+                {
+                    continue;
+                }
+
+                Panel panel = global::SAM.Analytical.Create.Panel(source.Construction, source.PanelType, face3D);
+                if (panel != null)
+                {
+                    result.Add(panel);
+                }
+            }
 
             return result;
         }

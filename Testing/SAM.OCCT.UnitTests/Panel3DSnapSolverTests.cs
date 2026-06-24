@@ -244,25 +244,19 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
-        public void Execute_TwoParallelWalls_SnappedPanelsRegistered()
+        public void Snap_TwoParallelWallsWithinBucket_LowerWeightSnapped()
         {
-            Face3D wall0 = MakeWallFace(yOffset: 0);
-            Face3D wall1 = MakeWallFace(yOffset: 0.15);
+            // Two parallel walls 0.15 m apart, within the 0.3 m bucket; the lower-weight one snaps onto the backer.
+            SnappedPanel backer = MakeWallPanel(0, weight: 2, bucketSize: 0.3);
+            SnappedPanel candidate = MakeWallPanel(0.15, weight: 1, bucketSize: 0.3);
 
-            List<double> weights = new List<double> { 2.0, 1.0 };
-            List<double> buckets = new List<double> { 0.3, 0.1 };
+            Panel3DSnapSolver.Snap(
+                new List<SnappedPanel> { backer, candidate },
+                5 * (System.Math.PI / 180),
+                0.3 * (System.Math.PI / 180));
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(
-                new List<Face3D> { wall0, wall1 },
-                buckets,
-                weights);
-            solver.DedupCoincident = false; // isolate the snap stage; dedup would collapse the two now-coincident walls
-
-            solver.Execute();
-
-            Assert.Equal(2, solver.SnappedPanels.Count);
-            // The lower-weight panel (index 1) should have been snapped
-            Assert.True(solver.SnappedPanels[1].Snapped);
+            Assert.True(candidate.Snapped, "Lower-weight candidate within the bucket should snap onto the backer");
+            Assert.False(backer.Snapped);
         }
 
         [Fact]
@@ -345,32 +339,78 @@ namespace SAM.OCCT.UnitTests
         }
 
         // ──────────────────────────────────────────────────────────────
-        // 3D bucket dedup (step 1) + fill caps to walls (step 2)
+        // Step 1: strip internal edges + clean bucket (snap + coplanar merge)
         // ──────────────────────────────────────────────────────────────
 
         [Fact]
-        public void Dedup_TwoCoincidentCoplanarWalls_CollapsesToOne()
+        public void StripInternalEdges_PanelWithHole_RemovesHole()
         {
-            SnappedPanel a = MakeWallPanel(0, weight: 2);
-            SnappedPanel b = MakeWallPanel(0, weight: 1); // identical face, same plane
+            // 4x4 external wall (XZ, y=0) with a 1x1 hole -> area 15 before, 16 after stripping the hole.
+            SnappedPanel panel = new SnappedPanel(0, MakeWallFaceWithHole(), 1, 0.3, 0.5);
+            Assert.Equal(15.0, panel.GetArea(), 1);
 
-            List<SnappedPanel> kept = Panel3DSnapSolver.Dedup(
-                new List<SnappedPanel> { a, b }, angleTolerance: 0.1, distanceTolerance: 0.01);
+            bool stripped = panel.StripInternalEdges();
 
-            Assert.Single(kept);
-            Assert.Equal(2, kept[0].Weight); // the higher-weight panel is kept
+            Assert.True(stripped);
+            Assert.Null(panel.Face3D.GetInternalEdge3Ds());
+            Assert.Equal(16.0, panel.GetArea(), 1);
         }
 
         [Fact]
-        public void Dedup_DistinctWalls_KeepsBoth()
+        public void StripInternalEdges_SolidPanel_NoChange()
         {
-            SnappedPanel a = MakeWallPanel(0, weight: 2);
-            SnappedPanel b = MakeWallPanel(1.0, weight: 1); // 1 m apart — not coincident
+            SnappedPanel solid = MakeWallPanel(0);
+            Assert.False(solid.StripInternalEdges());
+        }
 
-            List<SnappedPanel> kept = Panel3DSnapSolver.Dedup(
-                new List<SnappedPanel> { a, b }, angleTolerance: 0.1, distanceTolerance: 0.01);
+        [Fact]
+        public void CleanBucket_SmallPanelContainedInLargerCoplanar_MergesToOne()
+        {
+            // A 1x1 panel fully inside a 4x3 wall, both on the y=0 plane -> one merged 4x3 face.
+            Face3D large = TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 3), new Point3D(0, 0, 3));
+            Face3D small = TestGeometry.CreatePlanarFace(
+                new Point3D(1, 0, 1), new Point3D(2, 0, 1), new Point3D(2, 0, 2), new Point3D(1, 0, 2));
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                new SnappedPanel(0, large, 2, 0.3, 0.5),
+                new SnappedPanel(1, small, 1, 0.3, 0.5),
+            };
 
-            Assert.Equal(2, kept.Count);
+            List<Face3D> clean = Panel3DSnapSolver.CleanBucket(panels, 5 * (System.Math.PI / 180), 0.3 * (System.Math.PI / 180), 1e-6);
+
+            Assert.Single(clean);
+            Assert.Equal(12.0, clean[0].GetArea(), 1); // 4x3; the contained 1x1 is absorbed
+        }
+
+        [Fact]
+        public void CleanBucket_TwoParallelWallsWithinBucket_MergeToOne()
+        {
+            // Two identical walls 0.15 m apart (within bucket): the lower-weight snaps onto the backer, then merge.
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                MakeWallPanel(0, weight: 2, bucketSize: 0.3),
+                MakeWallPanel(0.15, weight: 1, bucketSize: 0.3),
+            };
+
+            List<Face3D> clean = Panel3DSnapSolver.CleanBucket(panels, 5 * (System.Math.PI / 180), 0.3 * (System.Math.PI / 180), 1e-6);
+
+            Assert.Single(clean);
+        }
+
+        [Fact]
+        public void CleanBucket_PerpendicularPanels_KeptSeparate()
+        {
+            // A wall and a floor are not coplanar -> both survive as distinct clean panels.
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                MakeWallPanel(0),
+                MakeFloorPanel(0),
+            };
+
+            List<Face3D> clean = Panel3DSnapSolver.CleanBucket(panels, 5 * (System.Math.PI / 180), 0.3 * (System.Math.PI / 180), 1e-6);
+
+            Assert.Equal(2, clean.Count);
         }
 
         [Fact]
@@ -383,31 +423,6 @@ namespace SAM.OCCT.UnitTests
 
             Assert.True(grown);
             Assert.True(floor.GetArea() > areaBefore, "Grown floor should have larger area");
-        }
-
-        [Fact]
-        public void CreateHoleFillFace3Ds_PanelWithHole_CreatesOneFace()
-        {
-            // Wall in the XZ plane (y = 0): 4x4 external boundary with a 1x1 internal hole.
-            List<Point3D> external = new List<Point3D>
-            {
-                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 4), new Point3D(0, 0, 4)
-            };
-            List<Point3D> hole = new List<Point3D>
-            {
-                new Point3D(1, 0, 1), new Point3D(2, 0, 1), new Point3D(2, 0, 2), new Point3D(1, 0, 2)
-            };
-            Face3D faceWithHole = Face3D.Create(new List<IClosedPlanar3D>
-            {
-                new Polygon3D(external), new Polygon3D(hole)
-            });
-            SnappedPanel panel = new SnappedPanel(0, faceWithHole, 1, 0.3, 0.5);
-
-            List<Face3D> holeFaces = Panel3DSnapSolver.CreateHoleFillFace3Ds(new List<SnappedPanel> { panel });
-
-            Assert.Single(holeFaces);
-            Assert.True(holeFaces[0].IsValid());
-            Assert.Equal(1.0, holeFaces[0].GetArea(), 3); // the 1x1 opening
         }
 
         [Fact]
@@ -428,14 +443,6 @@ namespace SAM.OCCT.UnitTests
             Assert.Single(fill);
             Assert.Equal(1.0, fill[0].GetArea(), 2);            // the 1x1 opening
             Assert.Equal(1.0, fill[0].GetBoundingBox().Max.Z, 3); // at the top, z = 1
-        }
-
-        [Fact]
-        public void CreateHoleFillFace3Ds_SolidPanel_CreatesNone()
-        {
-            SnappedPanel solid = MakeWallPanel(0); // no internal hole
-            List<Face3D> holeFaces = Panel3DSnapSolver.CreateHoleFillFace3Ds(new List<SnappedPanel> { solid });
-            Assert.Empty(holeFaces);
         }
 
         [Fact]
@@ -464,6 +471,20 @@ namespace SAM.OCCT.UnitTests
                 new Point3D(1, yOffset, 0),
                 new Point3D(1, yOffset, 3),
                 new Point3D(0, yOffset, 3));
+        }
+
+        /// <summary>4x4 wall in the XZ plane (y=0) with a 1x1 internal hole (area 15).</summary>
+        private static Face3D MakeWallFaceWithHole()
+        {
+            List<Point3D> external = new List<Point3D>
+            {
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 4), new Point3D(0, 0, 4)
+            };
+            List<Point3D> hole = new List<Point3D>
+            {
+                new Point3D(1, 0, 1), new Point3D(2, 0, 1), new Point3D(2, 0, 2), new Point3D(1, 0, 2)
+            };
+            return Face3D.Create(new List<IClosedPlanar3D> { new Polygon3D(external), new Polygon3D(hole) });
         }
 
         /// <summary>Unit quad in the XY plane at the given Z offset (Z-normal floor).</summary>
