@@ -143,6 +143,64 @@ namespace SAM.Analytical.OCCT.Solver
             return result;
         }
 
+        /// <summary>
+        /// Step 1 + Step 2 managed fill/extend, WITHOUT the native resolve (the split). Cleans the panels, grows
+        /// floors/roofs out to the surrounding walls, and extends walls up to the cap above / down to the floor
+        /// below (overshooting their caps). Returns those filled/extended panels so the pre-resolve geometry can
+        /// be reviewed before <see cref="Solve3D"/> runs the native MakerVolume split - no cells are formed and
+        /// no walls are trimmed here. Output panels carry the bucket/weight stamps for <c>SAMAnalytical.Visualize</c>.
+        /// </summary>
+        /// <param name="panels">Panels to fill/extend. Not modified; new panels are returned.</param>
+        /// <param name="diagnostics">Coded diagnostics describing the pass.</param>
+        /// <param name="weights">Optional per-panel backer weights (aligned with the non-air panel order); null uses the default.</param>
+        /// <param name="minBucketSize">Lower bound on the capture half-width, in metres.</param>
+        /// <param name="thicknessFactor">Fraction of construction thickness used as the capture half-width.</param>
+        /// <param name="fillMargin">How far floors/roofs are grown outward past the walls (and walls past their caps), in metres.</param>
+        /// <returns>The filled/extended panels, or null when no usable panels were supplied.</returns>
+        public static List<Panel> Extend3D(
+            this IEnumerable<Panel> panels,
+            out List<string> diagnostics,
+            IEnumerable<double> weights = null,
+            double minBucketSize = 0.4,
+            double thicknessFactor = 0.6,
+            double fillMargin = 0.5)
+        {
+            diagnostics = new List<string>();
+
+            if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
+            {
+                diagnostics.Add("SAM_OCCT_EXTEND3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.");
+                return null;
+            }
+
+            List<double> effectiveWeights = ResolveWeights(weights, sources);
+
+            // StopAfterExtend keeps the pass managed (native-free, like Clean3D): clean bucket -> fill caps to
+            // walls -> extend walls to caps, then stop before the native MakerVolume split (Solve3D's job).
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights)
+            {
+                StopAfterExtend = true,
+                FillMargin = fillMargin
+            };
+            solver.Execute(null);
+
+            List<Face3D> extended = solver.ResolvedFace3Ds;
+            if (extended == null || extended.Count == 0)
+            {
+                diagnostics.Add("SAM_OCCT_EXTEND3D_NO_RESULT: The fill/extend pass produced no panels.");
+                return new List<Panel>();
+            }
+
+            List<Panel> result = BuildPanels(extended, sources, bucketSizes, effectiveWeights, Tolerance.Distance);
+
+            diagnostics.Add(string.Format(
+                "SAM_OCCT_EXTEND3D_RESULT: Filled/extended {0} panel(s) into {1} panel(s) (pre-resolve; the split runs in Solve3D).",
+                face3Ds.Count,
+                result.Count));
+
+            return result;
+        }
+
         /// <summary>Drops air panels and collects valid Face3Ds + thickness-derived bucket sizes + source panels.</summary>
         private static bool PrepareInput(IEnumerable<Panel> panels, double minBucketSize, double thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources)
         {

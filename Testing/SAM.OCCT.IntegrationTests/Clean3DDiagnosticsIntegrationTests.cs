@@ -83,5 +83,38 @@ namespace SAM.OCCT.IntegrationTests
             Assert.NotNull(slitPanels);
             Assert.All(slits, x => Assert.NotNull(x));
         }
+
+        [SkippableFact]
+        public void Extend3D_HomeFixture_StampsBucketSizeAndWeight_AndDetectsSlits()
+        {
+            string path = Path.Combine(FixturesDirectory, "AdjacencyCluster-home.sam");
+            Skip.IfNot(File.Exists(path), "Fixture not found: " + path);
+
+            List<Panel> panels = LoadPanels(path)
+                .Where(x => { Face3D face3D = x.GetFace3D(); return face3D != null && face3D.IsValid(); })
+                .ToList();
+            Assert.NotEmpty(panels);
+
+            // Extend3D stops before the native resolve, so it is managed (native-free) and runs anywhere.
+            List<Panel> extended = panels.Extend3D(out List<string> diagnostics, weights: null, minBucketSize: 0.4, thicknessFactor: 0.6);
+
+            Assert.NotNull(extended);
+            Assert.NotEmpty(extended);
+            Assert.Contains(diagnostics, d => d.Contains("SAM_OCCT_EXTEND3D_RESULT"));
+
+            // Every filled/extended panel carries the bucket/weight stamps SAMAnalytical.Visualize draws from.
+            foreach (Panel panel in extended)
+            {
+                Assert.True(panel.TryGetValue(SolverParameter.BucketSize, out double bucketSize), "Extended panel is missing the BucketSize stamp");
+                Assert.True(bucketSize >= 0.4, "Bucket size should be at least the minimum capture half-width");
+                Assert.True(panel.TryGetValue(SolverParameter.Weight, out double _), "Extended panel is missing the Weight stamp");
+            }
+
+            // The shared slit detector is wired and returns a consistent (non-null) result.
+            List<Segment3D> slits = extended.Slits(out List<Panel> slitPanels, null, 0.2, 0.02, 0.5, 2.0);
+            Assert.NotNull(slits);
+            Assert.NotNull(slitPanels);
+            Assert.All(slits, x => Assert.NotNull(x));
+        }
     }
 }

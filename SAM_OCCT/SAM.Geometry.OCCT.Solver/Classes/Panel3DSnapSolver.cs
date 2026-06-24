@@ -66,6 +66,11 @@ namespace SAM.Geometry.OCCT.Solver
         /// Lets bucket values be tuned and reviewed in isolation. Default false.</summary>
         public bool StopAfterClean { get; set; } = false;
 
+        /// <summary>Stop after Step 2's managed fill + extend, before the native resolve (the split): return the
+        /// filled floors/roofs and the walls extended up to their caps (overshooting), untrimmed. Lets the
+        /// pre-resolve geometry be reviewed before <c>Solve3D</c> runs the native MakerVolume split. Default false.</summary>
+        public bool StopAfterExtend { get; set; } = false;
+
         /// <summary>Step 2: grow floors/roofs out to the surrounding walls (close floor-to-wall gaps). Default true.</summary>
         public bool FillCapsToWalls { get; set; } = true;
 
@@ -182,6 +187,13 @@ namespace SAM.Geometry.OCCT.Solver
 
             List<Face3D> snappedFace3Ds = SnappedPanels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
             ResolvedFace3Ds = snappedFace3Ds;
+
+            // Stop before the native resolve: the split (MakerVolume trim) stays in Solve3D. The output here
+            // is the filled caps + extended (overshooting) walls, for reviewing the pre-resolve geometry.
+            if (StopAfterExtend)
+            {
+                return;
+            }
 
             Resolve(snappedFace3Ds, options);
 

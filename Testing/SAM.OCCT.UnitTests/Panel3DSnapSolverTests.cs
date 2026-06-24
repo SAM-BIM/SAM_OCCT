@@ -4,6 +4,7 @@
 using SAM.Geometry.OCCT.Solver;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
+using System.Linq;
 using Xunit;
 
 namespace SAM.OCCT.UnitTests
@@ -445,6 +446,26 @@ namespace SAM.OCCT.UnitTests
             Assert.Single(fill);
             Assert.Equal(1.0, fill[0].GetArea(), 2);            // the 1x1 opening
             Assert.Equal(1.0, fill[0].GetBoundingBox().Max.Z, 3); // at the top, z = 1
+        }
+
+        [Fact]
+        public void Execute_StopAfterExtend_ExtendsWallToCapWithoutNativeResolve()
+        {
+            // Wall z 0..3 (XZ, y=0) with a floor cap at z=4 directly above it. StopAfterExtend runs the managed
+            // clean + fill + extend, but stops before the native resolve, so the wall is extended up to the cap
+            // (overshooting) and NativeResolved stays false - the split (trim) is Solve3D's job.
+            Face3D wall = MakeWallFace(0);
+            Face3D cap = MakeFloorFace(4.0);
+
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(new List<Face3D> { wall, cap }) { StopAfterExtend = true };
+            solver.Execute();
+
+            Assert.False(solver.NativeResolved, "StopAfterExtend must not run the native resolve (split)");
+            Assert.NotEmpty(solver.ResolvedFace3Ds);
+
+            // The wall has been extended up toward the cap (its top reached at least the cap elevation).
+            double topZ = solver.ResolvedFace3Ds.Max(x => x.GetBoundingBox().Max.Z);
+            Assert.True(topZ >= 4.0, "Wall should be extended up to the cap (z >= 4)");
         }
 
         [Fact]
