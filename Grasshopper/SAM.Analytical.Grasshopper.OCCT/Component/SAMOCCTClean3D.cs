@@ -51,7 +51,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 thicknessFactor.SetPersistentData(0.6);
                 result.Add(new GH_SAMParam(thicknessFactor, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number slitMinGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "slitMinGap_", NickName = "slitMinGap_", Description = "Minimum perpendicular gap (m) of a remaining double-wall/slit to report in the slits diagnostics.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number slitMinGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "slitMinGap_", NickName = "slitMinGap_", Description = "Minimum perpendicular gap (m) of a remaining double-wall/slit to report. Floored at the bucket capture width so only parallel panels OUTSIDE the bucket (not captured/merged by it) are reported.", Access = GH_ParamAccess.item };
                 slitMinGap.SetPersistentData(0.02);
                 result.Add(new GH_SAMParam(slitMinGap, ParamVisibility.Voluntary));
 
@@ -154,7 +154,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
             }
 
             // Remaining double-wall/slit diagnostics on the clean panels (same detector as AutoTuneSolver).
-            List<Segment3D> slits = cleanPanels.Slits(out List<Panel> slitPanels, null, 0.2, slitMinGap, slitMaxGap, slitMaxOverlap);
+            // Only surface slits the bucket did NOT close: parallel panels whose perpendicular gap is OUTSIDE
+            // the capture slab (gap > bucket width). Pairs within the bucket are snapped/merged here, so
+            // reporting them is noise - floor the slit gap at the bucket capture width.
+            double slitGapFloor = System.Math.Max(slitMinGap, BucketCaptureWidth(cleanPanels, minBucketSize));
+            List<Segment3D> slits = cleanPanels.Slits(out List<Panel> slitPanels, null, 0.2, slitGapFloor, slitMaxGap, slitMaxOverlap);
 
             index = Params.IndexOfOutputParam("Slits");
             if (index != -1)
@@ -178,6 +182,26 @@ namespace SAM.Analytical.Grasshopper.OCCT
             {
                 dataAccess.SetData(index_Successful, cleanPanels != null && cleanPanels.Count != 0);
             }
+        }
+
+        /// <summary>
+        /// The bucket capture width to use as the slit-gap floor: the largest <c>SolverParameter.BucketSize</c>
+        /// stamped on the panels, so a parallel pair within ANY panel's capture slab (which the clean bucket
+        /// snaps/merges) is not reported as a slit. Only pairs whose gap exceeds the bucket - the ones the
+        /// bucket did not capture - are surfaced. Falls back to <paramref name="minBucketSize"/>.
+        /// </summary>
+        private static double BucketCaptureWidth(IEnumerable<Panel> panels, double minBucketSize)
+        {
+            double result = minBucketSize;
+            foreach (Panel panel in panels ?? Enumerable.Empty<Panel>())
+            {
+                if (panel != null && panel.TryGetValue(SolverParameter.BucketSize, out double bucketSize) && !double.IsNaN(bucketSize) && bucketSize > result)
+                {
+                    result = bucketSize;
+                }
+            }
+
+            return result;
         }
     }
 }
