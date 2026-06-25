@@ -104,6 +104,16 @@ namespace SAM.Geometry.OCCT.Solver
         /// ceiling and drop the roof lid above; this adds the clean roof slopes back. Default true.</summary>
         public bool RetainRoof { get; set; } = true;
 
+        /// <summary>
+        /// Re-attach walls the native MakerVolume dropped. The kernel only returns faces that bound a closed
+        /// cell, so a wall whose only cell fails to close (e.g. a stepped/tilted region where the
+        /// floor/roof tiles do not quite meet) is silently discarded - leaving a hole in the envelope. This
+        /// adds back any extended wall face (the exact face fed to the volume build) that has no
+        /// representation in the resolved output, so walls are never lost even where a cell does not form.
+        /// The wall analogue of <see cref="RetainRoof"/>. Default true.
+        /// </summary>
+        public bool RetainWalls { get; set; } = true;
+
         /// <summary>Step 2: after the resolve, build a Face3D over each residual naked-boundary loop (air-panel
         /// candidate) so every space is fully enclosed. Default true. (Step 1 strips input holes outright.)</summary>
         public bool FillHoles { get; set; } = true;
@@ -313,6 +323,89 @@ namespace SAM.Geometry.OCCT.Solver
                     ResolvedFace3Ds = ResolvedFace3Ds.Concat(roofSlopes).ToList();
                 }
             }
+
+            // MakerVolume returns only faces that bound a closed cell, so a wall whose cell did not form
+            // (a stepped/tilted region the kernel could not close) is dropped, leaving a hole. Re-add any
+            // wall face that went into the volume build but has no representation in the resolved output, so
+            // walls are never silently lost (the wall analogue of RetainRoof above).
+            if (RetainWalls && NativeResolved && ResolvedFace3Ds != null)
+            {
+                double wallDot = System.Math.Sin(VerticalAngleTolerance); // walls: normal (near) perpendicular to up
+                List<Face3D> lostWalls = new List<Face3D>();
+                foreach (Face3D wall in snappedFace3Ds)
+                {
+                    Vector3D normal = wall?.GetPlane()?.Normal.Unit;
+                    if (normal == null || System.Math.Abs(normal.DotProduct(up)) > wallDot)
+                    {
+                        continue; // caps are handled by the resolve / RetainRoof, not here
+                    }
+
+                    if (!IsRepresented(wall, ResolvedFace3Ds))
+                    {
+                        lostWalls.Add(wall);
+                    }
+                }
+
+                if (lostWalls.Count != 0)
+                {
+                    ResolvedFace3Ds = ResolvedFace3Ds.Concat(lostWalls).ToList();
+                }
+            }
+        }
+
+        /// <summary>
+        /// True when some resolved face already covers <paramref name="wall"/>: lies on the same plane
+        /// (parallel normal, near-coincident) and overlaps its bounds. A wall the native resolve kept (whole
+        /// or split into sub-faces) is represented; a wall it dropped is not. Used by the RetainWalls net.
+        /// </summary>
+        private static bool IsRepresented(Face3D wall, List<Face3D> resolvedFace3Ds)
+        {
+            Plane wallPlane = wall?.GetPlane();
+            if (wallPlane == null)
+            {
+                return true; // cannot test - do not re-add an untestable face
+            }
+
+            BoundingBox3D wallBox = wall.GetBoundingBox();
+            Vector3D wallNormal = wallPlane.Normal.Unit;
+            foreach (Face3D resolved in resolvedFace3Ds)
+            {
+                Plane resolvedPlane = resolved?.GetPlane();
+                if (resolvedPlane == null)
+                {
+                    continue;
+                }
+
+                if (System.Math.Abs(wallNormal.DotProduct(resolvedPlane.Normal.Unit)) < 0.99)
+                {
+                    continue; // not parallel - a different orientation
+                }
+
+                if (System.Math.Abs(wallPlane.Distance(resolvedPlane.Origin)) > 0.05)
+                {
+                    continue; // parallel but a different (offset) plane
+                }
+
+                if (OverlapsBox(wallBox, resolved.GetBoundingBox(), 0.01))
+                {
+                    return true; // a resolved sub-face lies on this wall and shares its footprint
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>True when two axis-aligned boxes overlap (or touch within <paramref name="tolerance"/>) in all three axes.</summary>
+        private static bool OverlapsBox(BoundingBox3D a, BoundingBox3D b, double tolerance)
+        {
+            if (a == null || b == null)
+            {
+                return false;
+            }
+
+            return a.Min.X <= b.Max.X + tolerance && a.Max.X >= b.Min.X - tolerance
+                && a.Min.Y <= b.Max.Y + tolerance && a.Max.Y >= b.Min.Y - tolerance
+                && a.Min.Z <= b.Max.Z + tolerance && a.Max.Z >= b.Min.Z - tolerance;
         }
 
         /// <summary>True when the face is a sloped roof - normal neither (near) vertical nor (near) horizontal.</summary>
