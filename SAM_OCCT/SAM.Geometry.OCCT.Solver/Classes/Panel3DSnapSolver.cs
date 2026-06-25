@@ -300,8 +300,9 @@ namespace SAM.Geometry.OCCT.Solver
                 panel.StripInternalEdges();
             }
 
-            // 2. Bucket snap - bring within-bucket near-parallel panels onto one backer plane (now coplanar).
-            Snap(panels, toleranceAngle, toleranceArcAngle);
+            // 2. Bucket snap - bring within-bucket near-parallel, in-plane-overlapping panels onto one
+            //    backer plane (now coplanar). Non-overlapping parallels (separate bays) are left put.
+            Snap(panels, toleranceAngle, toleranceArcAngle, toleranceDistance);
 
             // 3. Coplanar merge - union coplanar/overlapping faces so a contained smaller panel collapses into one.
             List<Face3D> face3Ds = panels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
@@ -705,10 +706,14 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>
         /// Managed snap: sort by <c>Weight</c> descending so backers are processed first, then
-        /// project each not-yet-snapped lower-weight panel that lies within a backer's slab and is
-        /// near-parallel to it onto the backer plane. Equal-weight near-coincident panels are absorbed.
+        /// project each not-yet-snapped lower-weight panel that lies within a backer's slab, is
+        /// near-parallel to it AND actually overlaps it in-plane (a genuine double-wall) onto the
+        /// backer plane. A near-parallel panel that merely passes through the slab but covers a
+        /// different part of the plane (the next bay's wall, colinear but offset along its run) is a
+        /// distinct wall and is left where it is - no move is needed. Equal-weight near-coincident
+        /// panels are absorbed.
         /// </summary>
-        public static void Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle)
+        public static void Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance = Tolerance.Distance)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -753,6 +758,15 @@ namespace SAM.Geometry.OCCT.Solver
                     // surface); a partially captured one must be near-parallel. Mirrors the 2D solver.
                     double angleTolerance = fully ? toleranceAngle : toleranceArcAngle;
                     if (!backer.IsParallelWith(candidate, angleTolerance))
+                    {
+                        continue;
+                    }
+
+                    // Only collapse a candidate that genuinely shares surface with the backer in-plane
+                    // (a real double-wall). A near-parallel wall that sits over a different part of the
+                    // plane - e.g. the top wall of the adjacent bay - is a separate wall: snapping it
+                    // would move it onto its neighbour for no reason. Keep it where it is.
+                    if (!backer.OverlapsInPlane(candidate, toleranceDistance))
                     {
                         continue;
                     }

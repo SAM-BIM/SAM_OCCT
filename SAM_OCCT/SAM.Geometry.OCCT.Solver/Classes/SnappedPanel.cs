@@ -138,6 +138,74 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
+        /// True when <paramref name="other"/>, projected onto this panel's plane (dropping the
+        /// perpendicular bucket offset), actually shares surface area with this panel's face in-plane -
+        /// i.e. the two are the same wall seen twice (a genuine double-wall), not two distinct parallel
+        /// walls that merely pass through each other's capture slab. <see cref="BucketContains"/> decides
+        /// nearness (the perpendicular band); this decides whether a snap would collapse a real duplicate
+        /// or wrongly drag a separate wall (e.g. the next bay's wall, colinear but offset along the plane)
+        /// onto its neighbour. The 3D analogue of the 2D solver's along-axis overlap requirement, lifted
+        /// from a <c>Segment2D</c> to a <see cref="Face3D"/>: both footprints are compared in this plane's
+        /// own 2D frame, so a real overlap in both in-plane directions (not just a touching end) is
+        /// required. Conservative - never blocks a true double-wall, only the unnecessary moves.
+        /// </summary>
+        public bool OverlapsInPlane(SnappedPanel other, double tolerance)
+        {
+            if (plane == null || face3D == null || other?.face3D == null)
+            {
+                return false;
+            }
+
+            if (!FootprintBounds(plane, face3D, out double thisMinU, out double thisMaxU, out double thisMinV, out double thisMaxV))
+            {
+                return false;
+            }
+
+            if (!FootprintBounds(plane, other.face3D, out double otherMinU, out double otherMaxU, out double otherMinV, out double otherMaxV))
+            {
+                return false;
+            }
+
+            double overlapU = System.Math.Min(thisMaxU, otherMaxU) - System.Math.Max(thisMinU, otherMinU);
+            double overlapV = System.Math.Min(thisMaxV, otherMaxV) - System.Math.Max(thisMinV, otherMinV);
+            return overlapU > tolerance && overlapV > tolerance;
+        }
+
+        /// <summary>
+        /// Orthographically projects <paramref name="face3D"/>'s external boundary onto
+        /// <paramref name="plane"/> and returns its 2D bounding extents in that plane's (AxisX, AxisY)
+        /// frame. Used by <see cref="OverlapsInPlane"/> to compare two parallel panels' footprints in a
+        /// common frame after the perpendicular offset is dropped.
+        /// </summary>
+        private static bool FootprintBounds(Plane plane, Face3D face3D, out double minU, out double maxU, out double minV, out double maxV)
+        {
+            minU = minV = double.MaxValue;
+            maxU = maxV = double.MinValue;
+
+            List<Point3D> point3Ds = BoundaryPoints(face3D);
+            if (point3Ds == null || point3Ds.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (Point3D point3D in point3Ds)
+            {
+                Geometry.Planar.Point2D point2D = plane.Convert(point3D);
+                if (point2D == null)
+                {
+                    continue;
+                }
+
+                if (point2D.X < minU) { minU = point2D.X; }
+                if (point2D.X > maxU) { maxU = point2D.X; }
+                if (point2D.Y < minV) { minV = point2D.Y; }
+                if (point2D.Y > maxV) { maxV = point2D.Y; }
+            }
+
+            return maxU >= minU && maxV >= minV;
+        }
+
+        /// <summary>
         /// Projects this panel's boundary onto <paramref name="backerPlane"/> (the analogue of
         /// snapping a lower-weight axis onto a higher-weight one) and records the snap. Every
         /// boundary loop - external and internal (holes) - is projected so the face stays valid.

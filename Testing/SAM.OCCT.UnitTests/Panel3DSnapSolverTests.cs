@@ -211,6 +211,29 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void Snap_ParallelWallsWithinBucketButNoInPlaneOverlap_NotSnapped()
+        {
+            // Two parallel walls 0.2 m apart (well within the 0.4 m bucket) and near-parallel, but lying
+            // over DIFFERENT parts of the plane: backer runs x[0..1], candidate runs x[2..3]. They are
+            // distinct walls of adjacent bays, not a double-wall - so the lower-weight candidate must
+            // keep its original position rather than being dragged onto the backer. Regression for the
+            // Clean3D "moving walls that need no move" defect.
+            SnappedPanel backer = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(1, 0, 0), new Point3D(1, 0, 3), new Point3D(0, 0, 3)), 2, 0.4, 0.5);
+            SnappedPanel candidate = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(2, 0.2, 0), new Point3D(3, 0.2, 0), new Point3D(3, 0.2, 3), new Point3D(2, 0.2, 3)), 1, 0.4, 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel> { backer, candidate };
+
+            Panel3DSnapSolver.Snap(panels, toleranceAngle: 0.1, toleranceArcAngle: 0.01, toleranceDistance: 1e-6);
+
+            Assert.False(candidate.Snapped, "Candidate over a different part of the plane (no in-plane overlap) must stay put");
+            foreach (Point3D pt in BoundaryPoints(candidate.Face3D))
+            {
+                Assert.Equal(0.2, pt.Y, 6); // unchanged: still on its own y=0.2 plane, not dragged onto the backer at y=0
+            }
+        }
+
+        [Fact]
         public void Snap_PerpendicularPanels_NotSnapped()
         {
             // Backer is a Y-normal wall; candidate is a Z-normal floor — they are not parallel
