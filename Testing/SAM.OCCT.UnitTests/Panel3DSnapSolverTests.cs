@@ -418,6 +418,61 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void Execute_TiltedLevel_UpAxisClosesLoopLikeUpright()
+        {
+            // L of two perpendicular walls: A along X at y=0 (x 0..2), B along Y at x=2.5 (y 0..2). A's +X
+            // end stops 0.5 m short of B. Upright, the extend closes that corner. Tilt the WHOLE thing 30
+            // deg about X: now A's normal has |Nz|=0.5 (> sin20), so the world-Z classifier wrongly reads
+            // it as a cap and the loop never closes - UNLESS the solver is told the level Up axis and runs
+            // the extend in the level frame. Regression for tilted-level Extend3D.
+            double theta = 30 * (System.Math.PI / 180);
+            List<Face3D> upright = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)),
+                TestGeometry.CreatePlanarFace(new Point3D(2.5, 0, 0), new Point3D(2.5, 2, 0), new Point3D(2.5, 2, 3), new Point3D(2.5, 0, 3)),
+            };
+            List<Face3D> tilted = upright.Select(f => TiltAboutX(f, theta)).ToList();
+            Vector3D up = new Vector3D(0, -System.Math.Sin(theta), System.Math.Cos(theta)); // world Z tilted 30 deg about X
+
+            // Total extended-face area is frame-invariant (rigid rotation preserves area), so it captures
+            // whether wall A was actually extended to meet B.
+            double uprightArea = RunExtendTotalArea(upright, null);
+            double tiltedWithUp = RunExtendTotalArea(tilted, up);
+            double tiltedNoUp = RunExtendTotalArea(tilted, null);
+
+            // With the level Up, the tilted level extends exactly like the upright one (same area)...
+            Assert.Equal(uprightArea, tiltedWithUp, 3);
+            // ...and the Up axis is doing real work: without it the world-Z classifier mis-reads the tilted
+            // wall as a cap (so Fill grows it instead of the wall extending to its neighbour), giving a
+            // materially different result.
+            Assert.True(System.Math.Abs(tiltedNoUp - tiltedWithUp) > 0.5,
+                $"Without Up the tilted level should resolve differently (area {tiltedNoUp:0.00} vs {tiltedWithUp:0.00})");
+        }
+
+        private static double RunExtendTotalArea(List<Face3D> face3Ds, Vector3D up)
+        {
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(
+                face3Ds,
+                Enumerable.Repeat(0.3, face3Ds.Count).ToList(),
+                Enumerable.Repeat(1.0, face3Ds.Count).ToList(),
+                Enumerable.Repeat(1.0, face3Ds.Count).ToList())
+            {
+                StopAfterExtend = true,
+                Up = up
+            };
+            solver.Execute(null);
+            return solver.ResolvedFace3Ds.Where(x => x != null).Sum(x => x.GetArea());
+        }
+
+        /// <summary>Rotates a face's vertices about the world X axis by <paramref name="theta"/> radians.</summary>
+        private static Face3D TiltAboutX(Face3D face3D, double theta)
+        {
+            double c = System.Math.Cos(theta), s = System.Math.Sin(theta);
+            List<Point3D> pts = ((ISegmentable3D)face3D.GetExternalEdge3D()).GetPoints();
+            return TestGeometry.CreatePlanarFace(pts.Select(p => new Point3D(p.X, p.Y * c - p.Z * s, p.Y * s + p.Z * c)).ToArray());
+        }
+
+        [Fact]
         public void ExtendWalls_ShortStubCappedByLength_DoesNotOverReach()
         {
             // A 0.5 m stub with a generous MaxExtend (1.0). The length cap (0.49 x 0.5 = 0.245 m) keeps it

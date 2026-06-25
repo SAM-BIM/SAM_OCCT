@@ -52,7 +52,10 @@ namespace SAM.Analytical.OCCT.Solver
             List<double> effectiveWeights = ResolveWeights(weights, sources);
             List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources);
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends);
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends)
+            {
+                Up = ResolveUp(sources)
+            };
             solver.Execute(options);
 
             nakedPoint3Ds = solver.NakedEdgePoint3Ds ?? new List<Point3D>();
@@ -196,7 +199,8 @@ namespace SAM.Analytical.OCCT.Solver
             Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends)
             {
                 StopAfterExtend = true,
-                FillMargin = fillMargin
+                FillMargin = fillMargin,
+                Up = ResolveUp(sources)
             };
             solver.Execute(null);
 
@@ -268,7 +272,8 @@ namespace SAM.Analytical.OCCT.Solver
             Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends)
             {
                 StopAfterExtend = true,
-                ConnectionTolerance = connectionTolerance
+                ConnectionTolerance = connectionTolerance,
+                Up = ResolveUp(sources)
             };
             solver.Execute(null);
 
@@ -283,6 +288,62 @@ namespace SAM.Analytical.OCCT.Solver
                 openEndPoint3Ds.Count));
 
             return result;
+        }
+
+        /// <summary>
+        /// The level "up" axis for the Step-2 extend, derived from the cap panels' plane normals: floors
+        /// define the level/slab plane, so their shared normal is the level normal. For an ordinary upright
+        /// model this is world Z and no rotation happens; for a whole-level-tilted model it is the tilt
+        /// direction, so the extend runs in the level's own frame. Floors are voted first (and roofs only
+        /// when there are no floors) so an ordinary building with a pitched roof over flat floors keeps
+        /// <c>up = Z</c> - only a genuinely tilted slab moves it. Falls back to world Z when there are no caps.
+        /// </summary>
+        private static Vector3D ResolveUp(List<Panel> sources)
+        {
+            Vector3D up = AverageNormal(sources, global::SAM.Analytical.PanelGroup.Floor);
+            if (up == null)
+            {
+                up = AverageNormal(sources, global::SAM.Analytical.PanelGroup.Roof);
+            }
+
+            return up ?? new Vector3D(0, 0, 1);
+        }
+
+        /// <summary>
+        /// Mean unit plane-normal of the panels in <paramref name="panelGroup"/>, collapsed to one
+        /// hemisphere so opposing caps (a floor below, the roof above) reinforce rather than cancel.
+        /// Null when the group is empty or its normals cancel out.
+        /// </summary>
+        private static Vector3D AverageNormal(List<Panel> sources, global::SAM.Analytical.PanelGroup panelGroup)
+        {
+            double x = 0, y = 0, z = 0;
+            int count = 0;
+            foreach (Panel panel in sources ?? new List<Panel>())
+            {
+                if (panel == null || global::SAM.Analytical.Query.PanelGroup(panel.PanelType) != panelGroup)
+                {
+                    continue;
+                }
+
+                Vector3D normal = panel.GetFace3D()?.GetPlane()?.Normal?.Unit;
+                if (normal == null)
+                {
+                    continue;
+                }
+
+                if (normal.Z < 0)
+                {
+                    normal = normal.GetNegated();
+                }
+
+                x += normal.X;
+                y += normal.Y;
+                z += normal.Z;
+                count++;
+            }
+
+            Vector3D result = new Vector3D(x, y, z);
+            return count != 0 && result.Length > Tolerance.Distance ? result.Unit : null;
         }
 
         /// <summary>Drops air panels and collects valid Face3Ds + thickness-derived bucket sizes + source panels.</summary>

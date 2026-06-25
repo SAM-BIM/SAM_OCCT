@@ -160,6 +160,16 @@ namespace SAM.Geometry.OCCT.Solver
         /// connected; tight enough to flag a real gap. Default 0.1 m.</summary>
         public double ConnectionTolerance { get; set; } = 0.1;
 
+        /// <summary>
+        /// The building/level "up" axis. The Step-2 extend logic (walls vertical, caps above/below, plan =
+        /// XY) is expressed in world Z; when a whole level is tilted - its floors/roofs (and the walls that
+        /// run across the slope) are not aligned with world Z - that logic must run in the level's own frame.
+        /// Setting <see cref="Up"/> to the level normal makes Step 2 rotate the clean faces so this axis maps
+        /// to world Z, extend there, then rotate back. Null or world Z = no rotation (the ordinary case).
+        /// Step 1 (clean bucket) and the native resolve are orientation-agnostic and are unaffected.
+        /// </summary>
+        public Vector3D Up { get; set; }
+
         public Panel3DSnapSolver(
             IEnumerable<Face3D> face3Ds,
             IEnumerable<double> bucketSizes = null,
@@ -207,14 +217,42 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             // ---- Step 2: extend + resolve ----
+            // Step 2's extend logic is written for a world-Z-up building (walls vertical, caps above/below
+            // in Z, plan = XY). When the whole level is tilted, rotate the clean faces into a canonical
+            // Z-up frame (mapping the level Up axis onto world Z), run the extend there, then rotate the
+            // result back. For the ordinary upright case (Up null or already Z) no rotation happens.
+            Vector3D up = (Up == null || Up.Length <= ToleranceDistance) ? new Vector3D(0, 0, 1) : Up.Unit;
+            if (up.Z < 0)
+            {
+                up = up.GetNegated(); // axis only: pick the +Z hemisphere so the tilt angle stays below 90 deg
+            }
+
+            Transform3D toCanonical = null;
+            Transform3D fromCanonical = null;
+            double tiltAngle = up.SmallestAngle(new Vector3D(0, 0, 1));
+            if (tiltAngle > ToleranceAngle)
+            {
+                // The level plane (normal = up) at the world origin. GetOriginToPlane expresses a world
+                // vector in that plane's frame, so it maps up -> world Z (and the level plane -> XY);
+                // GetPlaneToOrigin is its inverse, rotating the extended result back.
+                Plane levelPlane = new Plane(new Point3D(0, 0, 0), up);
+                toCanonical = Transform3D.GetOriginToPlane(levelPlane);
+                fromCanonical = Transform3D.GetPlaneToOrigin(levelPlane);
+            }
+
             // Re-wrap the clean panels: Step 1 merged/removed panels, so the per-source weights no longer
             // apply, and bucket/weight are re-derived from geometry. The per-panel MaxExtend IS carried
-            // forward (positionally), so a wall the caller marked to extend further keeps that reach.
+            // forward (positionally), so a wall the caller marked to extend further keeps that reach. The
+            // rotation preserves order and validity, so the maxExtensions stay index-aligned.
+            List<Face3D> step2Face3Ds = toCanonical == null
+                ? CleanFace3Ds
+                : CleanFace3Ds.Select(x => x.Transform(toCanonical)).ToList();
+
             SnappedPanels = Register(
-                CleanFace3Ds,
-                AdjustListLength(null, CleanFace3Ds.Count, DEFAULT_BucketSize),
-                AdjustListLength(null, CleanFace3Ds.Count, DEFAULT_Weight),
-                AdjustListLength(maxExtensions, CleanFace3Ds.Count, DEFAULT_MaxExtension));
+                step2Face3Ds,
+                AdjustListLength(null, step2Face3Ds.Count, DEFAULT_BucketSize),
+                AdjustListLength(null, step2Face3Ds.Count, DEFAULT_Weight),
+                AdjustListLength(maxExtensions, step2Face3Ds.Count, DEFAULT_MaxExtension));
 
             // ---- Walls first ----
             // Close the plan loop: grow each wall sideways along its axis (up to its own MaxExtend) until its
@@ -244,6 +282,16 @@ namespace SAM.Geometry.OCCT.Solver
             OpenWallFace3Ds = openWallFace3Ds;
 
             List<Face3D> snappedFace3Ds = SnappedPanels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
+
+            // Back to the world frame: the extend ran in the canonical Z-up frame, so rotate the extended
+            // faces and the plan-closure diagnostics back to where the input lives before resolving/output.
+            if (fromCanonical != null)
+            {
+                snappedFace3Ds = snappedFace3Ds.Select(x => x.Transform(fromCanonical)).Where(x => x != null && x.IsValid()).ToList();
+                OpenWallEndPoint3Ds = OpenWallEndPoint3Ds?.Where(x => x != null).Select(x => x.Transform(fromCanonical)).ToList() ?? new List<Point3D>();
+                OpenWallFace3Ds = OpenWallFace3Ds?.Where(x => x != null && x.IsValid()).Select(x => x.Transform(fromCanonical)).Where(x => x != null && x.IsValid()).ToList() ?? new List<Face3D>();
+            }
+
             ResolvedFace3Ds = snappedFace3Ds;
 
             // Stop before the native resolve: the split (MakerVolume trim) stays in Solve3D. The output here

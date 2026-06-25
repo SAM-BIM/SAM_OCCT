@@ -24,6 +24,10 @@
     <Reference Include="SAM.Geometry">
       <HintPath>..\..\..\SAM\build\SAM.Geometry.dll</HintPath>
     </Reference>
+    <!-- Transform3D's API surface (Matrix4D) lives in SAM.Math; needed to resolve the level-frame rotation. -->
+    <Reference Include="SAM.Math">
+      <HintPath>..\..\..\SAM\build\SAM.Math.dll</HintPath>
+    </Reference>
     <!-- Planar.Query.Offset overload resolution exposes NetTopologySuite's JoinStyle; needed to compile the cap-fill offset. -->
     <Reference Include="NetTopologySuite">
       <HintPath>..\..\..\SAM\build\NetTopologySuite.dll</HintPath>
