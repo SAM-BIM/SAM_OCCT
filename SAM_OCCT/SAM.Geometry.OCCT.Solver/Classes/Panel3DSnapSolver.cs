@@ -336,11 +336,13 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>
         /// True when some resolved face actually covers <paramref name="face3D"/> (a wall or a cap): lies on
-        /// the same plane (parallel normal, near-coincident) and contains the face's centre. A face the
-        /// native resolve kept (whole or split into sub-faces) is represented; a face it dropped is not.
-        /// The centre test (not a bbox overlap) is what distinguishes adjacent coplanar tiles - e.g. the
-        /// stepped ramp's slabs all share one infinite plane and merely touch at their edges, so a bbox
-        /// overlap would wrongly call a dropped tile "represented" by its neighbour. Used by RetainDropped.
+        /// the same plane (parallel normal, near-coincident) AND its boundary contains the face's centre. A
+        /// face the native resolve kept (whole or split into sub-faces) is represented; a face it dropped is
+        /// not. The centre-inside-boundary test (not a bbox test) is what distinguishes faces sharing one
+        /// infinite plane: the stepped ramp's slabs all lie on one plane and only touch at their edges, and
+        /// a tiny wall's centre can fall inside a coplanar neighbour's bounding box without being inside the
+        /// neighbour's actual face - either would be wrongly called "represented" by a looser test. Used by
+        /// RetainDropped.
         /// </summary>
         private static bool IsRepresented(Face3D face3D, List<Face3D> resolvedFace3Ds)
         {
@@ -376,9 +378,18 @@ namespace SAM.Geometry.OCCT.Solver
                     continue; // parallel but a different (offset) plane
                 }
 
-                if (ContainsPoint(resolved.GetBoundingBox(), centre, 0.05))
+                if (!ContainsPoint(resolved.GetBoundingBox(), centre, 0.05))
                 {
-                    return true; // a resolved sub-face on this plane covers this face's centre
+                    continue; // cheap reject before the planar containment test
+                }
+
+                // Accurate: is the centre actually inside this resolved face's boundary (not just its box)?
+                Geometry.Planar.Face2D resolved2D = resolvedPlane.Convert(resolved);
+                Geometry.Planar.Point2D centre2D = resolvedPlane.Convert(centre);
+                if (resolved2D != null && centre2D != null
+                    && (Geometry.Planar.Query.Inside(resolved2D, centre2D, 0.01) || resolved2D.On(centre2D, 0.01)))
+                {
+                    return true; // a resolved sub-face on this plane genuinely covers this face's centre
                 }
             }
 
