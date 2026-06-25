@@ -148,7 +148,10 @@ if (-not [string]::IsNullOrWhiteSpace($OpenCascadeRuntimeBin)) {
 # STEP/IGES (issue #20): SAM.Occt.Native delay-loads the Data Exchange
 # toolkits, so a missing DLL no longer breaks loading - but import/export then
 # reports status 64 at runtime. Verify they were deployed and say so clearly.
-$dataExchangeDlls = @("TKDESTEP.dll", "TKDEIGES.dll", "TKXSBase.dll")
+# openvr_api.dll is a transitive requirement: TKDESTEP -> ... -> TKV3d ->
+# TKService statically imports it, so its absence makes TKDESTEP/TKDEIGES fail
+# to LOAD (status 64) even though the toolkits themselves are present.
+$dataExchangeDlls = @("TKDESTEP.dll", "TKDEIGES.dll", "TKXSBase.dll", "openvr_api.dll")
 $missingDataExchange = @($dataExchangeDlls | Where-Object { -not (Test-Path -LiteralPath (Join-Path $nativeOutput $_)) })
 if ($missingDataExchange.Count -gt 0) {
     Write-Warning ("STEP/IGES Data Exchange DLLs missing from {0}: {1}" -f $nativeOutput, ($missingDataExchange -join ", "))
@@ -173,10 +176,15 @@ if (-not [string]::IsNullOrWhiteSpace($ThirdPartyRuntimeRoot)) {
     # the OCCT visualization toolkits (TKV3d -> TKService), which need
     # freetype.dll / FreeImage.dll - DLLs the core modeling stack never required,
     # so a "msvc/tbb/jemalloc only" copy left TKDESTEP.dll unloadable (status 64).
+    # win64\ is included because TKService (pulled in transitively by the Data
+    # Exchange + XCAF + TKV3d stack) statically imports openvr_api.dll, which the
+    # OCCT 3rdparty tree ships under <pkg>\bin\win64\ - a layout the bin\ and
+    # bin\vc14\ globs miss, leaving TKDESTEP/TKDEIGES unloadable (status 64).
     $thirdPartyRuntimePatterns = @(
         "msvc-*\*.dll",
         "*\bin\*.dll",
-        "*\bin\vc14\*.dll"
+        "*\bin\vc14\*.dll",
+        "*\bin\win64\*.dll"
     )
 
     foreach ($pattern in $thirdPartyRuntimePatterns) {
