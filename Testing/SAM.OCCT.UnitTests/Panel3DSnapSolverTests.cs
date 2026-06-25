@@ -342,6 +342,95 @@ namespace SAM.OCCT.UnitTests
         }
 
         // ──────────────────────────────────────────────────────────────
+        // SnappedPanel: lateral (in-plan) extension
+        // ──────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ExtendHorizontal_DifferentReachPerEnd_WidensByBothReaches()
+        {
+            // Wall along X (x 0..2, z 0..3). Grow 0.5 m off one end and 1.0 m off the other.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+
+            bool extended = wall.ExtendHorizontal(startReach: 0.5, endReach: 1.0, tolerance: 1e-6);
+
+            Assert.True(extended);
+            BoundingBox3D box = wall.GetBoundingBox();
+            // Orientation-independent: the plan length grows by 0.5 + 1.0 regardless of which end is "start".
+            Assert.Equal(3.5, box.Max.X - box.Min.X, 3);
+            Assert.Equal(0.0, box.Min.Z, 3); // height preserved
+            Assert.Equal(3.0, box.Max.Z, 3);
+        }
+
+        [Fact]
+        public void ExtendHorizontal_NoReach_ReturnsFalse()
+        {
+            SnappedPanel wall = MakeWallPanel(0);
+            Assert.False(wall.ExtendHorizontal(0, 0, 1e-6));
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Panel3DSnapSolver.ExtendWalls (close the plan loop)
+        // ──────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ExtendWalls_WallShortOfPerpendicularWall_ExtendsEndToMeetIt()
+        {
+            // Wall A runs along X at y=0 (x 0..2). Wall B runs along Y at x=3 (y 0..2). A's +X end stops 1 m
+            // short of B; its other end (toward -X) has no wall to meet.
+            Face3D a = TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3));
+            Face3D b = TestGeometry.CreatePlanarFace(
+                new Point3D(3, 0, 0), new Point3D(3, 2, 0), new Point3D(3, 2, 3), new Point3D(3, 0, 3));
+            SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, 0.5);
+            SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, 0.5);
+
+            Panel3DSnapSolver.ExtendWalls(
+                new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), maxReach: 2.0, overshoot: 0.05, toleranceDistance: 1e-6);
+
+            // A reaches B's plane (x=3, plus the overshoot); the other end and B are untouched.
+            Assert.True(wallA.GetBoundingBox().Max.X >= 3.0, "Wall A should extend to meet wall B at x=3");
+            Assert.Equal(0.0, wallA.GetBoundingBox().Min.X, 3); // the end with no wall stays put
+            Assert.Equal(3.0, wallB.GetBoundingBox().Max.X, 3); // B untouched
+        }
+
+        [Fact]
+        public void ExtendWalls_NoWallWithinReach_LeavesWallUntouched()
+        {
+            // The perpendicular wall is 8 m away - well beyond the 1 m search reach.
+            Face3D a = TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3));
+            Face3D b = TestGeometry.CreatePlanarFace(
+                new Point3D(10, 0, 0), new Point3D(10, 2, 0), new Point3D(10, 2, 3), new Point3D(10, 0, 3));
+            SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, 0.5);
+            SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, 0.5);
+
+            Panel3DSnapSolver.ExtendWalls(
+                new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), maxReach: 1.0, overshoot: 0.05, toleranceDistance: 1e-6);
+
+            Assert.Equal(2.0, wallA.GetBoundingBox().Max.X, 3);
+        }
+
+        [Fact]
+        public void ExtendWalls_ParallelWalls_LeavesBothUntouched()
+        {
+            // Two collinear walls along X with a gap (x 0..2 and x 5..7): parallel, so neither closes onto
+            // the other - a corner needs a crossing wall, not a colinear one.
+            Face3D a = TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3));
+            Face3D b = TestGeometry.CreatePlanarFace(
+                new Point3D(5, 0, 0), new Point3D(7, 0, 0), new Point3D(7, 0, 3), new Point3D(5, 0, 3));
+            SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, 0.5);
+            SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, 0.5);
+
+            Panel3DSnapSolver.ExtendWalls(
+                new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), maxReach: 10.0, overshoot: 0.05, toleranceDistance: 1e-6);
+
+            Assert.Equal(2.0, wallA.GetBoundingBox().Max.X, 3);
+            Assert.Equal(5.0, wallB.GetBoundingBox().Min.X, 3);
+        }
+
+        // ──────────────────────────────────────────────────────────────
         // Step 1: strip internal edges + clean bucket (snap + coplanar merge)
         // ──────────────────────────────────────────────────────────────
 

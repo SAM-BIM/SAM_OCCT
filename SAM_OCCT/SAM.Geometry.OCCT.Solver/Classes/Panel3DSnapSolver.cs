@@ -58,6 +58,22 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>How far past a flat floor cap a wall is over-extended so the native trim cuts cleanly (metres).</summary>
         public double ExtendOvershoot { get; set; } = 0.05;
 
+        /// <summary>
+        /// Walls first: before the caps are touched, grow each wall sideways along its own axis until its end
+        /// runs into the next wall it points at, so the plan loop closes (the X/Y gap, not just the up/down
+        /// one). Each end is extended a different distance - only as far as the wall it finds - so corners
+        /// meet without distorting the layout. Default true.
+        /// </summary>
+        public bool ExtendWallsToWalls { get; set; } = true;
+
+        /// <summary>How far a wall end is searched along its axis for the next wall to close into (metres).
+        /// Ends with no wall within this reach are left where they are.</summary>
+        public double WallExtendReach { get; set; } = 1.0;
+
+        /// <summary>How far past the wall it meets a wall end is over-extended, so the native trim cuts the
+        /// corner cleanly (metres).</summary>
+        public double WallExtendOvershoot { get; set; } = 0.05;
+
         /// <summary>How far past a sloped roof's ridge an under-roof wall is over-extended, so it clears the
         /// highest point of the roof and the kernel can cut it along the full pitch (metres).</summary>
         public double RoofOvershoot { get; set; } = 0.5;
@@ -173,16 +189,25 @@ namespace SAM.Geometry.OCCT.Solver
                 AdjustListLength(null, CleanFace3Ds.Count, DEFAULT_Weight),
                 AdjustListLength(null, CleanFace3Ds.Count, DEFAULT_MaxExtension));
 
-            // Fill floors/roofs out to the walls so the floor/roof-to-wall gaps close.
-            if (FillCapsToWalls)
+            // ---- Walls first ----
+            // Close the plan loop: grow each wall sideways along its axis until its end meets the next wall,
+            // so the X/Y gaps (the ones the up/down extend below cannot touch) close into corners.
+            if (ExtendWallsToWalls)
             {
-                Fill(SnappedPanels, VerticalAngleTolerance, FillMargin, ToleranceDistance);
+                ExtendWalls(SnappedPanels, VerticalAngleTolerance, WallExtendReach, WallExtendOvershoot, ToleranceDistance);
             }
 
             // Extend walls up to the floor/roof above and down to the floor below (the "between floors" case).
             if (ExtendToCaps)
             {
                 Extend(SnappedPanels, VerticalAngleTolerance, ExtendOvershoot, ToleranceDistance, RoofOvershoot, ExtendToRoofs);
+            }
+
+            // ---- Then floors and roofs ----
+            // Grow the caps out to the now-closed walls so the floor/roof-to-wall gaps close.
+            if (FillCapsToWalls)
+            {
+                Fill(SnappedPanels, VerticalAngleTolerance, FillMargin, ToleranceDistance);
             }
 
             List<Face3D> snappedFace3Ds = SnappedPanels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
@@ -254,6 +279,132 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return merged.Where(x => x != null && x.IsValid()).ToList();
+        }
+
+        /// <summary>
+        /// Walls first - close the plan loop. Grow each (vertical) wall sideways along its own axis until
+        /// each end runs into the next wall it points at, so the X/Y gaps between wall ends close into
+        /// corners (the up/down <see cref="Extend"/> cannot touch these - it only moves a wall's top and
+        /// base). Each end is handled independently: it extends only as far as the nearest other wall its
+        /// axis crosses within <paramref name="maxReach"/> (a different reach per direction), plus a small
+        /// <paramref name="overshoot"/> so the native trim cuts the corner cleanly. An end with no wall in
+        /// reach, and a wall parallel to its neighbour, are left where they are. Walls are matched in plan
+        /// (XY) only - their elevations are irrelevant to whether they meet at a corner.
+        /// </summary>
+        public static void ExtendWalls(List<SnappedPanel> panels, double verticalAngleTolerance, double maxReach, double overshoot, double toleranceDistance)
+        {
+            if (panels == null || panels.Count < 2)
+            {
+                return;
+            }
+
+            // Collect the walls and their foot segments (axis + plan footprint) once, up front, so every
+            // reach is measured against the original wall lines (deterministic, order-independent).
+            List<SnappedPanel> walls = new List<SnappedPanel>();
+            List<Segment3D> feet = new List<Segment3D>();
+            foreach (SnappedPanel panel in panels)
+            {
+                if (!panel.IsVertical(verticalAngleTolerance))
+                {
+                    continue; // only walls run along the plan; floors/roofs are the caps
+                }
+
+                Segment3D foot = panel.GetBaseSegment(toleranceDistance);
+                if (foot == null)
+                {
+                    continue;
+                }
+
+                walls.Add(panel);
+                feet.Add(foot);
+            }
+
+            if (walls.Count < 2)
+            {
+                return;
+            }
+
+            for (int i = 0; i < walls.Count; i++)
+            {
+                Segment3D foot = feet[i];
+                Point3D start = foot.GetStart();
+                Point3D end = foot.GetEnd();
+                double length = foot.GetLength();
+                double dx = (end.X - start.X) / length;
+                double dy = (end.Y - start.Y) / length;
+
+                // Each end runs along its own outward direction; the reach is whatever it takes to meet the
+                // nearest wall in that direction (or 0 when none is within maxReach).
+                double endReach = NearestWallReach(end.X, end.Y, dx, dy, i, feet, maxReach, toleranceDistance);
+                double startReach = NearestWallReach(start.X, start.Y, -dx, -dy, i, feet, maxReach, toleranceDistance);
+
+                if (endReach > toleranceDistance)
+                {
+                    endReach += overshoot;
+                }
+
+                if (startReach > toleranceDistance)
+                {
+                    startReach += overshoot;
+                }
+
+                if (startReach > toleranceDistance || endReach > toleranceDistance)
+                {
+                    walls[i].ExtendHorizontal(startReach, endReach, toleranceDistance);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Distance from <c>(px, py)</c> travelling along the unit plan direction <c>(dx, dy)</c> to the
+        /// nearest other wall foot it crosses, within <paramref name="maxReach"/>; 0 when no wall is hit.
+        /// The crossing must lie within the other wall's plan extent (not just on its infinite line), and a
+        /// wall parallel to the ray is skipped. Plan (XY) only.
+        /// </summary>
+        private static double NearestWallReach(double px, double py, double dx, double dy, int self, List<Segment3D> feet, double maxReach, double tolerance)
+        {
+            double best = double.MaxValue;
+            for (int k = 0; k < feet.Count; k++)
+            {
+                if (k == self)
+                {
+                    continue;
+                }
+
+                Point3D a = feet[k].GetStart();
+                Point3D b = feet[k].GetEnd();
+                double ex = b.X - a.X;
+                double ey = b.Y - a.Y;
+
+                // Ray (p + t*d) vs segment (a + s*e), solved in plan. denom = cross(d, e).
+                double denom = dx * ey - dy * ex;
+                if (System.Math.Abs(denom) < 1e-9)
+                {
+                    continue; // parallel - a wall never closes a corner onto a parallel wall
+                }
+
+                double rx = a.X - px;
+                double ry = a.Y - py;
+                double t = (rx * ey - ry * ex) / denom; // distance along the ray to the crossing
+                double s = (rx * dy - ry * dx) / denom; // parameter along the other wall's foot
+
+                if (t <= tolerance || t > maxReach + tolerance)
+                {
+                    continue; // behind this end, or beyond the search reach
+                }
+
+                if (s < -tolerance || s > 1 + tolerance)
+                {
+                    continue; // crosses the wall's line outside the wall's own extent
+                }
+
+                if (t < best)
+                {
+                    best = t;
+                }
+            }
+
+            return best == double.MaxValue ? 0 : best;
         }
 
         /// <summary>
