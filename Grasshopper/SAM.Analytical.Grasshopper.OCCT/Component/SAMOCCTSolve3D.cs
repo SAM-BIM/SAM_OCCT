@@ -39,7 +39,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
             {
                 List<GH_SAMParam> result = new List<GH_SAMParam>();
 
-                GooPanelParam panels = new GooPanelParam() { Name = "_panels", NickName = "_panels", Description = "SAM Analytical Panels to solve. Air panels are ignored.", Access = GH_ParamAccess.list };
+                GooPanelParam panels = new GooPanelParam() { Name = "_panels", NickName = "_panels", Description = "SAM Analytical Panels to solve. Air panels are ignored. Feed the ORIGINAL panels (or SAMOCCT.Clean3D output) - Solve3D runs clean + extend + resolve itself. Do NOT feed SAMOCCT.Extend3D output: that is already-extended (overshooting) geometry and re-extending it over-merges panels and can drop walls.", Access = GH_ParamAccess.list };
                 panels.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(panels, ParamVisibility.Binding));
 
