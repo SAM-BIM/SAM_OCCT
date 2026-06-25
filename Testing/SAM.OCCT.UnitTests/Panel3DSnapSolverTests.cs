@@ -491,6 +491,27 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void ExtendWalls_TwoShortWallsAtCorner_BothExtendToMeet()
+        {
+            // Wall A along X at y=0 (x 0..2); wall B along Y at x=2.5 (y 0.5..2). NEITHER reaches the corner
+            // (2.5, 0): A's +X end stops at x=2, B's -Y end stops at y=0.5, and each end's ray misses the
+            // other's extent. The cost-based ExtensionSolver extends BOTH ends to the shared corner - the
+            // case the old per-end ray scan left open.
+            Face3D a = TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3));
+            Face3D b = TestGeometry.CreatePlanarFace(
+                new Point3D(2.5, 0.5, 0), new Point3D(2.5, 2, 0), new Point3D(2.5, 2, 3), new Point3D(2.5, 0.5, 3));
+            SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, maxExtension: 1.0);
+            SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, maxExtension: 1.0);
+
+            Panel3DSnapSolver.ExtendWalls(
+                new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6);
+
+            Assert.True(wallA.GetBoundingBox().Max.X >= 2.5, "Wall A should extend to the corner x=2.5");
+            Assert.True(wallB.GetBoundingBox().Min.Y <= 0.0, "Wall B should extend to the corner y=0");
+        }
+
+        [Fact]
         public void ExtendWalls_NoWallWithinReach_LeavesWallUntouched()
         {
             // The perpendicular wall is 8 m away - well beyond the 1 m MaxExtend reach.

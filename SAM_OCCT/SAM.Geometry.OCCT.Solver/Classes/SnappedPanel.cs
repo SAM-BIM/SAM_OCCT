@@ -599,6 +599,52 @@ namespace SAM.Geometry.OCCT.Solver
             return true;
         }
 
+        /// <summary>
+        /// Re-extrudes this (vertical) wall onto a new plan foot, given the foot's two ends in plan (X, Y).
+        /// The wall's base and top elevations are preserved; the foot is rebuilt at the base Z and extruded
+        /// up. Unlike <see cref="ExtendHorizontal"/> (which only grows along the existing axis), this accepts
+        /// an arbitrary new foot - the extended/trimmed segment the plan-loop solver resolved - so a wall can
+        /// be both lengthened and shortened to meet its junctions. No-op when the new foot is degenerate.
+        /// </summary>
+        public bool SetVerticalFootprint(Geometry.Planar.Point2D newStart, Geometry.Planar.Point2D newEnd, double tolerance)
+        {
+            if (face3D == null || plane == null || newStart == null || newEnd == null)
+            {
+                return false;
+            }
+
+            BoundingBox3D boundingBox3D = face3D.GetBoundingBox();
+            if (boundingBox3D == null)
+            {
+                return false;
+            }
+
+            double baseZ = boundingBox3D.Min.Z;
+            double topZ = boundingBox3D.Max.Z;
+            if (topZ - baseZ <= tolerance)
+            {
+                return false;
+            }
+
+            Segment3D foot = new Segment3D(
+                new Point3D(newStart.X, newStart.Y, baseZ),
+                new Point3D(newEnd.X, newEnd.Y, baseZ));
+            if (foot.GetLength() <= tolerance)
+            {
+                return false;
+            }
+
+            Face3D extended = Geometry.Spatial.Create.Face3D(foot, new Vector3D(0, 0, topZ - baseZ));
+            if (extended == null || !extended.IsValid())
+            {
+                return false;
+            }
+
+            face3D = extended;
+            plane = extended.GetPlane();
+            return true;
+        }
+
         private static IClosedPlanar3D ProjectLoop(IClosedPlanar3D loop, Plane backerPlane)
         {
             List<Point3D> point3Ds = (loop as ISegmentable3D)?.GetPoints();

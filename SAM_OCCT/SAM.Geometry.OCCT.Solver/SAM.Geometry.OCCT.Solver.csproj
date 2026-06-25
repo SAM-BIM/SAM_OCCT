@@ -28,6 +28,11 @@
     <Reference Include="SAM.Math">
       <HintPath>..\..\..\SAM\build\SAM.Math.dll</HintPath>
     </Reference>
+    <!-- Reuse the proven 2D ExtensionSolver (cost-based extend/trim of wall axes to junctions) for the
+         plan-loop close in 3D, instead of re-porting it. Lives in the SAM_Solver build. -->
+    <Reference Include="SAM.Geometry.Solver">
+      <HintPath>..\..\..\SAM_Solver\build\SAM.Geometry.Solver.dll</HintPath>
+    </Reference>
     <!-- Planar.Query.Offset overload resolution exposes NetTopologySuite's JoinStyle; needed to compile the cap-fill offset. -->
     <Reference Include="NetTopologySuite">
       <HintPath>..\..\..\SAM\build\NetTopologySuite.dll</HintPath>

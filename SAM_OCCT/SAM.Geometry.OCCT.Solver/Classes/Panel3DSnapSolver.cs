@@ -501,98 +501,89 @@ namespace SAM.Geometry.OCCT.Solver
                 return;
             }
 
+            // Hand the wall foot-lines (in plan) to the proven 2D ExtensionSolver: it builds each end's
+            // extension reach (capped at min(MaxExtension, length * ExtensionLimitLengthRatio)), registers
+            // the intersections of every extended end against every other wall, and greedily resolves each
+            // naked end to the cheapest junction - extending BOTH walls to a shared corner where neither
+            // currently reaches the other, and trimming overshoots. This closes L-corners and T-junctions
+            // the old per-end ray scan (which only reached a wall it already crossed) left open.
+            List<Geometry.Planar.Segment2D> lines = new List<Geometry.Planar.Segment2D>(walls.Count);
+            List<double> maxExtensions = new List<double>(walls.Count);
+            foreach (Segment3D foot in feet)
+            {
+                Point3D s = foot.GetStart();
+                Point3D e = foot.GetEnd();
+                lines.Add(new Geometry.Planar.Segment2D(new Geometry.Planar.Point2D(s.X, s.Y), new Geometry.Planar.Point2D(e.X, e.Y)));
+            }
+
+            foreach (SnappedPanel wall in walls)
+            {
+                maxExtensions.Add(System.Math.Max(0, wall.MaxExtension));
+            }
+
+            List<Geometry.Planar.Segment2D> resolved;
+            try
+            {
+                resolved = new global::SAM.Geometry.Solver.ExtensionSolver(lines, maxExtensions, toleranceDistance).Solve();
+            }
+            catch
+            {
+                return; // never let the plan-loop close abort the solve
+            }
+
+            if (resolved == null || resolved.Count != walls.Count)
+            {
+                return;
+            }
+
             for (int i = 0; i < walls.Count; i++)
             {
-                Segment3D foot = feet[i];
-                Point3D start = foot.GetStart();
-                Point3D end = foot.GetEnd();
-                double length = foot.GetLength();
-
-                // This wall's own reach budget (Solver MaxExtend), capped at a fraction of the wall's own
-                // length so a short stub (e.g. a pier between two door openings) cannot shoot out unrealistically
-                // far. Mirrors the 2D ExtensionSolver's min(MaxExtension, length * ExtensionLimitLengthRatio).
-                // Non-positive => the wall stays put.
-                double maxReach = System.Math.Min(walls[i].MaxExtension, length * EXTENSION_LIMIT_LENGTH_RATIO);
-                if (maxReach <= toleranceDistance)
+                Geometry.Planar.Segment2D original = lines[i];
+                Geometry.Planar.Segment2D result = resolved[i];
+                if (result == null)
                 {
                     continue;
                 }
 
-                double dx = (end.X - start.X) / length;
-                double dy = (end.Y - start.Y) / length;
+                Geometry.Planar.Point2D oStart = original.GetStart();
+                Geometry.Planar.Point2D oEnd = original.GetEnd();
+                Geometry.Planar.Point2D rStart = result.GetStart();
+                Geometry.Planar.Point2D rEnd = result.GetEnd();
 
-                // Each end runs along its own outward direction; the reach is whatever it takes to meet the
-                // nearest wall in that direction (or 0 when none is within this wall's MaxExtend).
-                double endReach = NearestWallReach(end.X, end.Y, dx, dy, i, feet, maxReach, toleranceDistance);
-                double startReach = NearestWallReach(start.X, start.Y, -dx, -dy, i, feet, maxReach, toleranceDistance);
-
-                if (endReach > toleranceDistance)
-                {
-                    endReach += overshoot;
-                }
-
-                if (startReach > toleranceDistance)
-                {
-                    startReach += overshoot;
-                }
-
-                if (startReach > toleranceDistance || endReach > toleranceDistance)
-                {
-                    walls[i].ExtendHorizontal(startReach, endReach, toleranceDistance);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Distance from <c>(px, py)</c> travelling along the unit plan direction <c>(dx, dy)</c> to the
-        /// nearest other wall foot it crosses, within <paramref name="maxReach"/>; 0 when no wall is hit.
-        /// The crossing must lie within the other wall's plan extent (not just on its infinite line), and a
-        /// wall parallel to the ray is skipped. Plan (XY) only.
-        /// </summary>
-        private static double NearestWallReach(double px, double py, double dx, double dy, int self, List<Segment3D> feet, double maxReach, double tolerance)
-        {
-            double best = double.MaxValue;
-            for (int k = 0; k < feet.Count; k++)
-            {
-                if (k == self)
+                // Unchanged within tolerance -> leave the wall exactly where it was (no needless move).
+                if (rStart.Distance(oStart) <= toleranceDistance && rEnd.Distance(oEnd) <= toleranceDistance)
                 {
                     continue;
                 }
 
-                Point3D a = feet[k].GetStart();
-                Point3D b = feet[k].GetEnd();
-                double ex = b.X - a.X;
-                double ey = b.Y - a.Y;
-
-                // Ray (p + t*d) vs segment (a + s*e), solved in plan. denom = cross(d, e).
-                double denom = dx * ey - dy * ex;
-                if (System.Math.Abs(denom) < 1e-9)
+                // Over-extend the ends that grew (not the trimmed ones) by the overshoot, so the native
+                // MakerVolume gets a clean crossing at the corner rather than an exact touch.
+                double length = original.GetLength();
+                if (length <= toleranceDistance)
                 {
-                    continue; // parallel - a wall never closes a corner onto a parallel wall
+                    continue;
                 }
 
-                double rx = a.X - px;
-                double ry = a.Y - py;
-                double t = (rx * ey - ry * ex) / denom; // distance along the ray to the crossing
-                double s = (rx * dy - ry * dx) / denom; // parameter along the other wall's foot
+                double ux = (oEnd.X - oStart.X) / length;
+                double uy = (oEnd.Y - oStart.Y) / length;
+                double startParam = (rStart.X - oStart.X) * ux + (rStart.Y - oStart.Y) * uy; // <0 => start end extended
+                double endParam = (rEnd.X - oStart.X) * ux + (rEnd.Y - oStart.Y) * uy;       // >length => end end extended
 
-                if (t <= tolerance || t > maxReach + tolerance)
+                double nsX = rStart.X, nsY = rStart.Y, neX = rEnd.X, neY = rEnd.Y;
+                if (overshoot > toleranceDistance && startParam < -toleranceDistance)
                 {
-                    continue; // behind this end, or beyond the search reach
+                    nsX -= ux * overshoot;
+                    nsY -= uy * overshoot;
                 }
 
-                if (s < -tolerance || s > 1 + tolerance)
+                if (overshoot > toleranceDistance && endParam > length + toleranceDistance)
                 {
-                    continue; // crosses the wall's line outside the wall's own extent
+                    neX += ux * overshoot;
+                    neY += uy * overshoot;
                 }
 
-                if (t < best)
-                {
-                    best = t;
-                }
+                walls[i].SetVerticalFootprint(new Geometry.Planar.Point2D(nsX, nsY), new Geometry.Planar.Point2D(neX, neY), toleranceDistance);
             }
-
-            return best == double.MaxValue ? 0 : best;
         }
 
         /// <summary>
