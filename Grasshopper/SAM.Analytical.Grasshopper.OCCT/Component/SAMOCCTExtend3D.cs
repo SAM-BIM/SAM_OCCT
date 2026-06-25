@@ -25,7 +25,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("a7e4c92f-1b53-4d8a-9f26-3c70e1b8d4a5");
 
-        public override string LatestComponentVersion => "0.2.0";
+        public override string LatestComponentVersion => "0.3.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -84,6 +84,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 result.Add(new GH_SAMParam(new GooPanelParam() { Name = "Panels", NickName = "Panels", Description = "Filled/extended panels (pre-resolve). Floors/roofs grown out to the walls and walls extended to their caps (overshooting); not yet trimmed. Carry BucketSize/Weight so SAMAnalytical.Visualize draws the capture slab (bucket).", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new GooSAMGeometryParam() { Name = "Slits", NickName = "Slits", Description = "Remaining double-wall/slit diagnostics as short connector Segment3Ds between near-parallel wall axes. Same detection as AutoTuneSolver.", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new GooPanelParam() { Name = "SlitPanels", NickName = "SlitPanels", Description = "Panels whose section axes touch a remaining slit. Use these to spot double-wall/problem panels before Solve3D.", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
+                result.Add(new GH_SAMParam(new GooPanelParam() { Name = "OpenPanels", NickName = "OpenPanels", Description = "Walls whose feet do NOT close into a loop in plan after the extend - they still have an end no other wall meets. Raise their MaxExtend (SolverParameter.MaxExtend) or bucket size and re-run so floors/roofs can fill a closed polysurface.", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Point() { Name = "OpenEnds", NickName = "OpenEnds", Description = "Locations of the open (naked-in-plan) wall-foot ends - the corners where the loop does not close.", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "Diagnostics", NickName = "Diagnostics", Description = "Diagnostics", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "Successful", NickName = "Successful", Description = "Run successfully?", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
                 return result.ToArray();
@@ -180,6 +182,27 @@ namespace SAM.Analytical.Grasshopper.OCCT
             if (index != -1)
             {
                 dataAccess.SetDataList(index, slitPanels?.Where(x => x != null).Select(x => new GooPanel(x)));
+            }
+
+            // Plan-closure diagnostic: the walls whose feet still leave an open end (no other wall meets them),
+            // and the open-corner locations. These are the panels to upgrade (MaxExtend / bucket) so the loops
+            // close and floors/roofs can fill a closed polysurface.
+            List<Panel> openPanels = panels.OpenPanels3D(out List<Point3D> openEndPoint3Ds, out List<string> openDiagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor);
+            if (openDiagnostics != null)
+            {
+                diagnostics.AddRange(openDiagnostics);
+            }
+
+            index = Params.IndexOfOutputParam("OpenPanels");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, openPanels?.Where(x => x != null).Select(x => new GooPanel(x)));
+            }
+
+            index = Params.IndexOfOutputParam("OpenEnds");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, openEndPoint3Ds?.Where(x => x != null).Select(x => new global::Rhino.Geometry.Point3d(x.X, x.Y, x.Z)));
             }
 
             index = Params.IndexOfOutputParam("Diagnostics");
