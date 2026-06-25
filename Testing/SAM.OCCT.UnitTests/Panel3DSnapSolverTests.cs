@@ -467,6 +467,55 @@ namespace SAM.OCCT.UnitTests
         }
 
         // ──────────────────────────────────────────────────────────────
+        // Panel3DSnapSolver.OpenWallEnds (plan-closure diagnostic)
+        // ──────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void OpenWallEnds_ClosedSquare_ReturnsNoOpenEnds()
+        {
+            // Four vertical walls whose feet form a closed 2x2 plan loop: every end meets a neighbour.
+            List<SnappedPanel> walls = ClosedSquareWalls();
+
+            List<Point3D> openEnds = Panel3DSnapSolver.OpenWallEnds(
+                walls, 20 * (System.Math.PI / 180), connectionTolerance: 0.1, toleranceDistance: 1e-6, out List<Face3D> openFaces);
+
+            Assert.Empty(openEnds);
+            Assert.Empty(openFaces);
+        }
+
+        [Fact]
+        public void OpenWallEnds_OpenUShape_ReturnsTheTwoFreeEnds()
+        {
+            // Drop the top wall (0,2)-(2,2): the two ends that met it - (2,2) and (0,2) - are now open.
+            List<SnappedPanel> walls = ClosedSquareWalls();
+            walls.RemoveAt(2); // the top wall
+
+            List<Point3D> openEnds = Panel3DSnapSolver.OpenWallEnds(
+                walls, 20 * (System.Math.PI / 180), connectionTolerance: 0.1, toleranceDistance: 1e-6, out List<Face3D> openFaces);
+
+            Assert.Equal(2, openEnds.Count);
+            Assert.Equal(2, openFaces.Count); // the two walls that owned the now-open ends
+            Assert.Contains(openEnds, p => System.Math.Abs(p.X - 2) < 1e-3 && System.Math.Abs(p.Y - 2) < 1e-3);
+            Assert.Contains(openEnds, p => System.Math.Abs(p.X - 0) < 1e-3 && System.Math.Abs(p.Y - 2) < 1e-3);
+        }
+
+        /// <summary>Four vertical walls (z 0..3) whose feet trace a closed 2x2 plan square.</summary>
+        private static List<SnappedPanel> ClosedSquareWalls()
+        {
+            return new List<SnappedPanel>
+            {
+                new SnappedPanel(0, TestGeometry.CreatePlanarFace( // (0,0)->(2,0)
+                    new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.4),
+                new SnappedPanel(1, TestGeometry.CreatePlanarFace( // (2,0)->(2,2)
+                    new Point3D(2, 0, 0), new Point3D(2, 2, 0), new Point3D(2, 2, 3), new Point3D(2, 0, 3)), 1, 0.3, 0.4),
+                new SnappedPanel(2, TestGeometry.CreatePlanarFace( // (0,2)->(2,2)
+                    new Point3D(0, 2, 0), new Point3D(2, 2, 0), new Point3D(2, 2, 3), new Point3D(0, 2, 3)), 1, 0.3, 0.4),
+                new SnappedPanel(3, TestGeometry.CreatePlanarFace( // (0,0)->(0,2)
+                    new Point3D(0, 0, 0), new Point3D(0, 2, 0), new Point3D(0, 2, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.4),
+            };
+        }
+
+        // ──────────────────────────────────────────────────────────────
         // Step 1: strip internal edges + clean bucket (snap + coplanar merge)
         // ──────────────────────────────────────────────────────────────
 

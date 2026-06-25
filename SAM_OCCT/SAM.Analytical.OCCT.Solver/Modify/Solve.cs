@@ -214,6 +214,74 @@ namespace SAM.Analytical.OCCT.Solver
                 face3Ds.Count,
                 result.Count));
 
+            // Plan-closure check: how many wall ends are still open after the managed extend. Non-zero means
+            // the wall loops do not close there, so floors/roofs cannot fill a closed polysurface - raise
+            // MaxExtend or bucket size on the OpenPanels3D panels at those corners.
+            int openWallEndCount = solver.OpenWallEndPoint3Ds?.Count ?? 0;
+            diagnostics.Add(string.Format(
+                "SAM_OCCT_EXTEND3D_OPEN_ENDS: {0} wall end(s) still open in plan after extend ({1} wall panel(s) to upgrade).",
+                openWallEndCount,
+                solver.OpenWallFace3Ds?.Count ?? 0));
+
+            return result;
+        }
+
+        /// <summary>
+        /// Plan-closure diagnostic. Runs the managed clean + extend (no native resolve), then reports which
+        /// walls still do NOT close into a loop in plan: their feet leave an end that no other wall meets.
+        /// Until those ends close, the floors/roofs cannot fill a closed polysurface and the native
+        /// <c>Create.Shells</c> (MakerVolume) will not form cells. The returned panels are the walls to
+        /// upgrade - raise their <c>SolverParameter.MaxExtend</c> or bucket size and re-run - and
+        /// <paramref name="openEndPoint3Ds"/> marks the exact open corners (drop them in Rhino to see the gaps).
+        /// </summary>
+        /// <param name="panels">Panels to diagnose. Not modified; new panels are returned.</param>
+        /// <param name="openEndPoint3Ds">Locations of wall-foot ends that no other wall meets in plan.</param>
+        /// <param name="diagnostics">Coded diagnostics describing the diagnosis.</param>
+        /// <param name="weights">Optional per-panel backer weights; null reads SolverParameter.Weight (default).</param>
+        /// <param name="maxExtends">Optional per-panel lateral extend reach; null reads SolverParameter.MaxExtend (default 0.4 m).</param>
+        /// <param name="minBucketSize">Lower bound on the capture half-width, in metres.</param>
+        /// <param name="thicknessFactor">Fraction of construction thickness used as the capture half-width.</param>
+        /// <param name="connectionTolerance">How close another wall must come (in plan) for an end to count as met.</param>
+        /// <returns>The open wall panels (carrying their BucketSize/Weight/MaxExtend stamps), or null when no usable panels were supplied.</returns>
+        public static List<Panel> OpenPanels3D(
+            this IEnumerable<Panel> panels,
+            out List<Point3D> openEndPoint3Ds,
+            out List<string> diagnostics,
+            IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
+            double minBucketSize = 0.4,
+            double thicknessFactor = 0.6,
+            double connectionTolerance = 0.1)
+        {
+            openEndPoint3Ds = new List<Point3D>();
+            diagnostics = new List<string>();
+
+            if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
+            {
+                diagnostics.Add("SAM_OCCT_OPENPANELS3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.");
+                return null;
+            }
+
+            List<double> effectiveWeights = ResolveWeights(weights, sources);
+            List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources);
+
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends)
+            {
+                StopAfterExtend = true,
+                ConnectionTolerance = connectionTolerance
+            };
+            solver.Execute(null);
+
+            openEndPoint3Ds = solver.OpenWallEndPoint3Ds ?? new List<Point3D>();
+
+            List<Face3D> openWallFace3Ds = solver.OpenWallFace3Ds ?? new List<Face3D>();
+            List<Panel> result = BuildPanels(openWallFace3Ds, sources, bucketSizes, effectiveWeights, effectiveMaxExtends, Tolerance.Distance);
+
+            diagnostics.Add(string.Format(
+                "SAM_OCCT_OPENPANELS3D_RESULT: {0} wall(s) still open in plan ({1} open end(s)); raise MaxExtend or bucket size on these and re-run.",
+                result.Count,
+                openEndPoint3Ds.Count));
+
             return result;
         }
 

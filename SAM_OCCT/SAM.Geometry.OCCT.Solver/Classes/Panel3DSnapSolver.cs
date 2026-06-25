@@ -142,6 +142,24 @@ namespace SAM.Geometry.OCCT.Solver
         /// air-panel candidates: the analytical wrapper turns them into <c>PanelType.Air</c> panels.</summary>
         public List<Face3D> HoleFillFace3Ds { get; private set; } = new List<Face3D>();
 
+        /// <summary>
+        /// Plan-closure diagnostic, measured on the walls AFTER the managed extend/fill but BEFORE the native
+        /// resolve: the locations of wall-foot endpoints that no other wall meets in plan (XY). A naked end
+        /// here means the wall loop is still open at that corner, so floors/roofs cannot fill into a closed
+        /// polysurface. Empty means every wall end is met by another wall (the loops close). These are the
+        /// spots to upgrade extend or bucket size. See also <see cref="OpenWallFace3Ds"/>.
+        /// </summary>
+        public List<Point3D> OpenWallEndPoint3Ds { get; private set; } = new List<Point3D>();
+
+        /// <summary>The wall faces that still have at least one open (naked-in-plan) end after the managed
+        /// extend/fill - the panels to upgrade (raise MaxExtend / bucket) so their loop closes.</summary>
+        public List<Face3D> OpenWallFace3Ds { get; private set; } = new List<Face3D>();
+
+        /// <summary>How close (in plan) another wall foot must come to a wall end for that end to count as
+        /// "met" (closed). Above the extend overshoot so a wall extended up to its neighbour reads as
+        /// connected; tight enough to flag a real gap. Default 0.1 m.</summary>
+        public double ConnectionTolerance { get; set; } = 0.1;
+
         public Panel3DSnapSolver(
             IEnumerable<Face3D> face3Ds,
             IEnumerable<double> bucketSizes = null,
@@ -162,6 +180,8 @@ namespace SAM.Geometry.OCCT.Solver
             NakedEdgePoint3Ds = new List<Point3D>();
             HoleFillFace3Ds = new List<Face3D>();
             BucketMergedFace3Ds = new List<Face3D>();
+            OpenWallEndPoint3Ds = new List<Point3D>();
+            OpenWallFace3Ds = new List<Face3D>();
             NativeResolved = false;
             ResolvedCellCount = 0;
 
@@ -217,6 +237,11 @@ namespace SAM.Geometry.OCCT.Solver
             {
                 Fill(SnappedPanels, VerticalAngleTolerance, FillMargin, ToleranceDistance);
             }
+
+            // Plan-closure diagnostic: which wall ends are STILL open after the managed extend? These are the
+            // panels to upgrade (raise MaxExtend / bucket) before the floors/roofs can fill a closed polysurface.
+            OpenWallEndPoint3Ds = OpenWallEnds(SnappedPanels, VerticalAngleTolerance, ConnectionTolerance, ToleranceDistance, out List<Face3D> openWallFace3Ds);
+            OpenWallFace3Ds = openWallFace3Ds;
 
             List<Face3D> snappedFace3Ds = SnappedPanels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
             ResolvedFace3Ds = snappedFace3Ds;
@@ -426,6 +451,109 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return best == double.MaxValue ? 0 : best;
+        }
+
+        /// <summary>
+        /// Plan-closure diagnostic. For each wall (vertical panel), checks whether each of its two foot
+        /// endpoints is met by another wall in plan (XY) - i.e. some other wall's foot passes within
+        /// <paramref name="connectionTolerance"/> of the endpoint (an L-corner, a T-junction, or a crossing).
+        /// An endpoint no wall meets is "open": the wall loop does not close there, so a floor/roof cannot
+        /// fill into a closed polysurface around it. Returns the open endpoint locations (the corners to fix)
+        /// and, via <paramref name="openWallFace3Ds"/>, the wall faces that own at least one open end (the
+        /// panels to upgrade - raise MaxExtend or bucket size). This is the managed, native-free analogue of
+        /// the 2D solver's naked-node marking, and the signal a future auto-tune would escalate on.
+        /// </summary>
+        public static List<Point3D> OpenWallEnds(List<SnappedPanel> panels, double verticalAngleTolerance, double connectionTolerance, double toleranceDistance, out List<Face3D> openWallFace3Ds)
+        {
+            List<Point3D> openEnds = new List<Point3D>();
+            openWallFace3Ds = new List<Face3D>();
+            if (panels == null || panels.Count == 0)
+            {
+                return openEnds;
+            }
+
+            // Collect the walls and their plan feet once.
+            List<SnappedPanel> walls = new List<SnappedPanel>();
+            List<Segment3D> feet = new List<Segment3D>();
+            foreach (SnappedPanel panel in panels)
+            {
+                if (!panel.IsVertical(verticalAngleTolerance))
+                {
+                    continue;
+                }
+
+                Segment3D foot = panel.GetBaseSegment(toleranceDistance);
+                if (foot == null)
+                {
+                    continue;
+                }
+
+                walls.Add(panel);
+                feet.Add(foot);
+            }
+
+            for (int i = 0; i < walls.Count; i++)
+            {
+                Point3D start = feet[i].GetStart();
+                Point3D end = feet[i].GetEnd();
+
+                bool startOpen = !EndMetByAnotherWall(start, i, feet, connectionTolerance);
+                bool endOpen = !EndMetByAnotherWall(end, i, feet, connectionTolerance);
+
+                if (startOpen)
+                {
+                    openEnds.Add(start);
+                }
+
+                if (endOpen)
+                {
+                    openEnds.Add(end);
+                }
+
+                if ((startOpen || endOpen) && walls[i].Face3D != null)
+                {
+                    openWallFace3Ds.Add(walls[i].Face3D);
+                }
+            }
+
+            return openEnds;
+        }
+
+        /// <summary>True when some wall other than <paramref name="self"/> passes within
+        /// <paramref name="connectionTolerance"/> of the endpoint in plan (XY), so the end is met (closed).</summary>
+        private static bool EndMetByAnotherWall(Point3D endpoint, int self, List<Segment3D> feet, double connectionTolerance)
+        {
+            for (int k = 0; k < feet.Count; k++)
+            {
+                if (k == self)
+                {
+                    continue;
+                }
+
+                Point3D a = feet[k].GetStart();
+                Point3D b = feet[k].GetEnd();
+                if (PlanDistancePointToSegment(endpoint.X, endpoint.Y, a.X, a.Y, b.X, b.Y) <= connectionTolerance)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>Shortest distance in the XY plane from point (px, py) to the segment (ax, ay)-(bx, by).</summary>
+        private static double PlanDistancePointToSegment(double px, double py, double ax, double ay, double bx, double by)
+        {
+            double ex = bx - ax;
+            double ey = by - ay;
+            double lengthSquared = ex * ex + ey * ey;
+            double t = lengthSquared <= 1e-18 ? 0 : ((px - ax) * ex + (py - ay) * ey) / lengthSquared;
+            t = System.Math.Max(0, System.Math.Min(1, t));
+            double cx = ax + t * ex;
+            double cy = ay + t * ey;
+            double dx = px - cx;
+            double dy = py - cy;
+            return System.Math.Sqrt(dx * dx + dy * dy);
         }
 
         /// <summary>
