@@ -23,6 +23,9 @@ namespace SAM.Analytical.OCCT.Solver
         /// <param name="nakedPoint3Ds">Locations of naked (free) boundary edges reported by the validator.</param>
         /// <param name="diagnostics">Coded diagnostics describing the solve.</param>
         /// <param name="weights">Optional per-panel backer weights (aligned with the non-air panel order); null uses the default.</param>
+        /// <param name="maxExtends">Optional per-panel lateral extend reach (the Solver's <c>SolverParameter.MaxExtend</c>),
+        /// how far a wall may grow sideways to meet the next wall and close the plan loop; null reads
+        /// <c>SolverParameter.MaxExtend</c> off each panel, falling back to 0.4 m.</param>
         /// <param name="minBucketSize">Lower bound on the capture half-width, in metres.</param>
         /// <param name="thicknessFactor">Fraction of construction thickness used as the capture half-width.</param>
         /// <param name="options">OCCT build options (distance/fuzzy/glue tolerances).</param>
@@ -32,6 +35,7 @@ namespace SAM.Analytical.OCCT.Solver
             out List<Point3D> nakedPoint3Ds,
             out List<string> diagnostics,
             IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
             double minBucketSize = 0.4,
             double thicknessFactor = 0.6,
             OcctBuildOptions options = null)
@@ -46,8 +50,9 @@ namespace SAM.Analytical.OCCT.Solver
             }
 
             List<double> effectiveWeights = ResolveWeights(weights, sources);
+            List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources);
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights);
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends);
             solver.Execute(options);
 
             nakedPoint3Ds = solver.NakedEdgePoint3Ds ?? new List<Point3D>();
@@ -60,7 +65,7 @@ namespace SAM.Analytical.OCCT.Solver
             }
 
             double tolerance = options?.Tolerance ?? Tolerance.Distance;
-            List<Panel> result = BuildPanels(resolved, sources, bucketSizes, effectiveWeights, tolerance);
+            List<Panel> result = BuildPanels(resolved, sources, bucketSizes, effectiveWeights, effectiveMaxExtends, tolerance);
 
             // Step-2 gap-fill faces (residual naked-boundary loops) become air panels: each is emitted as a
             // PanelType.Air panel (null construction), a virtual boundary rather than solid wall.
@@ -103,6 +108,8 @@ namespace SAM.Analytical.OCCT.Solver
         /// <param name="panels">Panels to clean. Not modified; new panels are returned.</param>
         /// <param name="diagnostics">Coded diagnostics describing the clean pass.</param>
         /// <param name="weights">Optional per-panel backer weights (aligned with the non-air panel order); null uses the default.</param>
+        /// <param name="maxExtends">Optional per-panel lateral extend reach (the Solver's <c>SolverParameter.MaxExtend</c>);
+        /// null reads it off each panel, falling back to 0.4 m. Carried through and stamped for <c>SAMAnalytical.Visualize</c>.</param>
         /// <param name="minBucketSize">Lower bound on the capture half-width, in metres.</param>
         /// <param name="thicknessFactor">Fraction of construction thickness used as the capture half-width.</param>
         /// <returns>The clean panels, or null when no usable panels were supplied.</returns>
@@ -110,6 +117,7 @@ namespace SAM.Analytical.OCCT.Solver
             this IEnumerable<Panel> panels,
             out List<string> diagnostics,
             IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
             double minBucketSize = 0.4,
             double thicknessFactor = 0.6)
         {
@@ -122,8 +130,9 @@ namespace SAM.Analytical.OCCT.Solver
             }
 
             List<double> effectiveWeights = ResolveWeights(weights, sources);
+            List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources);
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights) { StopAfterClean = true };
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true };
             solver.Execute(null);
 
             List<Face3D> clean = solver.CleanFace3Ds;
@@ -133,7 +142,7 @@ namespace SAM.Analytical.OCCT.Solver
                 return new List<Panel>();
             }
 
-            List<Panel> result = BuildPanels(clean, sources, bucketSizes, effectiveWeights, Tolerance.Distance);
+            List<Panel> result = BuildPanels(clean, sources, bucketSizes, effectiveWeights, effectiveMaxExtends, Tolerance.Distance);
 
             diagnostics.Add(string.Format(
                 "SAM_OCCT_CLEAN3D_RESULT: Cleaned {0} panel(s) into {1} clean panel(s).",
@@ -148,11 +157,15 @@ namespace SAM.Analytical.OCCT.Solver
         /// floors/roofs out to the surrounding walls, and extends walls up to the cap above / down to the floor
         /// below (overshooting their caps). Returns those filled/extended panels so the pre-resolve geometry can
         /// be reviewed before <see cref="Solve3D"/> runs the native MakerVolume split - no cells are formed and
-        /// no walls are trimmed here. Output panels carry the bucket/weight stamps for <c>SAMAnalytical.Visualize</c>.
+        /// no walls are trimmed here. Output panels carry the bucket/weight/max-extend stamps for
+        /// <c>SAMAnalytical.Visualize</c>, so the extend assumptions can be seen (and the per-panel
+        /// <c>SolverParameter.MaxExtend</c> adjusted) before solving.
         /// </summary>
         /// <param name="panels">Panels to fill/extend. Not modified; new panels are returned.</param>
         /// <param name="diagnostics">Coded diagnostics describing the pass.</param>
         /// <param name="weights">Optional per-panel backer weights (aligned with the non-air panel order); null uses the default.</param>
+        /// <param name="maxExtends">Optional per-panel lateral extend reach (the Solver's <c>SolverParameter.MaxExtend</c>);
+        /// null reads <c>SolverParameter.MaxExtend</c> off each panel, falling back to 0.4 m.</param>
         /// <param name="minBucketSize">Lower bound on the capture half-width, in metres.</param>
         /// <param name="thicknessFactor">Fraction of construction thickness used as the capture half-width.</param>
         /// <param name="fillMargin">How far floors/roofs are grown outward past the walls (and walls past their caps), in metres.</param>
@@ -161,6 +174,7 @@ namespace SAM.Analytical.OCCT.Solver
             this IEnumerable<Panel> panels,
             out List<string> diagnostics,
             IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
             double minBucketSize = 0.4,
             double thicknessFactor = 0.6,
             double fillMargin = 0.5)
@@ -174,10 +188,12 @@ namespace SAM.Analytical.OCCT.Solver
             }
 
             List<double> effectiveWeights = ResolveWeights(weights, sources);
+            List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources);
 
-            // StopAfterExtend keeps the pass managed (native-free, like Clean3D): clean bucket -> fill caps to
-            // walls -> extend walls to caps, then stop before the native MakerVolume split (Solve3D's job).
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights)
+            // StopAfterExtend keeps the pass managed (native-free, like Clean3D): clean bucket -> extend walls
+            // to the next wall (close the plan loop) -> extend walls to caps -> fill caps to walls, then stop
+            // before the native MakerVolume split (Solve3D's job).
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends)
             {
                 StopAfterExtend = true,
                 FillMargin = fillMargin
@@ -191,7 +207,7 @@ namespace SAM.Analytical.OCCT.Solver
                 return new List<Panel>();
             }
 
-            List<Panel> result = BuildPanels(extended, sources, bucketSizes, effectiveWeights, Tolerance.Distance);
+            List<Panel> result = BuildPanels(extended, sources, bucketSizes, effectiveWeights, effectiveMaxExtends, Tolerance.Distance);
 
             diagnostics.Add(string.Format(
                 "SAM_OCCT_EXTEND3D_RESULT: Filled/extended {0} panel(s) into {1} panel(s) (pre-resolve; the split runs in Solve3D).",
@@ -233,10 +249,11 @@ namespace SAM.Analytical.OCCT.Solver
 
         /// <summary>
         /// Rebuilds Panels from solved/clean faces, carrying construction/type from the nearest source and
-        /// stamping the backer <c>Weight</c> and capture-slab <c>BucketSize</c> that source used, so the
-        /// output feeds <c>SAMAnalytical.Visualize</c> (which reads those <see cref="SolverParameter"/>s).
+        /// stamping the backer <c>Weight</c>, capture-slab <c>BucketSize</c> and lateral <c>MaxExtend</c> that
+        /// source used, so the output feeds <c>SAMAnalytical.Visualize</c> (which reads those
+        /// <see cref="SolverParameter"/>s) - letting the extend assumptions be seen and adjusted.
         /// </summary>
-        private static List<Panel> BuildPanels(List<Face3D> face3Ds, List<Panel> sources, List<double> bucketSizes, List<double> weights, double tolerance)
+        private static List<Panel> BuildPanels(List<Face3D> face3Ds, List<Panel> sources, List<double> bucketSizes, List<double> weights, List<double> maxExtends, double tolerance)
         {
             List<Panel> result = new List<Panel>();
             foreach (Face3D face3D in face3Ds)
@@ -254,9 +271,9 @@ namespace SAM.Analytical.OCCT.Solver
                     continue;
                 }
 
-                // Stamp the bucket size + backer weight used for this panel so the capture slab can be
-                // drawn directly from the Clean3D/Solve3D output (the half-width band SAMAnalytical.Visualize
-                // renders in the middle of the panel).
+                // Stamp the bucket size + backer weight + max-extend used for this panel so the capture slab
+                // and extend reach can be drawn directly from the Clean3D/Extend3D/Solve3D output (the bands
+                // SAMAnalytical.Visualize renders in the middle of the panel).
                 if (bucketSizes != null && index < bucketSizes.Count)
                 {
                     panel.SetValue(SolverParameter.BucketSize, bucketSizes[index]);
@@ -265,6 +282,11 @@ namespace SAM.Analytical.OCCT.Solver
                 if (weights != null && index < weights.Count)
                 {
                     panel.SetValue(SolverParameter.Weight, weights[index]);
+                }
+
+                if (maxExtends != null && index < maxExtends.Count)
+                {
+                    panel.SetValue(SolverParameter.MaxExtend, maxExtends[index]);
                 }
 
                 result.Add(panel);
@@ -302,9 +324,46 @@ namespace SAM.Analytical.OCCT.Solver
             return result;
         }
 
-        /// <summary>Capture half-width from construction thickness: thickness * factor, floored at a minimum.</summary>
+        /// <summary>
+        /// Resolves the per-panel lateral extend reach (<c>SolverParameter.MaxExtend</c>): the caller's list
+        /// when supplied, otherwise the value already stamped on each panel by the Solver's
+        /// <c>SetMaxExtends</c> workflow, falling back to <see cref="Panel3DSnapSolver.DEFAULT_MaxExtension"/>
+        /// (0.4 m) when a panel carries none. Reads the panels read-only; nothing is mutated. Using the same
+        /// <see cref="SolverParameter.MaxExtend"/> the 2D Solver uses lets the reach be tuned (and seen via
+        /// <c>SAMAnalytical.Visualize</c>) exactly as in the Solver.
+        /// </summary>
+        private static List<double> ResolveMaxExtends(IEnumerable<double> maxExtends, List<Panel> sources)
+        {
+            List<double> supplied = maxExtends?.ToList();
+            if (supplied != null && supplied.Count != 0)
+            {
+                return supplied;
+            }
+
+            List<double> result = new List<double>(sources.Count);
+            foreach (Panel source in sources)
+            {
+                result.Add(source != null && source.TryGetValue(SolverParameter.MaxExtend, out double maxExtend) && !double.IsNaN(maxExtend) && maxExtend > 0
+                    ? maxExtend
+                    : Panel3DSnapSolver.DEFAULT_MaxExtension);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Capture half-width for a panel. Prefers the <c>SolverParameter.BucketSize</c> already stamped on
+        /// the panel (the same one <c>SAMAnalytical.Visualize</c> shows and the user tunes, mirroring weight
+        /// and max-extend), so a hand-set bucket is honoured. Otherwise derives it from construction
+        /// thickness: thickness * factor, floored at a minimum.
+        /// </summary>
         private static double BucketSize(Panel panel, double minBucketSize, double thicknessFactor)
         {
+            if (panel != null && panel.TryGetValue(SolverParameter.BucketSize, out double bucketSize) && !double.IsNaN(bucketSize) && bucketSize > 0)
+            {
+                return bucketSize;
+            }
+
             double thickness = panel?.Construction?.GetThickness() ?? double.NaN;
             if (double.IsNaN(thickness) || thickness <= 0)
             {

@@ -377,16 +377,16 @@ namespace SAM.OCCT.UnitTests
         public void ExtendWalls_WallShortOfPerpendicularWall_ExtendsEndToMeetIt()
         {
             // Wall A runs along X at y=0 (x 0..2). Wall B runs along Y at x=3 (y 0..2). A's +X end stops 1 m
-            // short of B; its other end (toward -X) has no wall to meet.
+            // short of B; its other end (toward -X) has no wall to meet. A's MaxExtend (1.0) reaches B.
             Face3D a = TestGeometry.CreatePlanarFace(
                 new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3));
             Face3D b = TestGeometry.CreatePlanarFace(
                 new Point3D(3, 0, 0), new Point3D(3, 2, 0), new Point3D(3, 2, 3), new Point3D(3, 0, 3));
-            SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, 0.5);
-            SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, 0.5);
+            SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, maxExtension: 1.0);
+            SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, maxExtension: 1.0);
 
             Panel3DSnapSolver.ExtendWalls(
-                new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), maxReach: 2.0, overshoot: 0.05, toleranceDistance: 1e-6);
+                new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6);
 
             // A reaches B's plane (x=3, plus the overshoot); the other end and B are untouched.
             Assert.True(wallA.GetBoundingBox().Max.X >= 3.0, "Wall A should extend to meet wall B at x=3");
@@ -397,16 +397,34 @@ namespace SAM.OCCT.UnitTests
         [Fact]
         public void ExtendWalls_NoWallWithinReach_LeavesWallUntouched()
         {
-            // The perpendicular wall is 8 m away - well beyond the 1 m search reach.
+            // The perpendicular wall is 8 m away - well beyond the 1 m MaxExtend reach.
             Face3D a = TestGeometry.CreatePlanarFace(
                 new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3));
             Face3D b = TestGeometry.CreatePlanarFace(
                 new Point3D(10, 0, 0), new Point3D(10, 2, 0), new Point3D(10, 2, 3), new Point3D(10, 0, 3));
-            SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, 0.5);
-            SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, 0.5);
+            SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, maxExtension: 1.0);
+            SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, maxExtension: 1.0);
 
             Panel3DSnapSolver.ExtendWalls(
-                new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), maxReach: 1.0, overshoot: 0.05, toleranceDistance: 1e-6);
+                new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6);
+
+            Assert.Equal(2.0, wallA.GetBoundingBox().Max.X, 3);
+        }
+
+        [Fact]
+        public void ExtendWalls_GapBeyondMaxExtend_LeavesWallUntouched()
+        {
+            // Wall B is 1 m past A's end, but A's MaxExtend is only 0.5 m - too short to reach, so A stays put.
+            // (This is the per-panel control: raise MaxExtend to let a given wall close a wider corner.)
+            Face3D a = TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3));
+            Face3D b = TestGeometry.CreatePlanarFace(
+                new Point3D(3, 0, 0), new Point3D(3, 2, 0), new Point3D(3, 2, 3), new Point3D(3, 0, 3));
+            SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, maxExtension: 0.5);
+            SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, maxExtension: 0.5);
+
+            Panel3DSnapSolver.ExtendWalls(
+                new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6);
 
             Assert.Equal(2.0, wallA.GetBoundingBox().Max.X, 3);
         }
@@ -420,11 +438,11 @@ namespace SAM.OCCT.UnitTests
                 new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3));
             Face3D b = TestGeometry.CreatePlanarFace(
                 new Point3D(5, 0, 0), new Point3D(7, 0, 0), new Point3D(7, 0, 3), new Point3D(5, 0, 3));
-            SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, 0.5);
-            SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, 0.5);
+            SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, maxExtension: 10.0);
+            SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, maxExtension: 10.0);
 
             Panel3DSnapSolver.ExtendWalls(
-                new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), maxReach: 10.0, overshoot: 0.05, toleranceDistance: 1e-6);
+                new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6);
 
             Assert.Equal(2.0, wallA.GetBoundingBox().Max.X, 3);
             Assert.Equal(5.0, wallB.GetBoundingBox().Min.X, 3);

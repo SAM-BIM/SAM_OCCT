@@ -157,7 +157,9 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref slitMaxOverlap);
             }
 
-            List<Panel> extendedPanels = panels.Extend3D(out List<string> diagnostics, null, minBucketSize, thicknessFactor, fillMargin);
+            // weights/maxExtends null => read SolverParameter.Weight / SolverParameter.MaxExtend off each
+            // panel (the same parameters SAMAnalytical.Visualize shows), so they can be tuned per panel.
+            List<Panel> extendedPanels = panels.Extend3D(out List<string> diagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, fillMargin: fillMargin);
 
             index = Params.IndexOfOutputParam("Panels");
             if (index != -1)

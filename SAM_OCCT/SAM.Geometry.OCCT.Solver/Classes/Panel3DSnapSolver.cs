@@ -36,7 +36,11 @@ namespace SAM.Geometry.OCCT.Solver
     {
         public const double DEFAULT_BucketSize = 0.3;
         public const double DEFAULT_Weight = 1.0;
-        public const double DEFAULT_MaxExtension = 0.5;
+
+        /// <summary>Default lateral reach a wall may grow along its axis to meet the next wall (metres) - the
+        /// 3D analogue of the Solver's <c>SolverParameter.MaxExtend</c>. 0.4 m so a short wall between two
+        /// door openings can still reach its neighbour. Override per panel via the <c>maxExtensions</c> input.</summary>
+        public const double DEFAULT_MaxExtension = 0.4;
 
         private readonly List<Face3D> face3Ds;
         private readonly List<double> bucketSizes;
@@ -62,13 +66,11 @@ namespace SAM.Geometry.OCCT.Solver
         /// Walls first: before the caps are touched, grow each wall sideways along its own axis until its end
         /// runs into the next wall it points at, so the plan loop closes (the X/Y gap, not just the up/down
         /// one). Each end is extended a different distance - only as far as the wall it finds - so corners
-        /// meet without distorting the layout. Default true.
+        /// meet without distorting the layout. The reach per wall is that wall's <c>MaxExtension</c> (the
+        /// 3D analogue of the Solver's <c>SolverParameter.MaxExtend</c>); set it per panel to control which
+        /// walls may extend and how far. Default true.
         /// </summary>
         public bool ExtendWallsToWalls { get; set; } = true;
-
-        /// <summary>How far a wall end is searched along its axis for the next wall to close into (metres).
-        /// Ends with no wall within this reach are left where they are.</summary>
-        public double WallExtendReach { get; set; } = 1.0;
 
         /// <summary>How far past the wall it meets a wall end is over-extended, so the native trim cuts the
         /// corner cleanly (metres).</summary>
@@ -182,19 +184,21 @@ namespace SAM.Geometry.OCCT.Solver
 
             // ---- Step 2: extend + resolve ----
             // Re-wrap the clean panels: Step 1 merged/removed panels, so the per-source weights no longer
-            // apply; the remaining stages are geometry-driven (orientation/elevation), not weight-driven.
+            // apply, and bucket/weight are re-derived from geometry. The per-panel MaxExtend IS carried
+            // forward (positionally), so a wall the caller marked to extend further keeps that reach.
             SnappedPanels = Register(
                 CleanFace3Ds,
                 AdjustListLength(null, CleanFace3Ds.Count, DEFAULT_BucketSize),
                 AdjustListLength(null, CleanFace3Ds.Count, DEFAULT_Weight),
-                AdjustListLength(null, CleanFace3Ds.Count, DEFAULT_MaxExtension));
+                AdjustListLength(maxExtensions, CleanFace3Ds.Count, DEFAULT_MaxExtension));
 
             // ---- Walls first ----
-            // Close the plan loop: grow each wall sideways along its axis until its end meets the next wall,
-            // so the X/Y gaps (the ones the up/down extend below cannot touch) close into corners.
+            // Close the plan loop: grow each wall sideways along its axis (up to its own MaxExtend) until its
+            // end meets the next wall, so the X/Y gaps (the ones the up/down extend below cannot touch) close
+            // into corners.
             if (ExtendWallsToWalls)
             {
-                ExtendWalls(SnappedPanels, VerticalAngleTolerance, WallExtendReach, WallExtendOvershoot, ToleranceDistance);
+                ExtendWalls(SnappedPanels, VerticalAngleTolerance, WallExtendOvershoot, ToleranceDistance);
             }
 
             // Extend walls up to the floor/roof above and down to the floor below (the "between floors" case).
@@ -286,12 +290,14 @@ namespace SAM.Geometry.OCCT.Solver
         /// each end runs into the next wall it points at, so the X/Y gaps between wall ends close into
         /// corners (the up/down <see cref="Extend"/> cannot touch these - it only moves a wall's top and
         /// base). Each end is handled independently: it extends only as far as the nearest other wall its
-        /// axis crosses within <paramref name="maxReach"/> (a different reach per direction), plus a small
-        /// <paramref name="overshoot"/> so the native trim cuts the corner cleanly. An end with no wall in
-        /// reach, and a wall parallel to its neighbour, are left where they are. Walls are matched in plan
-        /// (XY) only - their elevations are irrelevant to whether they meet at a corner.
+        /// axis crosses within that wall's own <c>MaxExtension</c> reach (the Solver's
+        /// <c>SolverParameter.MaxExtend</c> - a different reach per direction, and per panel), plus a small
+        /// <paramref name="overshoot"/> so the native trim cuts the corner cleanly. A wall whose
+        /// <c>MaxExtension</c> is non-positive is not extended at all; an end with no wall in reach, and a
+        /// wall parallel to its neighbour, are left where they are. Walls are matched in plan (XY) only -
+        /// their elevations are irrelevant to whether they meet at a corner.
         /// </summary>
-        public static void ExtendWalls(List<SnappedPanel> panels, double verticalAngleTolerance, double maxReach, double overshoot, double toleranceDistance)
+        public static void ExtendWalls(List<SnappedPanel> panels, double verticalAngleTolerance, double overshoot, double toleranceDistance)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -326,6 +332,13 @@ namespace SAM.Geometry.OCCT.Solver
 
             for (int i = 0; i < walls.Count; i++)
             {
+                // This wall's own reach budget (Solver MaxExtend). Non-positive => the wall stays put.
+                double maxReach = walls[i].MaxExtension;
+                if (maxReach <= toleranceDistance)
+                {
+                    continue;
+                }
+
                 Segment3D foot = feet[i];
                 Point3D start = foot.GetStart();
                 Point3D end = foot.GetEnd();
@@ -334,7 +347,7 @@ namespace SAM.Geometry.OCCT.Solver
                 double dy = (end.Y - start.Y) / length;
 
                 // Each end runs along its own outward direction; the reach is whatever it takes to meet the
-                // nearest wall in that direction (or 0 when none is within maxReach).
+                // nearest wall in that direction (or 0 when none is within this wall's MaxExtend).
                 double endReach = NearestWallReach(end.X, end.Y, dx, dy, i, feet, maxReach, toleranceDistance);
                 double startReach = NearestWallReach(start.X, start.Y, -dx, -dy, i, feet, maxReach, toleranceDistance);
 

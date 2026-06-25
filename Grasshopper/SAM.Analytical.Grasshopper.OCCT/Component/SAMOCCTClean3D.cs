@@ -145,7 +145,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref slitMaxOverlap);
             }
 
-            List<Panel> cleanPanels = panels.Clean3D(out List<string> diagnostics, null, minBucketSize, thicknessFactor);
+            List<Panel> cleanPanels = panels.Clean3D(out List<string> diagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor);
 
             index = Params.IndexOfOutputParam("Panels");
             if (index != -1)
