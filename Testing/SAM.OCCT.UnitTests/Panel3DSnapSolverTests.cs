@@ -376,22 +376,40 @@ namespace SAM.OCCT.UnitTests
         [Fact]
         public void ExtendWalls_WallShortOfPerpendicularWall_ExtendsEndToMeetIt()
         {
-            // Wall A runs along X at y=0 (x 0..2). Wall B runs along Y at x=3 (y 0..2). A's +X end stops 1 m
-            // short of B; its other end (toward -X) has no wall to meet. A's MaxExtend (1.0) reaches B.
+            // Wall A runs along X at y=0 (x 0..2). Wall B runs along Y at x=2.5 (y 0..2). A's +X end stops
+            // 0.5 m short of B (within A's 0.98 m length-capped reach); its -X end has no wall to meet.
             Face3D a = TestGeometry.CreatePlanarFace(
                 new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3));
             Face3D b = TestGeometry.CreatePlanarFace(
-                new Point3D(3, 0, 0), new Point3D(3, 2, 0), new Point3D(3, 2, 3), new Point3D(3, 0, 3));
+                new Point3D(2.5, 0, 0), new Point3D(2.5, 2, 0), new Point3D(2.5, 2, 3), new Point3D(2.5, 0, 3));
             SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, maxExtension: 1.0);
             SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, maxExtension: 1.0);
 
             Panel3DSnapSolver.ExtendWalls(
                 new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6);
 
-            // A reaches B's plane (x=3, plus the overshoot); the other end and B are untouched.
-            Assert.True(wallA.GetBoundingBox().Max.X >= 3.0, "Wall A should extend to meet wall B at x=3");
+            // A reaches B's plane (x=2.5, plus the overshoot); the other end and B are untouched.
+            Assert.True(wallA.GetBoundingBox().Max.X >= 2.5, "Wall A should extend to meet wall B at x=2.5");
             Assert.Equal(0.0, wallA.GetBoundingBox().Min.X, 3); // the end with no wall stays put
-            Assert.Equal(3.0, wallB.GetBoundingBox().Max.X, 3); // B untouched
+            Assert.Equal(2.5, wallB.GetBoundingBox().Max.X, 3); // B untouched
+        }
+
+        [Fact]
+        public void ExtendWalls_ShortStubCappedByLength_DoesNotOverReach()
+        {
+            // A 0.5 m stub with a generous MaxExtend (1.0). The length cap (0.49 x 0.5 = 0.245 m) keeps it
+            // from reaching wall B 0.3 m away, so the stub is left alone instead of shooting across the gap.
+            Face3D a = TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(0.5, 0, 0), new Point3D(0.5, 0, 3), new Point3D(0, 0, 3));
+            Face3D b = TestGeometry.CreatePlanarFace(
+                new Point3D(0.8, 0, 0), new Point3D(0.8, 2, 0), new Point3D(0.8, 2, 3), new Point3D(0.8, 0, 3));
+            SnappedPanel wallA = new SnappedPanel(0, a, 1, 0.3, maxExtension: 1.0);
+            SnappedPanel wallB = new SnappedPanel(1, b, 1, 0.3, maxExtension: 1.0);
+
+            Panel3DSnapSolver.ExtendWalls(
+                new List<SnappedPanel> { wallA, wallB }, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6);
+
+            Assert.Equal(0.5, wallA.GetBoundingBox().Max.X, 3); // capped: 0.245 m reach < 0.3 m gap
         }
 
         [Fact]

@@ -42,6 +42,10 @@ namespace SAM.Geometry.OCCT.Solver
         /// door openings can still reach its neighbour. Override per panel via the <c>maxExtensions</c> input.</summary>
         public const double DEFAULT_MaxExtension = 0.4;
 
+        /// <summary>A wall's lateral reach is additionally capped at this fraction of its own length, so a short
+        /// stub cannot extend unrealistically far. Mirrors the 2D <c>SnappedWall.ExtensionLimitLengthRatio</c>.</summary>
+        public const double EXTENSION_LIMIT_LENGTH_RATIO = 0.49;
+
         private readonly List<Face3D> face3Ds;
         private readonly List<double> bucketSizes;
         private readonly List<double> weights;
@@ -332,17 +336,21 @@ namespace SAM.Geometry.OCCT.Solver
 
             for (int i = 0; i < walls.Count; i++)
             {
-                // This wall's own reach budget (Solver MaxExtend). Non-positive => the wall stays put.
-                double maxReach = walls[i].MaxExtension;
+                Segment3D foot = feet[i];
+                Point3D start = foot.GetStart();
+                Point3D end = foot.GetEnd();
+                double length = foot.GetLength();
+
+                // This wall's own reach budget (Solver MaxExtend), capped at a fraction of the wall's own
+                // length so a short stub (e.g. a pier between two door openings) cannot shoot out unrealistically
+                // far. Mirrors the 2D ExtensionSolver's min(MaxExtension, length * ExtensionLimitLengthRatio).
+                // Non-positive => the wall stays put.
+                double maxReach = System.Math.Min(walls[i].MaxExtension, length * EXTENSION_LIMIT_LENGTH_RATIO);
                 if (maxReach <= toleranceDistance)
                 {
                     continue;
                 }
 
-                Segment3D foot = feet[i];
-                Point3D start = foot.GetStart();
-                Point3D end = foot.GetEnd();
-                double length = foot.GetLength();
                 double dx = (end.X - start.X) / length;
                 double dy = (end.Y - start.Y) / length;
 
