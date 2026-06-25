@@ -39,6 +39,7 @@ namespace SAM.Analytical.OCCT.Solver
             double minBucketSize = 0.4,
             double thicknessFactor = 0.6,
             double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3,
             OcctBuildOptions options = null)
         {
             nakedPoint3Ds = new List<Point3D>();
@@ -56,7 +57,8 @@ namespace SAM.Analytical.OCCT.Solver
             Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends)
             {
                 Up = ResolveUp(sources),
-                AlignColinearOffset = alignColinearOffset
+                AlignColinearOffset = alignColinearOffset,
+                NormalizeCapOffset = normalizeCapOffset
             };
             solver.Execute(options);
 
@@ -128,7 +130,8 @@ namespace SAM.Analytical.OCCT.Solver
             IEnumerable<double> maxExtends = null,
             double minBucketSize = 0.4,
             double thicknessFactor = 0.6,
-            double alignColinearOffset = 0.3)
+            double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3)
         {
             diagnostics = new List<string>();
 
@@ -141,7 +144,7 @@ namespace SAM.Analytical.OCCT.Solver
             List<double> effectiveWeights = ResolveWeights(weights, sources);
             List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources);
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true, AlignColinearOffset = alignColinearOffset };
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true, AlignColinearOffset = alignColinearOffset, NormalizeCapOffset = normalizeCapOffset };
             solver.Execute(null);
 
             List<Face3D> clean = solver.CleanFace3Ds;
@@ -187,7 +190,8 @@ namespace SAM.Analytical.OCCT.Solver
             double minBucketSize = 0.4,
             double thicknessFactor = 0.6,
             double fillMargin = 0.5,
-            double alignColinearOffset = 0.3)
+            double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3)
         {
             diagnostics = new List<string>();
 
@@ -208,7 +212,8 @@ namespace SAM.Analytical.OCCT.Solver
                 StopAfterExtend = true,
                 FillMargin = fillMargin,
                 Up = ResolveUp(sources),
-                AlignColinearOffset = alignColinearOffset
+                AlignColinearOffset = alignColinearOffset,
+                NormalizeCapOffset = normalizeCapOffset
             };
             solver.Execute(null);
 
@@ -264,7 +269,8 @@ namespace SAM.Analytical.OCCT.Solver
             double minBucketSize = 0.4,
             double thicknessFactor = 0.6,
             double connectionTolerance = 0.1,
-            double alignColinearOffset = 0.3)
+            double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3)
         {
             openEndPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
@@ -283,7 +289,8 @@ namespace SAM.Analytical.OCCT.Solver
                 StopAfterExtend = true,
                 ConnectionTolerance = connectionTolerance,
                 Up = ResolveUp(sources),
-                AlignColinearOffset = alignColinearOffset
+                AlignColinearOffset = alignColinearOffset,
+                NormalizeCapOffset = normalizeCapOffset
             };
             solver.Execute(null);
 

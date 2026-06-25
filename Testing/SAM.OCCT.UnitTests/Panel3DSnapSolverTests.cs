@@ -756,6 +756,86 @@ namespace SAM.OCCT.UnitTests
         }
 
         // ──────────────────────────────────────────────────────────────
+        // Panel3DSnapSolver.NormalizeCaps (level-plane normalization)
+        // ──────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void NormalizeCaps_AdjacentTilesWithinOffset_SnapOntoDominantPlane()
+        {
+            // Two edge-touching (non-overlapping) floor tiles of one level: a large 3x3 backer at z=0 and a
+            // small 1x1 tile beside it at z=0.1 (within the 0.3 offset). They do not overlap in plan, so the
+            // bucket snap leaves them put; NormalizeCaps groups them by perpendicular nearness and projects
+            // the smaller onto the dominant (larger) tile's z=0 plane.
+            SnappedPanel backer = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(3, 0, 0), new Point3D(3, 3, 0), new Point3D(0, 3, 0)), 1, 0.3, 0.5);
+            SnappedPanel tile = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(3, 0, 0.1), new Point3D(4, 0, 0.1), new Point3D(4, 1, 0.1), new Point3D(3, 1, 0.1)), 1, 0.3, 0.5);
+
+            Panel3DSnapSolver.NormalizeCaps(new List<SnappedPanel> { backer, tile }, 5 * (System.Math.PI / 180), normalizeCapOffset: 0.3, toleranceDistance: 1e-6);
+
+            Assert.True(tile.Snapped, "The adjacent tile should be normalized onto the dominant cap's plane");
+            foreach (Point3D pt in BoundaryPoints(tile.Face3D))
+            {
+                Assert.True(System.Math.Abs(backer.Plane.Distance(pt)) < 1e-6, $"Tile point {pt} not on the dominant z=0 plane");
+            }
+            Assert.False(backer.Snapped, "The dominant (largest) cap is the backer and stays put");
+        }
+
+        [Fact]
+        public void NormalizeCaps_FloorAndRoofFarApart_StayOnSeparatePlanes()
+        {
+            // A floor at z=0 and the roof above at z=3: parallel but far more than the offset apart, so they
+            // are different levels and must NOT be merged onto one plane.
+            SnappedPanel floor = MakeFloorPanel(0);
+            SnappedPanel roof = MakeFloorPanel(3.0);
+
+            Panel3DSnapSolver.NormalizeCaps(new List<SnappedPanel> { floor, roof }, 5 * (System.Math.PI / 180), normalizeCapOffset: 0.3, toleranceDistance: 1e-6);
+
+            Assert.False(floor.Snapped);
+            Assert.False(roof.Snapped, "A roof a storey above the floor is a separate level and must stay put");
+        }
+
+        [Fact]
+        public void NormalizeCaps_NonParallelSlopes_NotMerged()
+        {
+            // A flat cap (Z-normal) and a 30-deg-tilted cap sharing a similar elevation: their normals differ
+            // by more than the angle tolerance, so the two pitches are kept distinct (a real ridge, not noise).
+            double theta = 30 * (System.Math.PI / 180);
+            SnappedPanel flat = MakeFloorPanel(0);
+            SnappedPanel sloped = new SnappedPanel(1, TiltAboutX(MakeFloorFace(0), theta), 1, 0.3, 0.5);
+
+            Panel3DSnapSolver.NormalizeCaps(new List<SnappedPanel> { flat, sloped }, 5 * (System.Math.PI / 180), normalizeCapOffset: 0.3, toleranceDistance: 1e-6);
+
+            Assert.False(flat.Snapped);
+            Assert.False(sloped.Snapped, "A differently-pitched cap is not parallel, so it keeps its own plane");
+        }
+
+        [Fact]
+        public void NormalizeCaps_Walls_LeftUntouched()
+        {
+            // Vertical walls are not caps; NormalizeCaps must never move them (the bucket snap handles walls).
+            SnappedPanel wallA = MakeWallPanel(0);
+            SnappedPanel wallB = MakeWallPanel(0.1);
+
+            Panel3DSnapSolver.NormalizeCaps(new List<SnappedPanel> { wallA, wallB }, 5 * (System.Math.PI / 180), normalizeCapOffset: 0.3, toleranceDistance: 1e-6);
+
+            Assert.False(wallA.Snapped);
+            Assert.False(wallB.Snapped);
+        }
+
+        [Fact]
+        public void NormalizeCaps_OffsetDisabled_DoesNothing()
+        {
+            // normalizeCapOffset <= tolerance disables the pass: even near-coincident tiles stay put.
+            SnappedPanel backer = MakeFloorPanel(0);
+            SnappedPanel tile = MakeFloorPanel(0.1);
+
+            Panel3DSnapSolver.NormalizeCaps(new List<SnappedPanel> { backer, tile }, 5 * (System.Math.PI / 180), normalizeCapOffset: 0, toleranceDistance: 1e-6);
+
+            Assert.False(tile.Snapped);
+        }
+
+        // ──────────────────────────────────────────────────────────────
         // helpers
         // ──────────────────────────────────────────────────────────────
 

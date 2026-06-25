@@ -127,6 +127,17 @@ namespace SAM.Geometry.OCCT.Solver
         /// </summary>
         public double AlignColinearOffset { get; set; } = 0.3;
 
+        /// <summary>
+        /// Max perpendicular offset (metres) within which the floor/roof caps of one level are normalized
+        /// onto a single plane. After the bucket snap, near-parallel caps whose planes lie within this band
+        /// of one another are all projected onto the dominant (largest-area) cap's plane - the "level plane".
+        /// This collapses the small plane differences left when several separately-imported floor/roof tiles
+        /// covering one space were merged at slightly different tilts/elevations; those differences otherwise
+        /// stop the native kernel closing the cell. Floors and roofs separate automatically (a floor and the
+        /// roof above are parallel but far more than this offset apart). Default 0.3 m; set to 0 to disable.
+        /// </summary>
+        public double NormalizeCapOffset { get; set; } = 0.3;
+
         /// <summary>Also extend walls up to a sloped roof above (not just horizontal floor caps), so the kernel
         /// can cut them at the pitch and enclose the under-roof space. Default true.</summary>
         public bool ExtendToRoofs { get; set; } = true;
@@ -224,7 +235,7 @@ namespace SAM.Geometry.OCCT.Solver
 
             // ---- Step 1: clean bucket (managed, native-free) ----
             // Strip holes -> bucket-snap within-bucket parallels onto one backer -> merge coplanar (contained/overlap).
-            CleanFace3Ds = CleanBucket(SnappedPanels, ToleranceAngle, ToleranceArcAngle, ToleranceDistance, VerticalAngleTolerance, AlignColinearOffset);
+            CleanFace3Ds = CleanBucket(SnappedPanels, ToleranceAngle, ToleranceArcAngle, ToleranceDistance, VerticalAngleTolerance, AlignColinearOffset, NormalizeCapOffset);
 
             if (StopAfterClean)
             {
@@ -427,7 +438,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// larger one - are merged via the managed union. The output feeds Step 2 (fill/extend), or is returned
         /// as-is when only cleaning is wanted (<see cref="StopAfterClean"/>).
         /// </summary>
-        public static List<Face3D> CleanBucket(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3)
+        public static List<Face3D> CleanBucket(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3, double normalizeCapOffset = 0.3)
         {
             if (panels == null || panels.Count == 0)
             {
@@ -444,6 +455,13 @@ namespace SAM.Geometry.OCCT.Solver
             //    backer plane (now coplanar), and align consecutive vertical wall segments offset by a small
             //    step jog. Non-overlapping, non-colinear parallels (separate bays) are left put.
             Snap(panels, toleranceAngle, toleranceArcAngle, toleranceDistance, verticalAngleTolerance, alignColinearOffset);
+
+            // 2b. Normalize caps onto one level plane - project the near-parallel, within-offset floor/roof
+            //     tiles of a level onto the dominant cap's plane. Unlike the snap above (which needs an
+            //     in-plane overlap), this groups purely by perpendicular nearness, so adjacent (edge-touching)
+            //     tiles of one slab - merged at slightly different tilts/elevations - collapse onto a single
+            //     plane and the coplanar merge below can fuse them, letting the kernel close the cell.
+            NormalizeCaps(panels, toleranceAngle, normalizeCapOffset, toleranceDistance, verticalAngleTolerance);
 
             // 3. Coplanar merge - union coplanar/overlapping faces so a contained smaller panel collapses into one.
             List<Face3D> face3Ds = panels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
@@ -911,6 +929,78 @@ namespace SAM.Geometry.OCCT.Solver
                     }
 
                     candidate.SnapToBacker(backer.Plane);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Normalize a level's caps onto one plane. Groups the (non-vertical) floor/roof panels that are
+        /// near-parallel and whose planes sit within <paramref name="normalizeCapOffset"/> perpendicular of
+        /// one another, and projects every cap in a group onto the dominant (largest-area) cap's plane - the
+        /// level plane. This collapses the small plane differences left when several separately-imported
+        /// floor/roof tiles covering one space were merged at slightly different tilts/elevations; the kernel
+        /// cannot close a cell whose lid is several barely-offset planes. Unlike <see cref="Snap"/> (which
+        /// requires an in-plane overlap so it never drags a separate parallel wall onto its neighbour), this
+        /// groups purely by perpendicular nearness, so adjacent edge-touching (non-overlapping) tiles of one
+        /// slab are still brought onto a single plane. Floors and roofs separate out automatically: a floor
+        /// and the roof above are parallel but far more than the offset apart, so they never merge; two roof
+        /// slopes that meet at a ridge are not parallel, so each keeps its own pitch. Restricted to caps so
+        /// vertical walls (handled by the bucket snap) are untouched.
+        /// </summary>
+        public static void NormalizeCaps(List<SnappedPanel> panels, double toleranceAngle, double normalizeCapOffset, double toleranceDistance, double verticalAngleTolerance = 20 * (System.Math.PI / 180))
+        {
+            if (panels == null || panels.Count < 2 || normalizeCapOffset <= toleranceDistance)
+            {
+                return;
+            }
+
+            // Caps only, largest area first so the dominant slab is the backer each group snaps onto.
+            List<SnappedPanel> caps = panels
+                .Where(x => x != null && x.Plane != null && !x.IsVertical(verticalAngleTolerance))
+                .OrderByDescending(x => x.GetArea())
+                .ToList();
+
+            if (caps.Count < 2)
+            {
+                return;
+            }
+
+            bool[] grouped = new bool[caps.Count];
+            for (int i = 0; i < caps.Count; i++)
+            {
+                if (grouped[i])
+                {
+                    continue;
+                }
+
+                SnappedPanel backer = caps[i];
+                grouped[i] = true;
+
+                for (int j = i + 1; j < caps.Count; j++)
+                {
+                    if (grouped[j])
+                    {
+                        continue;
+                    }
+
+                    SnappedPanel candidate = caps[j];
+                    if (!backer.IsParallelWith(candidate, toleranceAngle))
+                    {
+                        continue;
+                    }
+
+                    // Perpendicular nearness to the backer level plane (no in-plane overlap required): a
+                    // candidate whose centre lies within the offset band of the backer plane is the same level.
+                    Point3D centre = candidate.GetBoundingBox()?.GetCentroid();
+                    if (centre == null || System.Math.Abs(backer.Plane.Distance(centre)) > normalizeCapOffset)
+                    {
+                        continue;
+                    }
+
+                    if (candidate.SnapToBacker(backer.Plane))
+                    {
+                        grouped[j] = true;
+                    }
                 }
             }
         }
