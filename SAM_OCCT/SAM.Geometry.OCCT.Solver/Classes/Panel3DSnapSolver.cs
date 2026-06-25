@@ -118,6 +118,15 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Angle within which a panel's normal counts as horizontal, so the panel is "vertical" (a wall).</summary>
         public double VerticalAngleTolerance { get; set; } = 20 * (System.Math.PI / 180);
 
+        /// <summary>
+        /// Max perpendicular offset (metres) at which two consecutive segments of one vertical wall run -
+        /// abutting/overlapping along the run, heights overlapping - are aligned onto a single plane. Closes
+        /// the small Y-jog where an imported side wall steps from one segment to the next. Kept below the
+        /// gap between genuinely separate parallel walls (e.g. adjacent rooms) so those are not merged.
+        /// Default 0.3 m; raise to align larger jogs, set to 0 to disable colinear alignment.
+        /// </summary>
+        public double AlignColinearOffset { get; set; } = 0.3;
+
         /// <summary>Also extend walls up to a sloped roof above (not just horizontal floor caps), so the kernel
         /// can cut them at the pitch and enclose the under-roof space. Default true.</summary>
         public bool ExtendToRoofs { get; set; } = true;
@@ -215,7 +224,7 @@ namespace SAM.Geometry.OCCT.Solver
 
             // ---- Step 1: clean bucket (managed, native-free) ----
             // Strip holes -> bucket-snap within-bucket parallels onto one backer -> merge coplanar (contained/overlap).
-            CleanFace3Ds = CleanBucket(SnappedPanels, ToleranceAngle, ToleranceArcAngle, ToleranceDistance);
+            CleanFace3Ds = CleanBucket(SnappedPanels, ToleranceAngle, ToleranceArcAngle, ToleranceDistance, VerticalAngleTolerance, AlignColinearOffset);
 
             if (StopAfterClean)
             {
@@ -418,7 +427,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// larger one - are merged via the managed union. The output feeds Step 2 (fill/extend), or is returned
         /// as-is when only cleaning is wanted (<see cref="StopAfterClean"/>).
         /// </summary>
-        public static List<Face3D> CleanBucket(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance)
+        public static List<Face3D> CleanBucket(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3)
         {
             if (panels == null || panels.Count == 0)
             {
@@ -432,8 +441,9 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             // 2. Bucket snap - bring within-bucket near-parallel, in-plane-overlapping panels onto one
-            //    backer plane (now coplanar). Non-overlapping parallels (separate bays) are left put.
-            Snap(panels, toleranceAngle, toleranceArcAngle, toleranceDistance);
+            //    backer plane (now coplanar), and align consecutive vertical wall segments offset by a small
+            //    step jog. Non-overlapping, non-colinear parallels (separate bays) are left put.
+            Snap(panels, toleranceAngle, toleranceArcAngle, toleranceDistance, verticalAngleTolerance, alignColinearOffset);
 
             // 3. Coplanar merge - union coplanar/overlapping faces so a contained smaller panel collapses into one.
             List<Face3D> face3Ds = panels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
@@ -836,15 +846,16 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
-        /// Managed snap: sort by <c>Weight</c> descending so backers are processed first, then
-        /// project each not-yet-snapped lower-weight panel that lies within a backer's slab, is
-        /// near-parallel to it AND actually overlaps it in-plane (a genuine double-wall) onto the
-        /// backer plane. A near-parallel panel that merely passes through the slab but covers a
-        /// different part of the plane (the next bay's wall, colinear but offset along its run) is a
-        /// distinct wall and is left where it is - no move is needed. Equal-weight near-coincident
-        /// panels are absorbed.
+        /// Managed snap: sort by <c>Weight</c> descending so backers are processed first, then project each
+        /// not-yet-snapped lower-weight, near-parallel panel onto the backer plane when either: (a) it lies
+        /// within the backer's bucket slab AND overlaps it in-plane (a genuine double-wall); or (b) backer
+        /// and candidate are both (near) vertical walls that are consecutive segments of one run - abutting
+        /// or overlapping along the run, heights overlapping - offset by no more than
+        /// <paramref name="alignColinearOffset"/> (a small Y-jog at a step). A near-parallel panel that
+        /// merely passes through the slab but covers a different part of the plane (the next bay's wall),
+        /// or is offset by more than the align distance, is a distinct wall and is left where it is.
         /// </summary>
-        public static void Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance = Tolerance.Distance)
+        public static void Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance = Tolerance.Distance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -880,24 +891,30 @@ namespace SAM.Geometry.OCCT.Solver
                         continue;
                     }
 
-                    if (!backer.BucketContains(candidate, out bool fully))
-                    {
-                        continue;
-                    }
-
                     // A fully captured neighbour tolerates a larger angle (it is clearly the same
                     // surface); a partially captured one must be near-parallel. Mirrors the 2D solver.
+                    bool withinBucket = backer.BucketContains(candidate, out bool fully);
                     double angleTolerance = fully ? toleranceAngle : toleranceArcAngle;
                     if (!backer.IsParallelWith(candidate, angleTolerance))
                     {
                         continue;
                     }
 
-                    // Only collapse a candidate that genuinely shares surface with the backer in-plane
-                    // (a real double-wall). A near-parallel wall that sits over a different part of the
-                    // plane - e.g. the top wall of the adjacent bay - is a separate wall: snapping it
-                    // would move it onto its neighbour for no reason. Keep it where it is.
-                    if (!backer.OverlapsInPlane(candidate, toleranceDistance))
+                    // (a) A genuine double-wall: within the bucket slab AND sharing surface in-plane. A
+                    // near-parallel wall that sits over a different part of the plane (the next bay's wall)
+                    // is a separate wall and must not be dragged onto its neighbour.
+                    bool overlap = withinBucket && backer.OverlapsInPlane(candidate, toleranceDistance);
+
+                    // (b) Consecutive segments of one vertical wall run with a small perpendicular jog at a
+                    // step: abutting/overlapping along the run, heights overlapping, offset within the align
+                    // distance. Aligns the jog onto one plane. Restricted to walls so stacked floor/roof
+                    // tiles at different levels are never merged; independent of the bucket so a jog wider
+                    // than the bucket still aligns.
+                    bool abut = alignColinearOffset > toleranceDistance
+                        && backer.IsVertical(verticalAngleTolerance) && candidate.IsVertical(verticalAngleTolerance)
+                        && backer.AbutsColinearWithin(candidate, alignColinearOffset, toleranceDistance);
+
+                    if (!overlap && !abut)
                     {
                         continue;
                     }

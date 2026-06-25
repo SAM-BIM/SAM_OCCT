@@ -38,6 +38,7 @@ namespace SAM.Analytical.OCCT.Solver
             IEnumerable<double> maxExtends = null,
             double minBucketSize = 0.4,
             double thicknessFactor = 0.6,
+            double alignColinearOffset = 0.3,
             OcctBuildOptions options = null)
         {
             nakedPoint3Ds = new List<Point3D>();
@@ -54,7 +55,8 @@ namespace SAM.Analytical.OCCT.Solver
 
             Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends)
             {
-                Up = ResolveUp(sources)
+                Up = ResolveUp(sources),
+                AlignColinearOffset = alignColinearOffset
             };
             solver.Execute(options);
 
@@ -71,11 +73,14 @@ namespace SAM.Analytical.OCCT.Solver
             List<Panel> result = BuildPanels(resolved, sources, bucketSizes, effectiveWeights, effectiveMaxExtends, tolerance);
 
             // Step-2 gap-fill faces (residual naked-boundary loops) become air panels: each is emitted as a
-            // PanelType.Air panel (null construction), a virtual boundary rather than solid wall.
+            // PanelType.Air panel (null construction), a virtual boundary rather than solid wall. Sliver
+            // loops (near-zero area) are micro-gaps the native resolve leaves around aligned/merged edges -
+            // skip them so they do not surface as degenerate air panels.
+            const double minAirArea = 1e-4; // 1 cm^2: below any real opening/gap, above float-noise slivers
             int airCount = 0;
             foreach (Face3D holeFace3D in solver.HoleFillFace3Ds ?? new List<Face3D>())
             {
-                if (holeFace3D == null || !holeFace3D.IsValid())
+                if (holeFace3D == null || !holeFace3D.IsValid() || holeFace3D.GetArea() <= minAirArea)
                 {
                     continue;
                 }
@@ -122,7 +127,8 @@ namespace SAM.Analytical.OCCT.Solver
             IEnumerable<double> weights = null,
             IEnumerable<double> maxExtends = null,
             double minBucketSize = 0.4,
-            double thicknessFactor = 0.6)
+            double thicknessFactor = 0.6,
+            double alignColinearOffset = 0.3)
         {
             diagnostics = new List<string>();
 
@@ -135,7 +141,7 @@ namespace SAM.Analytical.OCCT.Solver
             List<double> effectiveWeights = ResolveWeights(weights, sources);
             List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources);
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true };
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true, AlignColinearOffset = alignColinearOffset };
             solver.Execute(null);
 
             List<Face3D> clean = solver.CleanFace3Ds;
@@ -180,7 +186,8 @@ namespace SAM.Analytical.OCCT.Solver
             IEnumerable<double> maxExtends = null,
             double minBucketSize = 0.4,
             double thicknessFactor = 0.6,
-            double fillMargin = 0.5)
+            double fillMargin = 0.5,
+            double alignColinearOffset = 0.3)
         {
             diagnostics = new List<string>();
 
@@ -200,7 +207,8 @@ namespace SAM.Analytical.OCCT.Solver
             {
                 StopAfterExtend = true,
                 FillMargin = fillMargin,
-                Up = ResolveUp(sources)
+                Up = ResolveUp(sources),
+                AlignColinearOffset = alignColinearOffset
             };
             solver.Execute(null);
 
@@ -255,7 +263,8 @@ namespace SAM.Analytical.OCCT.Solver
             IEnumerable<double> maxExtends = null,
             double minBucketSize = 0.4,
             double thicknessFactor = 0.6,
-            double connectionTolerance = 0.1)
+            double connectionTolerance = 0.1,
+            double alignColinearOffset = 0.3)
         {
             openEndPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
@@ -273,7 +282,8 @@ namespace SAM.Analytical.OCCT.Solver
             {
                 StopAfterExtend = true,
                 ConnectionTolerance = connectionTolerance,
-                Up = ResolveUp(sources)
+                Up = ResolveUp(sources),
+                AlignColinearOffset = alignColinearOffset
             };
             solver.Execute(null);
 

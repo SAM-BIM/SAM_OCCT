@@ -25,7 +25,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("a7e4c92f-1b53-4d8a-9f26-3c70e1b8d4a5");
 
-        public override string LatestComponentVersion => "0.3.0";
+        public override string LatestComponentVersion => "0.4.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -55,6 +55,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Number fillMargin = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "fillMargin_", NickName = "fillMargin_", Description = "How far floors/roofs are grown outward past the walls (and walls past their caps), in metres. The overshoot the native split trims back in Solve3D.", Access = GH_ParamAccess.item };
                 fillMargin.SetPersistentData(0.5);
                 result.Add(new GH_SAMParam(fillMargin, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number alignColinearOffset = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "alignColinearOffset_", NickName = "alignColinearOffset_", Description = "Max perpendicular offset (m) at which consecutive segments of one vertical wall run are aligned onto a single plane (closes small step jogs in an imported wall). Keep below the gap between genuinely separate parallel walls so those stay put. 0 = disable. Default 0.3.", Access = GH_ParamAccess.item };
+                alignColinearOffset.SetPersistentData(0.3);
+                result.Add(new GH_SAMParam(alignColinearOffset, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number slitMinGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "slitMinGap_", NickName = "slitMinGap_", Description = "Minimum perpendicular gap (m) of a remaining double-wall/slit to report. Floored at the bucket capture width so only parallel panels OUTSIDE the bucket (not captured/merged by it) are reported.", Access = GH_ParamAccess.item };
                 slitMinGap.SetPersistentData(0.02);
@@ -138,6 +142,13 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref fillMargin);
             }
 
+            double alignColinearOffset = 0.3;
+            index = Params.IndexOfInputParam("alignColinearOffset_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref alignColinearOffset);
+            }
+
             double slitMinGap = 0.02;
             index = Params.IndexOfInputParam("slitMinGap_");
             if (index != -1)
@@ -161,7 +172,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
             // weights/maxExtends null => read SolverParameter.Weight / SolverParameter.MaxExtend off each
             // panel (the same parameters SAMAnalytical.Visualize shows), so they can be tuned per panel.
-            List<Panel> extendedPanels = panels.Extend3D(out List<string> diagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, fillMargin: fillMargin);
+            List<Panel> extendedPanels = panels.Extend3D(out List<string> diagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, fillMargin: fillMargin, alignColinearOffset: alignColinearOffset);
 
             index = Params.IndexOfOutputParam("Panels");
             if (index != -1)
@@ -192,7 +203,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
             // Plan-closure diagnostic: the walls whose feet still leave an open end (no other wall meets them),
             // and the open-corner locations. These are the panels to upgrade (MaxExtend / bucket) so the loops
             // close and floors/roofs can fill a closed polysurface.
-            List<Panel> openPanels = panels.OpenPanels3D(out List<Point3D> openEndPoint3Ds, out List<string> openDiagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor);
+            List<Panel> openPanels = panels.OpenPanels3D(out List<Point3D> openEndPoint3Ds, out List<string> openDiagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset);
             if (openDiagnostics != null)
             {
                 diagnostics.AddRange(openDiagnostics);

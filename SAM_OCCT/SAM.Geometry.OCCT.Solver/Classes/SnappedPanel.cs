@@ -206,6 +206,49 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
+        /// True when <paramref name="other"/> is a near-colinear continuation of this panel offset by no
+        /// more than <paramref name="maxOffset"/> perpendicular: parallel (the caller checks that), their
+        /// height (V) bands overlap, and their along-run (U) extents overlap or abut within
+        /// <paramref name="maxOffset"/>. This distinguishes consecutive segments of one stepped wall - a
+        /// small perpendicular jog at a step, which should align onto one plane - from genuinely separate
+        /// parallel walls (a larger offset, or segments far apart along the run, which stay put). Where
+        /// <see cref="OverlapsInPlane"/> collapses a true overlapping double-wall, this closes the end-to-end
+        /// jog the overlap test deliberately leaves alone. Measured in this panel's own plane frame.
+        /// </summary>
+        public bool AbutsColinearWithin(SnappedPanel other, double maxOffset, double tolerance)
+        {
+            if (plane == null || face3D == null || other?.plane == null || other.face3D == null)
+            {
+                return false;
+            }
+
+            if (System.Math.Abs(plane.Distance(other.plane.Origin)) > maxOffset)
+            {
+                return false; // offset too large to be the same wall
+            }
+
+            if (!FootprintBounds(plane, face3D, out double aMinU, out double aMaxU, out double aMinV, out double aMaxV))
+            {
+                return false;
+            }
+
+            if (!FootprintBounds(plane, other.face3D, out double bMinU, out double bMaxU, out double bMinV, out double bMaxV))
+            {
+                return false;
+            }
+
+            double overlapV = System.Math.Min(aMaxV, bMaxV) - System.Math.Max(aMinV, bMinV);
+            if (overlapV <= tolerance)
+            {
+                return false; // not in the same height band - not the same run of wall
+            }
+
+            // Along-run gap: negative when the U-extents overlap, positive (and small) when they abut.
+            double gapU = System.Math.Max(aMinU, bMinU) - System.Math.Min(aMaxU, bMaxU);
+            return gapU <= maxOffset;
+        }
+
+        /// <summary>
         /// Projects this panel's boundary onto <paramref name="backerPlane"/> (the analogue of
         /// snapping a lower-weight axis onto a higher-weight one) and records the snap. Every
         /// boundary loop - external and internal (holes) - is projected so the face stays valid.
