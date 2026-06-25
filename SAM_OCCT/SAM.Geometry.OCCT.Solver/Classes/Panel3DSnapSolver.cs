@@ -100,19 +100,16 @@ namespace SAM.Geometry.OCCT.Solver
         /// ridge / the next roof slope) and trims cleanly (metres).</summary>
         public double FillMargin { get; set; } = 0.5;
 
-        /// <summary>Re-attach the (sloped) roof to the resolved output. MakerVolume cells cap at the top
-        /// ceiling and drop the roof lid above; this adds the clean roof slopes back. Default true.</summary>
-        public bool RetainRoof { get; set; } = true;
-
         /// <summary>
-        /// Re-attach walls the native MakerVolume dropped. The kernel only returns faces that bound a closed
-        /// cell, so a wall whose only cell fails to close (e.g. a stepped/tilted region where the
-        /// floor/roof tiles do not quite meet) is silently discarded - leaving a hole in the envelope. This
-        /// adds back any extended wall face (the exact face fed to the volume build) that has no
-        /// representation in the resolved output, so walls are never lost even where a cell does not form.
-        /// The wall analogue of <see cref="RetainRoof"/>. Default true.
+        /// Re-attach any face the native MakerVolume dropped - walls AND caps (floors/roofs) alike. The
+        /// kernel returns only faces that bound a closed cell, so a face whose cell fails to form (e.g. a
+        /// stepped/tilted region the kernel cannot close, or a roof lid the cells cap off) is silently
+        /// discarded, leaving a hole. This re-adds every face that went into the volume build but has no
+        /// representation in the resolved output, using its extended geometry (the exact face the kernel
+        /// saw, grown/overshooting) so the re-added face reaches its neighbours and closes the gap. Subsumes
+        /// the old separate roof-lid re-attach: a dropped sloped roof is just another dropped face. Default true.
         /// </summary>
-        public bool RetainWalls { get; set; } = true;
+        public bool RetainDropped { get; set; } = true;
 
         /// <summary>Step 2: after the resolve, build a Face3D over each residual naked-boundary loop (air-panel
         /// candidate) so every space is fully enclosed. Default true. (Step 1 strips input holes outright.)</summary>
@@ -313,61 +310,54 @@ namespace SAM.Geometry.OCCT.Solver
 
             Resolve(snappedFace3Ds, options);
 
-            // The native cells enclose the rooms (floors + walls) but cap at the top ceiling, dropping the
-            // sloped roof above. Re-attach the clean roof slopes so the building envelope is complete.
-            if (RetainRoof && NativeResolved && ResolvedFace3Ds != null)
+            // MakerVolume returns only faces that bound a closed cell, so any face whose cell does not form
+            // - a wall or a cap (floor/roof) in a stepped/tilted region the kernel cannot close, or a roof
+            // lid the cells cap off - is dropped, leaving a hole. Re-add every face that went into the
+            // volume build but has no representation in the resolved output, using its extended geometry so
+            // the re-added face overshoots its neighbours and closes the gap. Walls and caps are treated the
+            // same: a dropped cap comes back grown (not the ungrown clean slab), so it reaches its walls.
+            if (RetainDropped && NativeResolved && ResolvedFace3Ds != null)
             {
-                List<Face3D> roofSlopes = CleanFace3Ds.Where(IsSlopedRoof).ToList();
-                if (roofSlopes.Count != 0)
+                List<Face3D> dropped = new List<Face3D>();
+                foreach (Face3D face3D in snappedFace3Ds)
                 {
-                    ResolvedFace3Ds = ResolvedFace3Ds.Concat(roofSlopes).ToList();
-                }
-            }
-
-            // MakerVolume returns only faces that bound a closed cell, so a wall whose cell did not form
-            // (a stepped/tilted region the kernel could not close) is dropped, leaving a hole. Re-add any
-            // wall face that went into the volume build but has no representation in the resolved output, so
-            // walls are never silently lost (the wall analogue of RetainRoof above).
-            if (RetainWalls && NativeResolved && ResolvedFace3Ds != null)
-            {
-                double wallDot = System.Math.Sin(VerticalAngleTolerance); // walls: normal (near) perpendicular to up
-                List<Face3D> lostWalls = new List<Face3D>();
-                foreach (Face3D wall in snappedFace3Ds)
-                {
-                    Vector3D normal = wall?.GetPlane()?.Normal.Unit;
-                    if (normal == null || System.Math.Abs(normal.DotProduct(up)) > wallDot)
+                    if (face3D != null && face3D.IsValid() && !IsRepresented(face3D, ResolvedFace3Ds))
                     {
-                        continue; // caps are handled by the resolve / RetainRoof, not here
-                    }
-
-                    if (!IsRepresented(wall, ResolvedFace3Ds))
-                    {
-                        lostWalls.Add(wall);
+                        dropped.Add(face3D);
                     }
                 }
 
-                if (lostWalls.Count != 0)
+                if (dropped.Count != 0)
                 {
-                    ResolvedFace3Ds = ResolvedFace3Ds.Concat(lostWalls).ToList();
+                    ResolvedFace3Ds = ResolvedFace3Ds.Concat(dropped).ToList();
                 }
             }
         }
 
         /// <summary>
-        /// True when some resolved face already covers <paramref name="wall"/>: lies on the same plane
-        /// (parallel normal, near-coincident) and overlaps its bounds. A wall the native resolve kept (whole
-        /// or split into sub-faces) is represented; a wall it dropped is not. Used by the RetainWalls net.
+        /// True when some resolved face actually covers <paramref name="face3D"/> (a wall or a cap): lies on
+        /// the same plane (parallel normal, near-coincident) and contains the face's centre. A face the
+        /// native resolve kept (whole or split into sub-faces) is represented; a face it dropped is not.
+        /// The centre test (not a bbox overlap) is what distinguishes adjacent coplanar tiles - e.g. the
+        /// stepped ramp's slabs all share one infinite plane and merely touch at their edges, so a bbox
+        /// overlap would wrongly call a dropped tile "represented" by its neighbour. Used by RetainDropped.
         /// </summary>
-        private static bool IsRepresented(Face3D wall, List<Face3D> resolvedFace3Ds)
+        private static bool IsRepresented(Face3D face3D, List<Face3D> resolvedFace3Ds)
         {
-            Plane wallPlane = wall?.GetPlane();
-            if (wallPlane == null)
+            Plane plane = face3D?.GetPlane();
+            BoundingBox3D box = face3D?.GetBoundingBox();
+            if (plane == null || box == null)
             {
                 return true; // cannot test - do not re-add an untestable face
             }
 
-            BoundingBox3D wallBox = wall.GetBoundingBox();
-            Vector3D wallNormal = wallPlane.Normal.Unit;
+            Point3D centre = box.GetCentroid();
+            if (centre == null)
+            {
+                return true;
+            }
+
+            Vector3D normal = plane.Normal.Unit;
             foreach (Face3D resolved in resolvedFace3Ds)
             {
                 Plane resolvedPlane = resolved?.GetPlane();
@@ -376,49 +366,38 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
-                if (System.Math.Abs(wallNormal.DotProduct(resolvedPlane.Normal.Unit)) < 0.99)
+                if (System.Math.Abs(normal.DotProduct(resolvedPlane.Normal.Unit)) < 0.99)
                 {
                     continue; // not parallel - a different orientation
                 }
 
-                if (System.Math.Abs(wallPlane.Distance(resolvedPlane.Origin)) > 0.05)
+                if (System.Math.Abs(plane.Distance(resolvedPlane.Origin)) > 0.05)
                 {
                     continue; // parallel but a different (offset) plane
                 }
 
-                if (OverlapsBox(wallBox, resolved.GetBoundingBox(), 0.01))
+                if (ContainsPoint(resolved.GetBoundingBox(), centre, 0.05))
                 {
-                    return true; // a resolved sub-face lies on this wall and shares its footprint
+                    return true; // a resolved sub-face on this plane covers this face's centre
                 }
             }
 
             return false;
         }
 
-        /// <summary>True when two axis-aligned boxes overlap (or touch within <paramref name="tolerance"/>) in all three axes.</summary>
-        private static bool OverlapsBox(BoundingBox3D a, BoundingBox3D b, double tolerance)
+        /// <summary>True when <paramref name="point3D"/> lies inside the box, grown by <paramref name="tolerance"/>.</summary>
+        private static bool ContainsPoint(BoundingBox3D boundingBox3D, Point3D point3D, double tolerance)
         {
-            if (a == null || b == null)
+            if (boundingBox3D == null || point3D == null)
             {
                 return false;
             }
 
-            return a.Min.X <= b.Max.X + tolerance && a.Max.X >= b.Min.X - tolerance
-                && a.Min.Y <= b.Max.Y + tolerance && a.Max.Y >= b.Min.Y - tolerance
-                && a.Min.Z <= b.Max.Z + tolerance && a.Max.Z >= b.Min.Z - tolerance;
-        }
-
-        /// <summary>True when the face is a sloped roof - normal neither (near) vertical nor (near) horizontal.</summary>
-        private static bool IsSlopedRoof(Face3D face3D)
-        {
-            Vector3D normal = face3D?.GetPlane()?.Normal.Unit;
-            if (normal == null)
-            {
-                return false;
-            }
-
-            double absZ = System.Math.Abs(normal.Z);
-            return absZ > 0.1 && absZ < 0.95;
+            Point3D min = boundingBox3D.Min;
+            Point3D max = boundingBox3D.Max;
+            return point3D.X >= min.X - tolerance && point3D.X <= max.X + tolerance
+                && point3D.Y >= min.Y - tolerance && point3D.Y <= max.Y + tolerance
+                && point3D.Z >= min.Z - tolerance && point3D.Z <= max.Z + tolerance;
         }
 
         /// <summary>
