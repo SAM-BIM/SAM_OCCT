@@ -806,6 +806,26 @@ namespace SAM.OCCT.UnitTests
             Assert.True(fill.Max(f => f.GetBoundingBox().Max.Z) >= 1.0 - 1e-3, "Patch should reach the wall top (z=1)");
         }
 
+        [Fact]
+        public void GapFill_NearCoincidentSharedEdge_MergedAsInteriorNotNaked()
+        {
+            // Two coplanar floor tiles whose adjacent edges are 0.6 mm apart - under the 1 mm tolerance, but on
+            // opposite sides of a grid-rounding boundary (Round(1000)=1000 vs Round(1000.6)=1001). The vertex
+            // clustering must merge that seam into one interior edge, so the only naked loop is the outer 2x1
+            // rectangle (one patch, area ~2). A grid-rounded key would split the seam into two naked edges and
+            // fragment the loop into two patches.
+            List<Face3D> faces = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(new Point3D(0,0,0), new Point3D(1,0,0), new Point3D(1,1,0), new Point3D(0,1,0)),
+                TestGeometry.CreatePlanarFace(new Point3D(1.0006,0,0), new Point3D(2,0,0), new Point3D(2,1,0), new Point3D(1.0006,1,0)),
+            };
+
+            List<Face3D> fill = GapFill.NakedLoopFace3Ds(faces, null, 1e-3);
+
+            Assert.Single(fill);
+            Assert.Equal(2.0, fill[0].GetArea(), 1); // merged outer rectangle, ~2 m^2 (seam treated as interior)
+        }
+
         // ──────────────────────────────────────────────────────────────
         // Panel3DSnapSolver.NormalizeCaps (level-plane normalization)
         // ──────────────────────────────────────────────────────────────

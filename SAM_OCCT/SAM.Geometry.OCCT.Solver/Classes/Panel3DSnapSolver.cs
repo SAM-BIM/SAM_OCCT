@@ -100,6 +100,13 @@ namespace SAM.Geometry.OCCT.Solver
         /// ridge / the next roof slope) and trims cleanly (metres).</summary>
         public double FillMargin { get; set; } = 0.5;
 
+        /// <summary>How far past the wall plane a cap is grown once the measured gap is closed - a small hedge
+        /// so the floor genuinely crosses the wall (which MakerVolume can cut) rather than touching it
+        /// tangentially. Independent of <see cref="ExtendOvershoot"/> (the wall→cap reach). Set to 0 to grow
+        /// each cap *exactly* to the wall plane and let the post-resolve sew bond the coincident edges
+        /// instead (the grow-to-plane-and-sew alternative). Default 0.05 m.</summary>
+        public double FillOvershoot { get; set; } = 0.05;
+
         /// <summary>
         /// Re-attach any face the native MakerVolume dropped - walls AND caps (floors/roofs) alike. The
         /// kernel returns only faces that bound a closed cell, so a face whose cell fails to form (e.g. a
@@ -311,7 +318,7 @@ namespace SAM.Geometry.OCCT.Solver
             // Grow the caps out to the now-closed walls so the floor/roof-to-wall gaps close.
             if (FillCapsToWalls)
             {
-                Fill(SnappedPanels, VerticalAngleTolerance, FillMargin, ToleranceDistance, ExtendOvershoot);
+                Fill(SnappedPanels, VerticalAngleTolerance, FillMargin, ToleranceDistance, FillOvershoot);
             }
 
             // Plan-closure diagnostic: which wall ends are STILL open after the managed extend? These are the
