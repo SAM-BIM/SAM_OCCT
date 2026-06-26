@@ -111,8 +111,19 @@ namespace SAM.Geometry.OCCT.Solver
         /// </summary>
         public bool RetainDropped { get; set; } = true;
 
-        /// <summary>Step 2: after the resolve, build a Face3D over each residual naked-boundary loop (air-panel
-        /// candidate) so every space is fully enclosed. Default true. (Step 1 strips input holes outright.)</summary>
+        /// <summary>Step 2: after the resolve, re-sew the resolved faces at an expanded tolerance to stitch the
+        /// floor/wall slot gaps that survive the volume build, instead of patching them with fabricated faces.
+        /// The sewn result is kept only when it strictly reduces the naked-edge count. Default true.</summary>
+        public bool SewResidualGaps { get; set; } = true;
+
+        /// <summary>Upper bound (metres) on the post-resolve sew tolerance - how wide a residual floor/wall slot
+        /// the sew may bridge. Larger than the pre-build <c>SewingTolerance</c> (which only closes sub-cm gaps),
+        /// but clamped (≤ 0.3 m) so unrelated near edges are not over-merged. Default 0.1 m.</summary>
+        public double SewExpandTolerance { get; set; } = 0.1;
+
+        /// <summary>Step 2: after the resolve (and the sew pass), build a Face3D over each residual naked-boundary
+        /// loop (air-panel candidate) so every space is fully enclosed. Default true. (Step 1 strips input holes
+        /// outright.)</summary>
         public bool FillHoles { get; set; } = true;
 
         /// <summary>Angle within which a panel's normal counts as horizontal, so the panel is "vertical" (a wall).</summary>
@@ -300,7 +311,7 @@ namespace SAM.Geometry.OCCT.Solver
             // Grow the caps out to the now-closed walls so the floor/roof-to-wall gaps close.
             if (FillCapsToWalls)
             {
-                Fill(SnappedPanels, VerticalAngleTolerance, FillMargin, ToleranceDistance);
+                Fill(SnappedPanels, VerticalAngleTolerance, FillMargin, ToleranceDistance, ExtendOvershoot);
             }
 
             // Plan-closure diagnostic: which wall ends are STILL open after the managed extend? These are the
@@ -831,16 +842,26 @@ namespace SAM.Geometry.OCCT.Solver
         /// overshoots the surrounding walls, closing the floor/roof-to-wall gaps that otherwise leave naked
         /// edges and prevent any cell from closing. The native resolve trims the overshoot back at the walls.
         /// </summary>
-        public static void Fill(List<SnappedPanel> panels, double verticalAngleTolerance, double margin, double toleranceDistance)
+        public static void Fill(List<SnappedPanel> panels, double verticalAngleTolerance, double margin, double toleranceDistance, double overshoot = 0.05)
         {
             if (panels == null || panels.Count == 0 || margin <= toleranceDistance)
             {
                 return;
             }
 
+            // The walls each cap grows toward. Measuring the gap to these (rather than blindly offsetting by
+            // the full margin) lets a cap reach exactly the walls it is short of and no further - the kernel
+            // trims the small overshoot. A cap with no wall in reach falls back to the fixed-margin grow.
+            List<SnappedPanel> walls = panels.Where(x => x.IsVertical(verticalAngleTolerance)).ToList();
+
             foreach (SnappedPanel panel in panels)
             {
-                if (!panel.IsVertical(verticalAngleTolerance)) // floors and roofs are the caps
+                if (panel.IsVertical(verticalAngleTolerance)) // floors and roofs are the caps
+                {
+                    continue;
+                }
+
+                if (!panel.GrowOutwardTo(walls, margin, overshoot, toleranceDistance))
                 {
                     panel.GrowOutward(margin, toleranceDistance);
                 }
@@ -1070,6 +1091,38 @@ namespace SAM.Geometry.OCCT.Solver
                 resolved = merged;
             }
 
+            // ---- Adaptive native sew pass ----
+            // The pre-build sew (SewingTolerance ~1 cm) only bridges sub-cm gaps; the floor/wall slot gaps
+            // that survive into the resolved faces are wider. Re-sew the resolved faces at an expanded
+            // tolerance to stitch the two free edges of each slot directly - no fabricated air face - and keep
+            // the sewn result only when it strictly reduces the naked-edge count, so over-merging unrelated
+            // near edges is rejected. GapFill below then handles only what sewing could not close.
+            if (SewResidualGaps)
+            {
+                int nakedBefore = NakedEdgeCount(resolved, options);
+                if (nakedBefore > 0)
+                {
+                    double sewTolerance = System.Math.Min(System.Math.Max(SewExpandTolerance, options.SewingTolerance), 0.3);
+                    OcctBuildOptions sewOptions = new OcctBuildOptions(options)
+                    {
+                        SewBeforeBuild = true,
+                        SewingTolerance = sewTolerance
+                    };
+
+                    List<Shell> sewnShells = GeometryQuery.Sew(resolved, out OcctCellComplexResult sewResult, sewOptions, false);
+                    sewResult?.Dispose();
+
+                    List<Face3D> sewn = sewnShells == null
+                        ? null
+                        : sewnShells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null && x.IsValid()).ToList();
+
+                    if (sewn != null && sewn.Count != 0 && NakedEdgeCount(sewn, options) < nakedBefore)
+                    {
+                        resolved = sewn;
+                    }
+                }
+            }
+
             ResolvedFace3Ds = resolved;
 
             // Report naked (free) boundary edges - true boundaries vs unresolved gaps.
@@ -1094,6 +1147,24 @@ namespace SAM.Geometry.OCCT.Solver
                     HoleFillFace3Ds = (HoleFillFace3Ds ?? new List<Face3D>()).Concat(gapFace3Ds).ToList();
                 }
             }
+        }
+
+        /// <summary>
+        /// Counts the naked (free) boundary edges in a resolved face set via the native validator. Used by the
+        /// adaptive sew pass to accept a re-sew only when it strictly reduces the count. Returns
+        /// <see cref="int.MaxValue"/> when the validator is unavailable, so a sew is never accepted on a
+        /// count it could not measure.
+        /// </summary>
+        private static int NakedEdgeCount(List<Face3D> face3Ds, OcctBuildOptions options)
+        {
+            if (face3Ds == null || face3Ds.Count == 0)
+            {
+                return 0;
+            }
+
+            GeometryQuery.Validate(face3Ds, out OcctValidationReport report, out OcctCellComplexResult result, options, false);
+            result?.Dispose();
+            return report?.CountOf(OcctValidationIssueCategory.NakedEdge) ?? int.MaxValue;
         }
 
         private static List<SnappedPanel> Register(List<Face3D> face3Ds, List<double> bucketSizes, List<double> weights, List<double> maxExtensions)

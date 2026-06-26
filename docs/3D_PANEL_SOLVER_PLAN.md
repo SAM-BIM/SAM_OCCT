@@ -87,11 +87,16 @@ Output: `CleanFace3Ds` — clean single panels. Run in isolation via the analyti
 values and review the result before Step 2.
 
 **Step 2 — extend + resolve (consumes Step 1):**
-- **Fill** floors/roofs out to the walls (`Fill`/`GrowOutward`).
+- **Fill** floors/roofs out to the walls. `Fill` measures the actual gap from each cap to the
+  walls it is short of and grows it to *meet* them (`SnappedPanel.GrowOutwardTo`), instead of a
+  blind fixed margin; a cap with no wall in reach falls back to the fixed `GrowOutward(margin)`.
 - **Extend** walls between floors and up to roofs (`Extend`/`ExtendTopTo`/`ExtendBottomTo`).
 - **Resolve** through the native kernel: coplanar pre-merge → MakerVolume (`Create.Shells`)
-  → `MergeCoplanar` → `Validate`; residual naked-boundary loops are closed by `GapFill`
-  (air-panel candidates). `Modify.Solve3D` runs Step 1 then Step 2.
+  → `MergeCoplanar` → **adaptive sew** (re-`Query.Sew` the resolved faces at an expanded,
+  clamped tolerance to stitch residual floor/wall slot gaps; kept only when it reduces the naked
+  count) → `Validate`. Residual naked-boundary loops are then closed by `GapFill` (air-panel
+  candidates) — planar loops as a single face, non-planar loops fan-triangulated so the warped
+  floor/wall perimeter still closes. `Modify.Solve3D` runs Step 1 then Step 2.
 
 Sloped-roof–specific heuristics remain out of scope; the kernel does all cutting (Step 1
 never splits faces).

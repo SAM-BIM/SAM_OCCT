@@ -755,6 +755,57 @@ namespace SAM.OCCT.UnitTests
             Assert.True(floor.GetArea() > floorAreaBefore);          // floor grown
         }
 
+        [Fact]
+        public void GrowOutwardTo_FloorShortOfWall_GrowsToMeetWall()
+        {
+            // A wall in the y=0 plane (x 0..1, z 0..3) and a floor at z=0 that stops 0.1 m short of it
+            // (y 0.1..1). The measured grow should extend the floor to meet/overshoot the wall plane at y=0,
+            // not by a blanket margin.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(1, 0, 0), new Point3D(1, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+            SnappedPanel floor = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0.1, 0), new Point3D(1, 0.1, 0), new Point3D(1, 1, 0), new Point3D(0, 1, 0)), 1, 0.3, 0.5);
+
+            bool grown = floor.GrowOutwardTo(new List<SnappedPanel> { wall }, maxReach: 0.5, overshoot: 0.05, tolerance: 1e-6);
+
+            Assert.True(grown);
+            Assert.True(floor.GetBoundingBox().Min.Y <= 1e-6, "Floor should grow to meet/overshoot the wall plane at y=0");
+        }
+
+        [Fact]
+        public void GrowOutwardTo_NoWallInReach_ReturnsFalse()
+        {
+            // The only wall is 10 m away in plan, far beyond the floor's reach, so the measured grow is a no-op
+            // and the caller is expected to fall back to the fixed-margin grow.
+            SnappedPanel floor = MakeFloorPanel(0);
+            SnappedPanel farWall = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 10, 0), new Point3D(1, 10, 0), new Point3D(1, 10, 3), new Point3D(0, 10, 3)), 1, 0.3, 0.5);
+
+            bool grown = floor.GrowOutwardTo(new List<SnappedPanel> { farWall }, maxReach: 0.5, overshoot: 0.05, tolerance: 1e-6);
+
+            Assert.False(grown);
+        }
+
+        [Fact]
+        public void GapFill_NonPlanarLoop_ReturnsValidTriangulatedPatch()
+        {
+            // A floor (z=0) and a wall (y=0) sharing one edge: their free edges form a single, non-planar
+            // L-shaped naked loop. A single planar polygon over it is invalid (the old behaviour returned
+            // nothing); the fan-triangulation fallback must still close it with valid faces.
+            List<Face3D> faces = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(new Point3D(0,0,0), new Point3D(1,0,0), new Point3D(1,1,0), new Point3D(0,1,0)), // floor z=0
+                TestGeometry.CreatePlanarFace(new Point3D(0,0,0), new Point3D(1,0,0), new Point3D(1,0,1), new Point3D(0,0,1)), // wall y=0
+            };
+
+            List<Face3D> fill = GapFill.NakedLoopFace3Ds(faces, null, 1e-3);
+
+            Assert.NotEmpty(fill);
+            Assert.All(fill, f => Assert.True(f != null && f.IsValid(), "Every patch face should be valid"));
+            // The patch spans both the floor (z=0) and the top of the wall (z=1) - it is genuinely non-planar.
+            Assert.True(fill.Max(f => f.GetBoundingBox().Max.Z) >= 1.0 - 1e-3, "Patch should reach the wall top (z=1)");
+        }
+
         // ──────────────────────────────────────────────────────────────
         // Panel3DSnapSolver.NormalizeCaps (level-plane normalization)
         // ──────────────────────────────────────────────────────────────
