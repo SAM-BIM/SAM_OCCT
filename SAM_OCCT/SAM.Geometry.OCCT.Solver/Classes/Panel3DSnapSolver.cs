@@ -245,6 +245,18 @@ namespace SAM.Geometry.OCCT.Solver
                 return;
             }
 
+            // ---- Raw-first ----
+            // A well-modelled export resolves directly through the kernel; the managed clean+extend below is
+            // built to REPAIR gappy exports and only degrades an already-watertight solve (it merges/normalizes
+            // caps and extends walls, which on good input loses room separations). Hand the kernel the raw input
+            // faces first and keep that result when it is watertight (no naked edges); only fall through to the
+            // managed pipeline when the raw solve leaves gaps. Skipped for the diagnostic StopAfter* modes, which
+            // exist to inspect the managed clean/extend geometry itself.
+            if (!StopAfterClean && !StopAfterExtend && TryRawResolve(options))
+            {
+                return;
+            }
+
             List<double> bucketSizes_Adjusted = AdjustListLength(bucketSizes, face3Ds.Count, DEFAULT_BucketSize);
             List<double> weights_Adjusted = AdjustListLength(weights, face3Ds.Count, DEFAULT_Weight);
             List<double> maxExtensions_Adjusted = AdjustListLength(maxExtensions, face3Ds.Count, DEFAULT_MaxExtension);
@@ -1175,6 +1187,67 @@ namespace SAM.Geometry.OCCT.Solver
                     }
                 }
             }
+        }
+
+        // Raw-first attempt: build cells straight from the input faces (no managed clean/extend) and keep the
+        // result only when the kernel returns a watertight envelope (zero naked edges). A well-modelled export
+        // resolves this way directly; a gappy one leaves naked edges and we fall back to the managed pipeline.
+        // Returns true (and populates ResolvedFace3Ds / NativeResolved / ResolvedCellCount) when adopted.
+        private bool TryRawResolve(OcctBuildOptions options)
+        {
+            List<Face3D> rawFace3Ds = face3Ds.Where(x => x != null && x.IsValid()).ToList();
+            if (rawFace3Ds.Count == 0)
+            {
+                return false;
+            }
+
+            // Same healing defaults as Resolve: sew sub-cm gaps and keep internal floors/partitions as shared
+            // cell faces (a zoned complex, not just the outer envelope).
+            OcctBuildOptions rawOptions = options ?? new OcctBuildOptions
+            {
+                AvoidInternalShapes = false,
+                SewBeforeBuild = true,
+                SewingTolerance = 0.01
+            };
+
+            List<Shell> shells = GeometryCreate.Shells(rawFace3Ds, out OcctCellComplexResult result, rawOptions);
+            if (result == null || !result.NativeAvailable)
+            {
+                // Native kernel unavailable (e.g. non-Windows agent): let the managed pipeline run.
+                result?.Dispose();
+                return false;
+            }
+
+            int cells = result.Cells?.Count ?? 0;
+            List<Face3D> resolved = shells == null
+                ? new List<Face3D>()
+                : shells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null && x.IsValid()).ToList();
+            result.Dispose();
+
+            if (cells < 1 || resolved.Count == 0)
+            {
+                return false;
+            }
+
+            // Adopt the raw solve only when it is watertight; otherwise the managed clean+extend (gap repair) earns its keep.
+            if (NakedEdgeCount(resolved, rawOptions) > 0)
+            {
+                return false;
+            }
+
+            // Merge coplanar neighbours so output faces are not left split where MakerVolume cut them.
+            List<Face3D> merged = GeometryQuery.MergeCoplanarFace3Ds(resolved, out OcctCellComplexResult mergeResult, ToleranceAngle, rawOptions);
+            mergeResult?.Dispose();
+            if (merged != null && merged.Count != 0)
+            {
+                resolved = merged;
+            }
+
+            ResolvedFace3Ds = resolved;
+            NativeResolved = true;
+            ResolvedCellCount = cells;
+            NakedEdgePoint3Ds = new List<Point3D>();
+            return true;
         }
 
         private void Resolve(List<Face3D> snappedFace3Ds, OcctBuildOptions options)

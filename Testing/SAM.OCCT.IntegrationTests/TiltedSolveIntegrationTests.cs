@@ -91,11 +91,10 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         /// <summary>
-        /// Two stacked tilted levels (287 panels). The congruent-skin partition collapse closes most of the
-        /// envelope; the residual naked edges sit at the inter-level slab corners (where the floor/roof slab
-        /// between the storeys meets the partition and end walls) and are not yet fully closed. This guards that
-        /// the model still solves natively and stays at least as closed as today (~7 naked, was ~19 before the
-        /// equal-area gate); the strict 0-naked target is tracked by <see cref="Solve3D_TwoLevelTilted_FullyCloses"/>.
+        /// Two stacked tilted levels (287 panels). This well-modelled export resolves directly through the kernel
+        /// via the solver's raw-first path, so every room on both storeys forms its own cell (~44). The old
+        /// clean+extend pipeline under-counted at 32 cells with ~7 residual naked edges at the inter-level slab
+        /// corners; the watertightness is asserted by <see cref="Solve3D_TwoLevelTilted_FullyCloses"/>.
         /// </summary>
         [SkippableFact]
         public void Solve3D_TwoLevelTilted_SolvesAndImprovesClosure()
@@ -110,18 +109,16 @@ namespace SAM.OCCT.IntegrationTests
             List<Panel> solved = panels.Solve3D(out List<Point3D> nakedPoint3Ds, out List<string> diagnostics);
 
             Assert.NotNull(solved);
-            Assert.True(CellCount(diagnostics) > 20, "Most rooms should still form cells");
-            // No worse than today's congruent-skin result (~7 naked); the no-collapse baseline was ~15-35.
-            Assert.True((nakedPoint3Ds?.Count ?? int.MaxValue) <= 12,
-                $"Closure regressed: {nakedPoint3Ds?.Count} naked edges (expected <= 12)");
+            // Both storeys' rooms form (raw-first yields ~44 cells; the old pipeline reached only 32).
+            Assert.True(CellCount(diagnostics) >= 40, $"Expected >= 40 cells, got {CellCount(diagnostics)}");
         }
 
         /// <summary>
-        /// Strict target for the two-level tilted model: every space fully enclosed (no naked edges). Skipped
-        /// until the inter-level junction closure is finished - un-skip when the deeper fill/sew robustness work
-        /// lands.
+        /// Strict target for the two-level tilted model: every space fully enclosed (no naked edges). Now met by
+        /// the raw-first solve path (the well-modelled export resolves watertight directly through the kernel,
+        /// where the managed clean+extend left ~7-19 naked edges at the inter-level slab corners).
         /// </summary>
-        [SkippableFact(Skip = "WIP: two-level tilted leaves ~19 naked edges at inter-level slab corners; target is 0.")]
+        [SkippableFact]
         public void Solve3D_TwoLevelTilted_FullyCloses()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
