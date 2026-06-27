@@ -151,5 +151,61 @@ namespace SAM.OCCT.IntegrationTests
             double resolvedArea = solver.ResolvedFace3Ds.Sum(f => f?.GetArea() ?? 0);
             Assert.Equal(expectedArea, resolvedArea, 3);
         }
+
+        // ──────────────────────────────────────────────────────────────
+        // Floor stops short of the walls: measured fill + sew close the room
+        // ──────────────────────────────────────────────────────────────
+
+        /// <summary>A 4×4×3 box whose floor stops 5 cm short of every wall on all sides - the floor/wall slot
+        /// gap that produces naked edges on real Revit exports. The measured fill grows the floor out to meet
+        /// the walls and the resolve closes it into a cell, with no fabricated air face.</summary>
+        private static List<Face3D> FloorShortOfWallsBox(double inset)
+        {
+            return new List<Face3D>
+            {
+                // 4 walls of a 4×4 footprint, 3 m tall
+                TestGeometry.CreatePlanarFace(new Point3D(0,0,0), new Point3D(4,0,0), new Point3D(4,0,3), new Point3D(0,0,3)), // y=0
+                TestGeometry.CreatePlanarFace(new Point3D(0,4,0), new Point3D(4,4,0), new Point3D(4,4,3), new Point3D(0,4,3)), // y=4
+                TestGeometry.CreatePlanarFace(new Point3D(0,0,0), new Point3D(0,4,0), new Point3D(0,4,3), new Point3D(0,0,3)), // x=0
+                TestGeometry.CreatePlanarFace(new Point3D(4,0,0), new Point3D(4,4,0), new Point3D(4,4,3), new Point3D(4,0,3)), // x=4
+                // Ceiling: full 4×4 lid at z=3
+                TestGeometry.CreatePlanarFace(new Point3D(0,0,3), new Point3D(4,0,3), new Point3D(4,4,3), new Point3D(0,4,3)),
+                // Floor: inset on every side so it stops `inset` m short of each wall (the gap to close)
+                TestGeometry.CreatePlanarFace(
+                    new Point3D(inset, inset, 0), new Point3D(4 - inset, inset, 0),
+                    new Point3D(4 - inset, 4 - inset, 0), new Point3D(inset, 4 - inset, 0)),
+            };
+        }
+
+        [SkippableFact]
+        public void Execute_FloorStopsShortOfWalls_ClosesRoomWithoutAirFace()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(FloorShortOfWallsBox(0.05));
+            solver.Execute(new OcctBuildOptions());
+
+            Assert.True(solver.NativeResolved, "Expected native OCCT resolve to run");
+            Assert.NotEmpty(solver.ResolvedFace3Ds);
+            // Measured fill grew the floor out to the walls, so the box closes into at least one cell ...
+            Assert.True(solver.ResolvedCellCount >= 1, $"Expected the room to close into a cell, got {solver.ResolvedCellCount}");
+            // ... and the gap was closed by fill + sew, NOT patched with a fabricated air face.
+            Assert.Empty(solver.HoleFillFace3Ds);
+        }
+
+        [SkippableFact]
+        public void Execute_FloorStopsShort_ZeroFillOvershoot_SewStillCloses()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // FillOvershoot = 0: the floor is grown to land exactly on the wall planes (no overshoot for the
+            // kernel to trim). The post-resolve sew must bond the now-coincident edges and still close the room.
+            // This is the grow-to-plane-and-sew alternative to overshoot-and-trim, captured as a test.
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(FloorShortOfWallsBox(0.05)) { FillOvershoot = 0 };
+            solver.Execute(new OcctBuildOptions());
+
+            Assert.True(solver.NativeResolved, "Expected native OCCT resolve to run");
+            Assert.True(solver.ResolvedCellCount >= 1, $"Expected the sew to bond the coincident edges and close the room, got {solver.ResolvedCellCount}");
+        }
     }
 }

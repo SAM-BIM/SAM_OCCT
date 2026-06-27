@@ -393,6 +393,84 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
+        /// Smart analogue of <see cref="GrowOutward"/>: instead of growing this cap by a blind fixed
+        /// margin, grows it by the <em>measured</em> gap to the walls it is short of. For each in-reach
+        /// vertical wall, the smallest perpendicular distance from this cap's boundary to the wall plane is
+        /// how far the cap falls short on that side; the cap is offset outward by the largest such gap
+        /// (clamped to <paramref name="maxReach"/>) plus a small <paramref name="overshoot"/> the native
+        /// kernel trims back at the walls. This reaches every wall in range without the blanket overshoot of
+        /// the fixed margin, and never grows further than that margin. No-op (returns false) when no wall
+        /// borders this cap, so the caller can fall back to the fixed-margin <see cref="GrowOutward"/>.
+        /// </summary>
+        /// <param name="walls">Candidate (vertical) wall panels that may bound this cap.</param>
+        /// <param name="maxReach">Upper bound on how far the cap may grow (the fill margin / panel reach).</param>
+        /// <param name="overshoot">Small extra growth past the wall so the kernel trims a clean edge.</param>
+        /// <returns>True when the cap was grown toward its walls; false when no wall is in reach.</returns>
+        public bool GrowOutwardTo(IEnumerable<SnappedPanel> walls, double maxReach, double overshoot, double tolerance)
+        {
+            if (face3D == null || plane == null || walls == null || maxReach <= tolerance)
+            {
+                return false;
+            }
+
+            BoundingBox3D capBox = face3D.GetBoundingBox();
+            List<Point3D> capPoints = BoundaryPoints(face3D);
+            if (capBox == null || capPoints == null || capPoints.Count == 0)
+            {
+                return false;
+            }
+
+            bool anyWallInReach = false;
+            double maxGap = 0;
+            foreach (SnappedPanel wall in walls)
+            {
+                Plane wallPlane = wall?.Plane;
+                BoundingBox3D wallBox = wall?.GetBoundingBox();
+                if (wallPlane == null || wallBox == null)
+                {
+                    continue;
+                }
+
+                // Locality: the wall must border this cap in plan (within reach), not be a parallel wall
+                // elsewhere that merely shares a near perpendicular offset with the cap's plane.
+                if (!OverlapsInPlanExpanded(capBox, wallBox, maxReach))
+                {
+                    continue;
+                }
+
+                // How far this cap currently falls short of the wall plane: the nearest its boundary gets.
+                double gap = double.MaxValue;
+                foreach (Point3D capPoint in capPoints)
+                {
+                    double distance = System.Math.Abs(wallPlane.Distance(capPoint));
+                    if (distance < gap)
+                    {
+                        gap = distance;
+                    }
+                }
+
+                if (gap > maxReach + tolerance)
+                {
+                    continue; // wall is out of reach - growing to it would overshoot past the cap
+                }
+
+                anyWallInReach = true;
+                if (gap > maxGap)
+                {
+                    maxGap = gap;
+                }
+            }
+
+            if (!anyWallInReach)
+            {
+                return false; // no wall borders this cap - let the caller fall back to the fixed margin
+            }
+
+            double reach = System.Math.Min(maxGap, maxReach) + System.Math.Max(overshoot, 0);
+            return GrowOutward(reach, tolerance);
+        }
+
+        /// <summary>
         /// True when the supporting plane is (near) vertical - the normal lies (near) horizontal,
         /// i.e. |normal.Z| is within <paramref name="angleTolerance"/> of zero. Walls are vertical;
         /// floors and roofs are not. Used to decide which panels are extended up to a cap.
@@ -660,6 +738,19 @@ namespace SAM.Geometry.OCCT.Solver
         private static List<Point3D> BoundaryPoints(Face3D face3D)
         {
             return (face3D?.GetExternalEdge3D() as ISegmentable3D)?.GetPoints();
+        }
+
+        /// <summary>True when the two boxes overlap in the XY (plan) projection after both are grown by
+        /// <paramref name="expand"/> - used to decide whether a wall borders a cap in plan within reach.</summary>
+        private static bool OverlapsInPlanExpanded(BoundingBox3D a, BoundingBox3D b, double expand)
+        {
+            if (a == null || b == null)
+            {
+                return false;
+            }
+
+            return a.Min.X - expand <= b.Max.X && a.Max.X + expand >= b.Min.X
+                && a.Min.Y - expand <= b.Max.Y && a.Max.Y + expand >= b.Min.Y;
         }
     }
 }

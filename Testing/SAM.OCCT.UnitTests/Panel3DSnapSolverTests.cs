@@ -351,6 +351,28 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void Extend_WallUnderSlopedRoof_EaveBelowWallTop_ExtendsUpToRoof()
+        {
+            // Large-space tilted-roof regression (issue: one wall does not extend to the roof). A wall
+            // (x 0..4, y=0, z 0..3) sits under a roof that slopes from an eave at z=2.5 - BELOW the wall top
+            // (3) - up to a ridge at z=5. The roof's bounding-box Min.Z (2.5) is below the wall top, but the
+            // roof surface directly above the wall is higher, so the wall must still extend up to the roof.
+            // Gating on the cap's bounding-box Min.Z wrongly rejected the roof and left this wall short.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+            SnappedPanel roof = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 2.5), new Point3D(4, 0, 5), new Point3D(4, 1, 5), new Point3D(0, 1, 2.5)), 1, 0.3, 0.5);
+
+            List<SnappedPanel> panels = new List<SnappedPanel> { wall, roof };
+            Panel3DSnapSolver.Extend(panels, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6, roofOvershoot: 0.5, includeRoofs: true);
+
+            // The wall must rise above its original flat top (z=3) toward the roof ridge (z=5); before the fix
+            // it stayed at 3 because the roof's eave (2.5) sat below the wall top.
+            Assert.True(wall.GetBoundingBox().Max.Z > 4.0,
+                $"Wall should extend up to the sloped roof (got top z={wall.GetBoundingBox().Max.Z})");
+        }
+
+        [Fact]
         public void Extend_WallWithNoCapAbove_LeftUntouched()
         {
             // Two parallel walls, no horizontal cap above either.
@@ -755,6 +777,77 @@ namespace SAM.OCCT.UnitTests
             Assert.True(floor.GetArea() > floorAreaBefore);          // floor grown
         }
 
+        [Fact]
+        public void GrowOutwardTo_FloorShortOfWall_GrowsToMeetWall()
+        {
+            // A wall in the y=0 plane (x 0..1, z 0..3) and a floor at z=0 that stops 0.1 m short of it
+            // (y 0.1..1). The measured grow should extend the floor to meet/overshoot the wall plane at y=0,
+            // not by a blanket margin.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(1, 0, 0), new Point3D(1, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+            SnappedPanel floor = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0.1, 0), new Point3D(1, 0.1, 0), new Point3D(1, 1, 0), new Point3D(0, 1, 0)), 1, 0.3, 0.5);
+
+            bool grown = floor.GrowOutwardTo(new List<SnappedPanel> { wall }, maxReach: 0.5, overshoot: 0.05, tolerance: 1e-6);
+
+            Assert.True(grown);
+            Assert.True(floor.GetBoundingBox().Min.Y <= 1e-6, "Floor should grow to meet/overshoot the wall plane at y=0");
+        }
+
+        [Fact]
+        public void GrowOutwardTo_NoWallInReach_ReturnsFalse()
+        {
+            // The only wall is 10 m away in plan, far beyond the floor's reach, so the measured grow is a no-op
+            // and the caller is expected to fall back to the fixed-margin grow.
+            SnappedPanel floor = MakeFloorPanel(0);
+            SnappedPanel farWall = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 10, 0), new Point3D(1, 10, 0), new Point3D(1, 10, 3), new Point3D(0, 10, 3)), 1, 0.3, 0.5);
+
+            bool grown = floor.GrowOutwardTo(new List<SnappedPanel> { farWall }, maxReach: 0.5, overshoot: 0.05, tolerance: 1e-6);
+
+            Assert.False(grown);
+        }
+
+        [Fact]
+        public void GapFill_NonPlanarLoop_ReturnsValidTriangulatedPatch()
+        {
+            // A floor (z=0) and a wall (y=0) sharing one edge: their free edges form a single, non-planar
+            // L-shaped naked loop. A single planar polygon over it is invalid (the old behaviour returned
+            // nothing); the fan-triangulation fallback must still close it with valid faces.
+            List<Face3D> faces = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(new Point3D(0,0,0), new Point3D(1,0,0), new Point3D(1,1,0), new Point3D(0,1,0)), // floor z=0
+                TestGeometry.CreatePlanarFace(new Point3D(0,0,0), new Point3D(1,0,0), new Point3D(1,0,1), new Point3D(0,0,1)), // wall y=0
+            };
+
+            List<Face3D> fill = GapFill.NakedLoopFace3Ds(faces, null, 1e-3);
+
+            Assert.NotEmpty(fill);
+            Assert.All(fill, f => Assert.True(f != null && f.IsValid(), "Every patch face should be valid"));
+            // The patch spans both the floor (z=0) and the top of the wall (z=1) - it is genuinely non-planar.
+            Assert.True(fill.Max(f => f.GetBoundingBox().Max.Z) >= 1.0 - 1e-3, "Patch should reach the wall top (z=1)");
+        }
+
+        [Fact]
+        public void GapFill_NearCoincidentSharedEdge_MergedAsInteriorNotNaked()
+        {
+            // Two coplanar floor tiles whose adjacent edges are 0.6 mm apart - under the 1 mm tolerance, but on
+            // opposite sides of a grid-rounding boundary (Round(1000)=1000 vs Round(1000.6)=1001). The vertex
+            // clustering must merge that seam into one interior edge, so the only naked loop is the outer 2x1
+            // rectangle (one patch, area ~2). A grid-rounded key would split the seam into two naked edges and
+            // fragment the loop into two patches.
+            List<Face3D> faces = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(new Point3D(0,0,0), new Point3D(1,0,0), new Point3D(1,1,0), new Point3D(0,1,0)),
+                TestGeometry.CreatePlanarFace(new Point3D(1.0006,0,0), new Point3D(2,0,0), new Point3D(2,1,0), new Point3D(1.0006,1,0)),
+            };
+
+            List<Face3D> fill = GapFill.NakedLoopFace3Ds(faces, null, 1e-3);
+
+            Assert.Single(fill);
+            Assert.Equal(2.0, fill[0].GetArea(), 1); // merged outer rectangle, ~2 m^2 (seam treated as interior)
+        }
+
         // ──────────────────────────────────────────────────────────────
         // Panel3DSnapSolver.NormalizeCaps (level-plane normalization)
         // ──────────────────────────────────────────────────────────────
@@ -833,6 +926,66 @@ namespace SAM.OCCT.UnitTests
             Panel3DSnapSolver.NormalizeCaps(new List<SnappedPanel> { backer, tile }, 5 * (System.Math.PI / 180), normalizeCapOffset: 0, toleranceDistance: 1e-6);
 
             Assert.False(tile.Snapped);
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Panel3DSnapSolver.SnapOpposedPartitions (back-to-back partitions)
+        // ──────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void SnapOpposedPartitions_OpposingSkinsWithinBucket_CollapseOntoSmallerSkin()
+        {
+            // Two room-facing skins of one shared partition: a large skin at y=0 (normal -Y, area 6) and a
+            // smaller skin at y=0.15 (normal +Y, area 3), within the 0.3 m bucket and overlapping in plan.
+            // The pair must collapse onto the SMALLER skin's plane (y=0.15) - the fragile room's side - so
+            // that room closes exactly while the larger room's gap is left for the fill to recover.
+            SnappedPanel large = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+            SnappedPanel small = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0.15, 0), new Point3D(0, 0.15, 3), new Point3D(1, 0.15, 3), new Point3D(1, 0.15, 0)), 1, 0.3, 0.5);
+
+            // Sanity: the two skins genuinely oppose.
+            Assert.True(large.Plane.Normal.Unit.DotProduct(small.Plane.Normal.Unit) < -0.99, "Skins should be anti-parallel");
+
+            Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { large, small }, 5 * (System.Math.PI / 180), 1e-6);
+
+            // Both skins now lie on the smaller skin's plane (y = 0.15).
+            foreach (Point3D pt in BoundaryPoints(large.Face3D))
+            {
+                Assert.True(System.Math.Abs(pt.Y - 0.15) < 1e-6, $"Large skin point {pt} not collapsed onto the smaller skin plane y=0.15");
+            }
+            Assert.True(large.Snapped, "The larger skin should have been projected onto the smaller skin's plane");
+        }
+
+        [Fact]
+        public void SnapOpposedPartitions_SameFacingDuplicate_LeftToWeightedSnap()
+        {
+            // Two SAME-facing parallel skins (a wall imported twice) are a genuine double-wall, not a
+            // back-to-back partition; SnapOpposedPartitions must not touch them (the weighted bucket snap does).
+            SnappedPanel a = MakeWallPanel(0);
+            SnappedPanel b = MakeWallPanel(0.15);
+            Assert.True(a.Plane.Normal.Unit.DotProduct(b.Plane.Normal.Unit) > 0.99, "Skins should be parallel (same facing)");
+
+            Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { a, b }, 5 * (System.Math.PI / 180), 1e-6);
+
+            Assert.False(a.Snapped);
+            Assert.False(b.Snapped);
+        }
+
+        [Fact]
+        public void SnapOpposedPartitions_OpposingSkinsBeyondBucket_LeftAlone()
+        {
+            // Opposing skins a whole room apart (1 m, well beyond the 0.3 m bucket) are two distinct external
+            // walls, not a shared partition - they must not be collapsed.
+            SnappedPanel a = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+            SnappedPanel b = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 1, 0), new Point3D(0, 1, 3), new Point3D(2, 1, 3), new Point3D(2, 1, 0)), 1, 0.3, 0.5);
+
+            Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { a, b }, 5 * (System.Math.PI / 180), 1e-6);
+
+            Assert.False(a.Snapped);
+            Assert.False(b.Snapped);
         }
 
         // ──────────────────────────────────────────────────────────────

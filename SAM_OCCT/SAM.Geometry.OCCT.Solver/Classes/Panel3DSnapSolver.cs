@@ -100,6 +100,13 @@ namespace SAM.Geometry.OCCT.Solver
         /// ridge / the next roof slope) and trims cleanly (metres).</summary>
         public double FillMargin { get; set; } = 0.5;
 
+        /// <summary>How far past the wall plane a cap is grown once the measured gap is closed - a small hedge
+        /// so the floor genuinely crosses the wall (which MakerVolume can cut) rather than touching it
+        /// tangentially. Independent of <see cref="ExtendOvershoot"/> (the wall→cap reach). Set to 0 to grow
+        /// each cap *exactly* to the wall plane and let the post-resolve sew bond the coincident edges
+        /// instead (the grow-to-plane-and-sew alternative). Default 0.05 m.</summary>
+        public double FillOvershoot { get; set; } = 0.05;
+
         /// <summary>
         /// Re-attach any face the native MakerVolume dropped - walls AND caps (floors/roofs) alike. The
         /// kernel returns only faces that bound a closed cell, so a face whose cell fails to form (e.g. a
@@ -111,8 +118,19 @@ namespace SAM.Geometry.OCCT.Solver
         /// </summary>
         public bool RetainDropped { get; set; } = true;
 
-        /// <summary>Step 2: after the resolve, build a Face3D over each residual naked-boundary loop (air-panel
-        /// candidate) so every space is fully enclosed. Default true. (Step 1 strips input holes outright.)</summary>
+        /// <summary>Step 2: after the resolve, re-sew the resolved faces at an expanded tolerance to stitch the
+        /// floor/wall slot gaps that survive the volume build, instead of patching them with fabricated faces.
+        /// The sewn result is kept only when it strictly reduces the naked-edge count. Default true.</summary>
+        public bool SewResidualGaps { get; set; } = true;
+
+        /// <summary>Upper bound (metres) on the post-resolve sew tolerance - how wide a residual floor/wall slot
+        /// the sew may bridge. Larger than the pre-build <c>SewingTolerance</c> (which only closes sub-cm gaps),
+        /// but clamped (≤ 0.3 m) so unrelated near edges are not over-merged. Default 0.1 m.</summary>
+        public double SewExpandTolerance { get; set; } = 0.1;
+
+        /// <summary>Step 2: after the resolve (and the sew pass), build a Face3D over each residual naked-boundary
+        /// loop (air-panel candidate) so every space is fully enclosed. Default true. (Step 1 strips input holes
+        /// outright.)</summary>
         public bool FillHoles { get; set; } = true;
 
         /// <summary>Angle within which a panel's normal counts as horizontal, so the panel is "vertical" (a wall).</summary>
@@ -300,7 +318,7 @@ namespace SAM.Geometry.OCCT.Solver
             // Grow the caps out to the now-closed walls so the floor/roof-to-wall gaps close.
             if (FillCapsToWalls)
             {
-                Fill(SnappedPanels, VerticalAngleTolerance, FillMargin, ToleranceDistance);
+                Fill(SnappedPanels, VerticalAngleTolerance, FillMargin, ToleranceDistance, FillOvershoot);
             }
 
             // Plan-closure diagnostic: which wall ends are STILL open after the managed extend? These are the
@@ -450,6 +468,18 @@ namespace SAM.Geometry.OCCT.Solver
             {
                 panel.StripInternalEdges();
             }
+
+            // 1b. Collapse back-to-back partitions BEFORE the weighted bucket snap can pull them onto one
+            //     side. Two near-coincident, in-plane-overlapping faces with OPPOSING (anti-parallel) normals
+            //     are the two room-facing skins of one shared partition - one wall per room. The weighted snap
+            //     below projects the lighter skin onto the heavier backer, which puts the partition ~a
+            //     wall-thickness off the lighter room's cap edges and detaches it, so that room cannot close
+            //     and the two adjacent rooms merge into a single cell. Projecting BOTH skins onto the
+            //     half-distance plane between them favours neither room, so both rooms' caps reach the
+            //     partition and each closes. Same-facing duplicates (a wall imported twice) keep parallel
+            //     normals and are left to the weighted snap. Runs in the clean (world) frame, so it is keyed
+            //     on the opposing-normal geometry, not the IsVertical test (which a tilted wall fails here).
+            SnapOpposedPartitions(panels, toleranceAngle, toleranceDistance);
 
             // 2. Bucket snap - bring within-bucket near-parallel, in-plane-overlapping panels onto one
             //    backer plane (now coplanar), and align consecutive vertical wall segments offset by a small
@@ -722,8 +752,8 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             List<SnappedPanel> walls = new List<SnappedPanel>();
-            List<BoundingBox3D> caps = new List<BoundingBox3D>();
-            double roofMaxZ = double.NaN; // the highest point of the roof system (the ridge)
+            List<BoundingBox3D> capBoxes = new List<BoundingBox3D>();
+            List<Plane> capPlanes = new List<Plane>();
             foreach (SnappedPanel panel in panels)
             {
                 BoundingBox3D boundingBox3D = panel.GetBoundingBox();
@@ -744,12 +774,8 @@ namespace SAM.Geometry.OCCT.Solver
                 bool horizontal = boundingBox3D.Max.Z - boundingBox3D.Min.Z <= toleranceDistance + 0.1;
                 if (horizontal || includeRoofs)
                 {
-                    caps.Add(boundingBox3D);
-                }
-
-                if (!horizontal && (double.IsNaN(roofMaxZ) || boundingBox3D.Max.Z > roofMaxZ))
-                {
-                    roofMaxZ = boundingBox3D.Max.Z;
+                    capBoxes.Add(boundingBox3D);
+                    capPlanes.Add(panel.Plane);
                 }
             }
 
@@ -761,26 +787,37 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
+                // Whether a cap sits above (or below) a wall is decided by the cap surface DIRECTLY ABOVE the
+                // wall - the cap plane evaluated at the wall's plan centre - not by the cap's bounding-box
+                // Min/Max Z. For a flat floor the two are identical; for a SLOPED roof they diverge: the roof's
+                // eave (bbox Min.Z) can sit below the wall top while the roof surface over the wall is well
+                // above it (a large space, where the slope spans a wide Z range). Gating on bbox Min.Z then
+                // wrongly rejects that roof as "not above the wall" and leaves the wall short of it - the
+                // reported tilted-roof gap. Evaluating the cap over the wall closes it.
+                double wallPlanX = 0.5 * (wallBox.Min.X + wallBox.Max.X);
+                double wallPlanY = 0.5 * (wallBox.Min.Y + wallBox.Max.Y);
                 double wallTopZ = wallBox.Max.Z;
 
-                // The nearest cap that starts above the wall top and covers it in plan.
+                // The nearest cap whose surface above the wall sits above the wall top and covers it in plan.
                 BoundingBox3D nearestCap = null;
-                double nearestStartZ = double.MaxValue;
-                foreach (BoundingBox3D cap in caps)
+                double nearestCapZ = double.MaxValue;
+                for (int i = 0; i < capBoxes.Count; i++)
                 {
-                    if (cap.Min.Z < wallTopZ - toleranceDistance)
-                    {
-                        continue; // not above the wall
-                    }
-
+                    BoundingBox3D cap = capBoxes[i];
                     if (!OverlapsInPlan(cap, wallBox, toleranceDistance))
                     {
                         continue;
                     }
 
-                    if (cap.Min.Z < nearestStartZ)
+                    double capZ = CapZAtPlan(capPlanes[i], wallPlanX, wallPlanY, cap.Max.Z);
+                    if (capZ < wallTopZ - toleranceDistance)
                     {
-                        nearestStartZ = cap.Min.Z;
+                        continue; // the cap surface above the wall is below the wall top - not a cap above
+                    }
+
+                    if (capZ < nearestCapZ)
+                    {
+                        nearestCapZ = capZ;
                         nearestCap = cap;
                     }
                 }
@@ -796,25 +833,29 @@ namespace SAM.Geometry.OCCT.Solver
                 }
 
                 // ...and down to the nearest cap below, so the wall reaches the floor of its level and the
-                // room can close at the bottom (the "between floors" case).
+                // room can close at the bottom (the "between floors" case). Same surface-above-the-wall
+                // measure, mirrored: the cap whose surface directly under the wall is highest, yet still
+                // below the wall base.
                 double wallBottomZ = wallBox.Min.Z;
                 BoundingBox3D nearestBelow = null;
-                double nearestEndZ = double.MinValue;
-                foreach (BoundingBox3D cap in caps)
+                double nearestBelowZ = double.MinValue;
+                for (int i = 0; i < capBoxes.Count; i++)
                 {
-                    if (cap.Max.Z > wallBottomZ + toleranceDistance)
-                    {
-                        continue; // not below the wall
-                    }
-
+                    BoundingBox3D cap = capBoxes[i];
                     if (!OverlapsInPlan(cap, wallBox, toleranceDistance))
                     {
                         continue;
                     }
 
-                    if (cap.Max.Z > nearestEndZ)
+                    double capZ = CapZAtPlan(capPlanes[i], wallPlanX, wallPlanY, cap.Min.Z);
+                    if (capZ > wallBottomZ + toleranceDistance)
                     {
-                        nearestEndZ = cap.Max.Z;
+                        continue; // the cap surface under the wall is above the wall base - not a cap below
+                    }
+
+                    if (capZ > nearestBelowZ)
+                    {
+                        nearestBelowZ = capZ;
                         nearestBelow = cap;
                     }
                 }
@@ -827,20 +868,55 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
+        /// Elevation of a (non-vertical) cap's plane directly above/below the plan point (<paramref name="x"/>,
+        /// <paramref name="y"/>) - the Z at which the cap surface crosses the vertical line through that point.
+        /// For a flat cap this is just the cap elevation; for a sloped roof it is the roof height at that plan
+        /// location, which is what decides whether the roof sits above a given wall (its bounding-box Min/Max Z
+        /// does not). Falls back to <paramref name="fallback"/> when the plane is (near) vertical, so its Z over
+        /// a plan point is undefined.
+        /// </summary>
+        private static double CapZAtPlan(Plane capPlane, double x, double y, double fallback)
+        {
+            if (capPlane == null)
+            {
+                return fallback;
+            }
+
+            Vector3D normal = capPlane.Normal?.Unit;
+            Point3D origin = capPlane.Origin;
+            if (normal == null || origin == null || System.Math.Abs(normal.Z) <= 1e-9)
+            {
+                return fallback;
+            }
+
+            return origin.Z - (normal.X * (x - origin.X) + normal.Y * (y - origin.Y)) / normal.Z;
+        }
+
+        /// <summary>
         /// Step 2 - fill floors/roofs to walls: grow each (non-vertical) cap outward in its plane so it
         /// overshoots the surrounding walls, closing the floor/roof-to-wall gaps that otherwise leave naked
         /// edges and prevent any cell from closing. The native resolve trims the overshoot back at the walls.
         /// </summary>
-        public static void Fill(List<SnappedPanel> panels, double verticalAngleTolerance, double margin, double toleranceDistance)
+        public static void Fill(List<SnappedPanel> panels, double verticalAngleTolerance, double margin, double toleranceDistance, double overshoot = 0.05)
         {
             if (panels == null || panels.Count == 0 || margin <= toleranceDistance)
             {
                 return;
             }
 
+            // The walls each cap grows toward. Measuring the gap to these (rather than blindly offsetting by
+            // the full margin) lets a cap reach exactly the walls it is short of and no further - the kernel
+            // trims the small overshoot. A cap with no wall in reach falls back to the fixed-margin grow.
+            List<SnappedPanel> walls = panels.Where(x => x.IsVertical(verticalAngleTolerance)).ToList();
+
             foreach (SnappedPanel panel in panels)
             {
-                if (!panel.IsVertical(verticalAngleTolerance)) // floors and roofs are the caps
+                if (panel.IsVertical(verticalAngleTolerance)) // floors and roofs are the caps
+                {
+                    continue;
+                }
+
+                if (!panel.GrowOutwardTo(walls, margin, overshoot, toleranceDistance))
                 {
                     panel.GrowOutward(margin, toleranceDistance);
                 }
@@ -852,6 +928,78 @@ namespace SAM.Geometry.OCCT.Solver
         {
             return a.Min.X <= b.Max.X + tolerance && a.Max.X >= b.Min.X - tolerance
                 && a.Min.Y <= b.Max.Y + tolerance && a.Max.Y >= b.Min.Y - tolerance;
+        }
+
+        /// <summary>
+        /// Collapse each back-to-back partition pair onto the <em>smaller</em> skin's plane. Two faces are a
+        /// partition pair when their supporting planes are <em>anti-parallel</em> (normals oppose, within
+        /// <paramref name="toleranceAngle"/>), each lies inside the other's capture slab, and they share
+        /// surface in-plane - i.e. the two room-facing skins of one shared wall, one per room.
+        /// <para>
+        /// The general <see cref="Snap"/> projects the lighter-weight skin onto the heavier backer, which on a
+        /// default (length-weighted) solve is the LARGER room's skin. That lands the partition ~a wall-thickness
+        /// off the SMALLER room's cap edges; the native resolve only closes a room when the partition meets its
+        /// caps exactly, and the post-resolve fill reliably re-grows the larger room's caps over such a gap but
+        /// not the smaller (more fragile) room's - so the smaller room fails to close and the two rooms merge
+        /// into one cell. Snapping the pair onto the smaller skin instead makes the fragile room close exactly
+        /// and leaves the recoverable gap on the larger room, which the fill closes - so both rooms form their
+        /// own cell. (The midplane was tried and is worse: it leaves an unmet gap on BOTH rooms, closing
+        /// neither.) Same-facing duplicates (parallel, not anti-parallel) are left to the weighted bucket snap.
+        /// </para>
+        /// Largest-area first so each larger skin is projected onto its smaller partner; each face is consumed once.
+        /// </summary>
+        public static void SnapOpposedPartitions(List<SnappedPanel> panels, double toleranceAngle, double toleranceDistance)
+        {
+            if (panels == null || panels.Count < 2)
+            {
+                return;
+            }
+
+            double minDot = System.Math.Cos(toleranceAngle);
+
+            // Largest area first: the outer (larger) skin a is projected onto the inner (smaller) skin b's plane.
+            List<SnappedPanel> ordered = panels
+                .Where(x => x != null && x.Plane != null)
+                .OrderByDescending(x => x.GetArea())
+                .ToList();
+
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                SnappedPanel a = ordered[i];
+                if (a.Snapped || a.Plane == null)
+                {
+                    continue;
+                }
+
+                for (int j = i + 1; j < ordered.Count; j++)
+                {
+                    SnappedPanel b = ordered[j];
+                    if (b.Snapped || b.Plane == null)
+                    {
+                        continue;
+                    }
+
+                    // Opposing (anti-parallel) normals only: the two skins face opposite rooms. A same-facing
+                    // pair (dot > 0) is a genuine double-wall - leave it to the weighted bucket snap.
+                    if (a.Plane.Normal.Unit.DotProduct(b.Plane.Normal.Unit) > -minDot)
+                    {
+                        continue;
+                    }
+
+                    // Near-coincident (within the capture slab) AND sharing surface in-plane: a real
+                    // back-to-back partition, not two distinct parallel walls a room apart.
+                    if (!a.BucketContains(b, out bool _) || !a.OverlapsInPlane(b, toleranceDistance))
+                    {
+                        continue;
+                    }
+
+                    // Project the larger skin onto the smaller skin's plane (the fragile room's side), and mark
+                    // the smaller skin consumed (a no-op self-projection) so the weighted snap leaves it put.
+                    a.SnapToBacker(b.Plane);
+                    b.SnapToBacker(b.Plane);
+                    break; // a is consumed; move to the next a
+                }
+            }
         }
 
         /// <summary>
@@ -1070,6 +1218,38 @@ namespace SAM.Geometry.OCCT.Solver
                 resolved = merged;
             }
 
+            // ---- Adaptive native sew pass ----
+            // The pre-build sew (SewingTolerance ~1 cm) only bridges sub-cm gaps; the floor/wall slot gaps
+            // that survive into the resolved faces are wider. Re-sew the resolved faces at an expanded
+            // tolerance to stitch the two free edges of each slot directly - no fabricated air face - and keep
+            // the sewn result only when it strictly reduces the naked-edge count, so over-merging unrelated
+            // near edges is rejected. GapFill below then handles only what sewing could not close.
+            if (SewResidualGaps)
+            {
+                int nakedBefore = NakedEdgeCount(resolved, options);
+                if (nakedBefore > 0)
+                {
+                    double sewTolerance = System.Math.Min(System.Math.Max(SewExpandTolerance, options.SewingTolerance), 0.3);
+                    OcctBuildOptions sewOptions = new OcctBuildOptions(options)
+                    {
+                        SewBeforeBuild = true,
+                        SewingTolerance = sewTolerance
+                    };
+
+                    List<Shell> sewnShells = GeometryQuery.Sew(resolved, out OcctCellComplexResult sewResult, sewOptions, false);
+                    sewResult?.Dispose();
+
+                    List<Face3D> sewn = sewnShells == null
+                        ? null
+                        : sewnShells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null && x.IsValid()).ToList();
+
+                    if (sewn != null && sewn.Count != 0 && NakedEdgeCount(sewn, options) < nakedBefore)
+                    {
+                        resolved = sewn;
+                    }
+                }
+            }
+
             ResolvedFace3Ds = resolved;
 
             // Report naked (free) boundary edges - true boundaries vs unresolved gaps.
@@ -1094,6 +1274,24 @@ namespace SAM.Geometry.OCCT.Solver
                     HoleFillFace3Ds = (HoleFillFace3Ds ?? new List<Face3D>()).Concat(gapFace3Ds).ToList();
                 }
             }
+        }
+
+        /// <summary>
+        /// Counts the naked (free) boundary edges in a resolved face set via the native validator. Used by the
+        /// adaptive sew pass to accept a re-sew only when it strictly reduces the count. Returns
+        /// <see cref="int.MaxValue"/> when the validator is unavailable, so a sew is never accepted on a
+        /// count it could not measure.
+        /// </summary>
+        private static int NakedEdgeCount(List<Face3D> face3Ds, OcctBuildOptions options)
+        {
+            if (face3Ds == null || face3Ds.Count == 0)
+            {
+                return 0;
+            }
+
+            GeometryQuery.Validate(face3Ds, out OcctValidationReport report, out OcctCellComplexResult result, options, false);
+            result?.Dispose();
+            return report?.CountOf(OcctValidationIssueCategory.NakedEdge) ?? int.MaxValue;
         }
 
         private static List<SnappedPanel> Register(List<Face3D> face3Ds, List<double> bucketSizes, List<double> weights, List<double> maxExtensions)
