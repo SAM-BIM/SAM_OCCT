@@ -2,31 +2,31 @@ name: Build (Windows)
 
 on:
   push:
-    branches: [ "master", "main" ]
+    branches: [ "master", "main", "sow/**" ]
   pull_request:
-    branches: [ "master", "main" ]
+    branches: [ "master", "main", "sow/**" ]
   workflow_dispatch:
 
 jobs:
   build:
-    # Guard: if this workflow ever gets merged upstream (e.g. HoareLea),
-    # it will show as "skipped" there and won't break their CI.
+    # Guard: if this ever gets merged upstream, it will "skip" there.
     if: github.repository_owner == 'SAM-BIM'
     runs-on: windows-2022
 
     env:
       MSBUILDDISABLENODEREUSE: "1"
-      ORG_NAME: "SAM-BIM"
-      # >>> CHANGE THIS PER REPO <<<
-      # Examples: SAM, SAM_gbXML, SAM_GEM, SAM_Tas, ...
-      REPO_NAME: "SAM_Template"
+      # The native OCCT layer (vcpkg/OpenCASCADE) is not available on the runner,
+      # so skip build-native.ps1 and build the managed assemblies only. Integration
+      # tests gracefully skip without the native library.
+      SAM_OCCT_SKIP_NATIVE_BUILD: "true"
 
     steps:
-      - name: Checkout this repo
+      # Checkout THIS repo into a folder so we can clone sibling repos next to it.
+      - name: Checkout SAM_OCCT
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          path: ${{ env.REPO_NAME }}
+          path: SAM_OCCT
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -41,25 +41,35 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $org  = '${{ env.ORG_NAME }}'
-          $repo = '${{ env.REPO_NAME }}'
+          $org   = 'SAM-BIM'
+          $token = '${{ secrets.ORG_REPO_TOKEN }}'
 
-          # >>> ADJUST BUILD ORDER HERE IF NEEDED <<<
-          # Keep the current repo LAST.
-          $buildOrder = @(
-            #'SAM'<- add other repo
-            $repo
+          $deps = @(
+            'SAM'
+            'SAM_Solver'
           )
 
-          # Clone everything except the last one (already checked out by Actions)
-          $deps = $buildOrder[0..($buildOrder.Count-2)]
+          # Match the SAM dependency to this repo's line of development. The
+          # sow/2026-Q2 SAM branch carries the System.Text.Json migration, so its
+          # public API no longer leaks Newtonsoft.Json types into SAM_OCCT (the
+          # default branch still does, which breaks the compile with CS0012).
+          # Falls back to the default branch if that branch does not exist yet.
+          $depBranch = 'sow/2026-Q2'
+
           foreach ($r in $deps) {
             if (Test-Path $r) { continue }
-            Write-Host "Cloning https://github.com/$org/$r.git"
-            git clone --depth 1 "https://github.com/$org/$r.git" $r
+            # Token URL so private deps (e.g. SAM_Solver) don't prompt for credentials;
+            # SAM is public so the bare URL would also work for it.
+            $url = if ($token) { "https://$token@github.com/$org/$r.git" } else { "https://github.com/$org/$r.git" }
+            Write-Host "Cloning $r @ $depBranch"
+            git clone --depth 1 --branch $depBranch $url $r
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::warning::Branch '$depBranch' not found for $r; falling back to default branch."
+              git clone --depth 1 $url $r
+            }
           }
 
-          # Ensure ReferencePath exists even before SAM_Windows builds
+          # Ensure the reference path folder exists even before SAM_Windows builds
           New-Item -ItemType Directory -Force -Path "SAM_Windows\build" | Out-Null
 
       - name: Restore + Rebuild in order (CI props like SAM_Deploy)
@@ -67,8 +77,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $repo = '${{ env.REPO_NAME }}'
-          $windowsRef = (Resolve-Path 'SAM_Windows\build').Path
+          $windowsRef = Join-Path (Get-Location) 'SAM_Windows\build'
 
           # IMPORTANT: keep these as an ARRAY of args (do NOT join into one string)
           $common = @(
@@ -81,23 +90,22 @@ jobs:
             "/p:ReferencePath=$windowsRef"
           )
 
-          # If you really want Platform, use QUOTED Any CPU:
+          # If you really want Platform, use this (quoted) line:
           # $common += '/p:Platform="Any CPU"'
 
-          # Same build order as above (keep repo LAST)
-          $buildOrder = @(
-            #'SAM'<- add other repo
-            $repo
+          # Keep this repo LAST so its dependencies are built first.
+          # SAM_OCCT now references SAM_Solver's SAM.Analytical.Solver (shared SolverQuery.Slits
+          # detection + SolverParameter bucket/weight stamping). Build just that project - it pulls
+          # SAM.Geometry.Solver/SAM.Core.Solver and emits SAM_Solver\build\SAM.Analytical.Solver.dll -
+          # so we avoid the Grasshopper/Rhino projects in SAM_Solver.sln.
+          $solutions = @(
+            'SAM\SAM.sln'
+            'SAM_Solver\SAM_Solver\SAM.Analytical.Solver\SAM.Analytical.Solver.csproj'
+            'SAM_OCCT\SAM_OCCT.sln'
           )
 
-          # Convert build order -> solution paths (robust: first .sln in each folder)
-          $solutions = foreach ($r in $buildOrder) {
-            $sln = Get-ChildItem -Path $r -Filter *.sln -File | Select-Object -First 1
-            if (-not $sln) { throw "No .sln found under: $r" }
-            $sln.FullName
-          }
-
           foreach ($sln in $solutions) {
+            if (-not (Test-Path $sln)) { throw "Missing solution: $sln" }
             Write-Host "==> Restore: $sln"
             & msbuild $sln /t:Restore @common
           }
@@ -107,10 +115,40 @@ jobs:
             & msbuild $sln /t:Rebuild @common
           }
 
+      - name: Run tests (unit always; integration auto-skips without native)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $unit        = 'SAM_OCCT/Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj'
+          $integration = 'SAM_OCCT/Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj'
+
+          # Unit tests must pass. Coverage is collected for reporting (soft gate).
+          dotnet test $unit `
+            -c Release `
+            --logger "trx;LogFileName=unit.trx" `
+            --collect:"XPlat Code Coverage" `
+            --results-directory TestResults
+
+          # Integration tests run real OCCT; they SkippableFact-skip when the
+          # native library is absent, so this step stays green without it.
+          dotnet test $integration `
+            -c Release `
+            --logger "trx;LogFileName=integration.trx" `
+            --results-directory TestResults
+
+      - name: Upload test results & coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SAM_OCCT-test-results
+          path: TestResults/**
+          if-no-files-found: warn
+
       - name: Upload build folders (optional)
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.REPO_NAME }}-build-folders
+          name: SAM_OCCT-build-folders
           path: |
             **\build\*
           if-no-files-found: warn

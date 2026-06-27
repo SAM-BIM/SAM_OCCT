@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <Deterministic>false</Deterministic>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <AssemblyTitle>SAM.Geometry.OCCT.Solver</AssemblyTitle>
+    <Product>SAM_OCCT</Product>
+    <Copyright>Copyright (c) 2020-2026 Michal Dengusiak &amp; Jakub Ziolkowski and contributors</Copyright>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <OutputPath>..\..\build\</OutputPath>
+    <DocumentationFile>..\..\build\SAM.Geometry.OCCT.Solver.xml</DocumentationFile>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <OutputPath>..\..\build\</OutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="SAM.Core">
+      <HintPath>..\..\..\SAM\build\SAM.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="SAM.Geometry">
+      <HintPath>..\..\..\SAM\build\SAM.Geometry.dll</HintPath>
+    </Reference>
+    <!-- Transform3D's API surface (Matrix4D) lives in SAM.Math; needed to resolve the level-frame rotation. -->
+    <Reference Include="SAM.Math">
+      <HintPath>..\..\..\SAM\build\SAM.Math.dll</HintPath>
+    </Reference>
+    <!-- Reuse the proven 2D ExtensionSolver (cost-based extend/trim of wall axes to junctions) for the
+         plan-loop close in 3D, instead of re-porting it. Lives in the SAM_Solver build. -->
+    <Reference Include="SAM.Geometry.Solver">
+      <HintPath>..\..\..\SAM_Solver\build\SAM.Geometry.Solver.dll</HintPath>
+    </Reference>
+    <!-- Planar.Query.Offset overload resolution exposes NetTopologySuite's JoinStyle; needed to compile the cap-fill offset. -->
+    <Reference Include="NetTopologySuite">
+      <HintPath>..\..\..\SAM\build\NetTopologySuite.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\SAM.Core.OCCT\SAM.Core.OCCT.csproj" />
+    <ProjectReference Include="..\SAM.Geometry.OCCT\SAM.Geometry.OCCT.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+</Project>

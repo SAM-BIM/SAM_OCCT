@@ -1,0 +1,113 @@
+cmake_minimum_required(VERSION 3.20)
+
+project(SAM.Occt.Native LANGUAGES CXX)
+
+set(SAM_OCCT_OUTPUT_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/../../build" CACHE PATH "Directory for SAM OCCT native build output.")
+set(SAM_OCCT_OCCT_INCLUDE_DIR "" CACHE PATH "Manual OCCT include directory, for SDKs without OpenCASCADEConfig.cmake.")
+set(SAM_OCCT_OCCT_LIBRARY_DIR "" CACHE PATH "Manual OCCT library directory, for SDKs without OpenCASCADEConfig.cmake.")
+
+find_package(OpenCASCADE QUIET)
+
+set(SAM_OCCT_OCCT_LIBRARIES "")
+if(OpenCASCADE_FOUND)
+    set(SAM_OCCT_OCCT_INCLUDE_DIRS ${OpenCASCADE_INCLUDE_DIR})
+    set(SAM_OCCT_OCCT_LIBRARIES ${OpenCASCADE_LIBRARIES})
+else()
+    if(NOT SAM_OCCT_OCCT_INCLUDE_DIR OR NOT SAM_OCCT_OCCT_LIBRARY_DIR)
+        message(FATAL_ERROR "OpenCASCADE was not found. Set OpenCASCADE_DIR or set SAM_OCCT_OCCT_INCLUDE_DIR and SAM_OCCT_OCCT_LIBRARY_DIR.")
+    endif()
+
+    set(SAM_OCCT_OCCT_INCLUDE_DIRS ${SAM_OCCT_OCCT_INCLUDE_DIR})
+    set(SAM_OCCT_OCCT_MODULES
+        TKDESTEP
+        TKDEIGES
+        TKXSBase
+        TKOffset
+        TKPrim
+        TKMesh
+        TKBool
+        TKBO
+        TKShHealing
+        TKG3d
+        TKG2d
+        TKGeomBase
+        TKGeomAlgo
+        TKTopAlgo
+        TKBRep
+        TKMath
+        TKernel
+    )
+
+    foreach(SAM_OCCT_OCCT_MODULE IN LISTS SAM_OCCT_OCCT_MODULES)
+        find_library(${SAM_OCCT_OCCT_MODULE}_LIBRARY
+            NAMES ${SAM_OCCT_OCCT_MODULE}
+            PATHS ${SAM_OCCT_OCCT_LIBRARY_DIR}
+            NO_DEFAULT_PATH)
+
+        if(NOT ${SAM_OCCT_OCCT_MODULE}_LIBRARY)
+            message(FATAL_ERROR "Could not find ${SAM_OCCT_OCCT_MODULE}.lib in ${SAM_OCCT_OCCT_LIBRARY_DIR}.")
+        endif()
+
+        list(APPEND SAM_OCCT_OCCT_LIBRARIES ${${SAM_OCCT_OCCT_MODULE}_LIBRARY})
+    endforeach()
+endif()
+
+add_library(SAM.Occt.Native SHARED
+    src/CellComplexBuilder.cpp
+    src/DataExchangeRuntime.cpp
+    src/ShapeHandle.cpp
+    src/ShapeExtrude.cpp
+    src/ShapeOffset.cpp
+    src/ShapeSew.cpp
+    src/ShapeValidate.cpp
+)
+
+target_compile_definitions(SAM.Occt.Native PRIVATE SAM_OCCT_NATIVE_EXPORTS)
+target_include_directories(SAM.Occt.Native PUBLIC include)
+target_compile_features(SAM.Occt.Native PRIVATE cxx_std_17)
+
+# /EHa (asynchronous exception model): OCCT offset / boolean algorithms can hit
+# a hardware fault (access violation) deep inside the kernel on pathological
+# input. Under the default /EHsc, catch(...) cannot catch a structured (SEH)
+# exception, so such a fault tears down the whole host process (e.g. Rhino /
+# Grasshopper) instead of surfacing as a diagnostic. /EHa makes catch(...) catch
+# these faults so every native op returns a clean status. Pairs with the
+# OSD::SetSignal call in the entry points, which converts the signals to typed
+# Standard_Failure exceptions. Strip the CMake-default /EHsc first to avoid the
+# "/EHsc overridden by /EHa" warning.
+if(MSVC)
+    string(REGEX REPLACE "/EHsc" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    target_compile_options(SAM.Occt.Native PRIVATE /EHa)
+endif()
+
+target_include_directories(SAM.Occt.Native PRIVATE ${SAM_OCCT_OCCT_INCLUDE_DIRS})
+target_link_libraries(SAM.Occt.Native PRIVATE ${SAM_OCCT_OCCT_LIBRARIES})
+
+# Delay-load the Data Exchange toolkits (issue #20). The STEP/IGES wrappers are
+# the only code that imports from TKDESTEP.dll / TKDEIGES.dll / TKXSBase.dll
+# (XSControl_Reader, the readers' base class, lives in TKXSBase), and those DLLs
+# (with their XCAF/CAF transitive dependencies) are not part of the core
+# modeling runtime. Delay-loading keeps SAM.Occt.Native loadable - and every
+# pre-existing operation working - even when the Data Exchange DLLs are not
+# deployed; they are resolved only on the first STEP/IGES call. Run
+# build-native.ps1 (which copies the full OCCT bin) to enable STEP/IGES at
+# runtime.
+if(MSVC)
+    target_link_options(SAM.Occt.Native PRIVATE
+        /DELAYLOAD:TKDESTEP.dll
+        /DELAYLOAD:TKDEIGES.dll
+        /DELAYLOAD:TKXSBase.dll)
+    target_link_libraries(SAM.Occt.Native PRIVATE delayimp)
+endif()
+
+set_target_properties(SAM.Occt.Native PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${SAM_OCCT_OUTPUT_DIRECTORY}"
+    LIBRARY_OUTPUT_DIRECTORY "${SAM_OCCT_OUTPUT_DIRECTORY}"
+    ARCHIVE_OUTPUT_DIRECTORY "${SAM_OCCT_OUTPUT_DIRECTORY}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${SAM_OCCT_OUTPUT_DIRECTORY}"
+    LIBRARY_OUTPUT_DIRECTORY_DEBUG "${SAM_OCCT_OUTPUT_DIRECTORY}"
+    ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${SAM_OCCT_OUTPUT_DIRECTORY}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${SAM_OCCT_OUTPUT_DIRECTORY}"
+    LIBRARY_OUTPUT_DIRECTORY_RELEASE "${SAM_OCCT_OUTPUT_DIRECTORY}"
+    ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${SAM_OCCT_OUTPUT_DIRECTORY}"
+)
