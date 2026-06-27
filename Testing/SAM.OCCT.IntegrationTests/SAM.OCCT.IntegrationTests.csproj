@@ -30,6 +30,9 @@
     <Reference Include="SAM.Math">
       <HintPath>..\..\..\SAM\build\SAM.Math.dll</HintPath>
     </Reference>
+    <Reference Include="SAM.Analytical.Solver">
+      <HintPath>..\..\..\SAM_Solver\build\SAM.Analytical.Solver.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
   <!-- Uploaded SAM geometry fixtures exercised by OcctFixtureIntegrationTests. -->

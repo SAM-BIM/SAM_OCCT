@@ -27,6 +27,11 @@
     <Reference Include="SAM.Geometry">
       <HintPath>..\..\..\SAM\build\SAM.Geometry.dll</HintPath>
     </Reference>
+    <!-- SAM_Solver: reuse the canonical SolverParameter (BucketSize/Weight) stamping + SetWeights
+         metric so Clean3D/Solve3D output feeds SAMAnalytical.Visualize without duplicated logic. -->
+    <Reference Include="SAM.Analytical.Solver">
+      <HintPath>..\..\..\SAM_Solver\build\SAM.Analytical.Solver.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\SAM.Core.OCCT\SAM.Core.OCCT.csproj" />

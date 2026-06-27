@@ -83,18 +83,16 @@ namespace SAM.OCCT.IntegrationTests
                 new List<double> { 2.0, 1.0 });
             solver.Execute(new OcctBuildOptions());
 
-            // Managed snap: lower-weight panel projected onto backer plane
-            Assert.True(solver.SnappedPanels[1].Snapped, "Lower-weight candidate should have been snapped");
-
-            // After native resolve, all resolved faces should lie on y = 0
-            Plane backerPlane = solver.SnappedPanels[0].Plane;
+            // Step 1 snapped the lower-weight candidate (y = 0.15) onto the backer (y = 0) and merged them,
+            // so every resolved face lies on the backer plane y = 0.
             Assert.True(solver.NativeResolved);
+            Assert.NotEmpty(solver.ResolvedFace3Ds);
             foreach (Face3D f in solver.ResolvedFace3Ds)
             {
-                Plane p = f?.GetPlane();
-                if (p == null) continue;
-                Assert.True(backerPlane.Distance(p.Origin) < Tolerance.MacroDistance,
-                    $"Resolved face plane is not on the backer plane (distance = {backerPlane.Distance(p.Origin)})");
+                BoundingBox3D boundingBox3D = f?.GetBoundingBox();
+                if (boundingBox3D == null) continue;
+                Assert.True(System.Math.Abs(boundingBox3D.Min.Y) < Tolerance.MacroDistance && System.Math.Abs(boundingBox3D.Max.Y) < Tolerance.MacroDistance,
+                    $"Resolved face is not on the backer plane y=0 (y range {boundingBox3D.Min.Y}..{boundingBox3D.Max.Y})");
             }
         }
 
