@@ -1243,6 +1243,27 @@ namespace SAM.Geometry.OCCT.Solver
                 resolved = merged;
             }
 
+            // Re-add input faces the volume build did not use as a cell boundary (a partial/internal panel, or a
+            // face that bounds no closed cell). MakerVolume returns only cell-bounding faces, and the watertight
+            // check above only validates those, so without this an unrepresented input panel would be silently
+            // dropped from the output - the same RetainDropped contract the managed pipeline applies post-resolve.
+            if (RetainDropped)
+            {
+                List<Face3D> dropped = new List<Face3D>();
+                foreach (Face3D rawFace3D in rawFace3Ds)
+                {
+                    if (rawFace3D != null && rawFace3D.IsValid() && !IsRepresented(rawFace3D, resolved))
+                    {
+                        dropped.Add(rawFace3D);
+                    }
+                }
+
+                if (dropped.Count != 0)
+                {
+                    resolved = resolved.Concat(dropped).ToList();
+                }
+            }
+
             ResolvedFace3Ds = resolved;
             NativeResolved = true;
             ResolvedCellCount = cells;
