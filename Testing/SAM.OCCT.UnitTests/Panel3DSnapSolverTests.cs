@@ -929,6 +929,66 @@ namespace SAM.OCCT.UnitTests
         }
 
         // ──────────────────────────────────────────────────────────────
+        // Panel3DSnapSolver.SnapOpposedPartitions (back-to-back partitions)
+        // ──────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void SnapOpposedPartitions_OpposingSkinsWithinBucket_CollapseOntoSmallerSkin()
+        {
+            // Two room-facing skins of one shared partition: a large skin at y=0 (normal -Y, area 6) and a
+            // smaller skin at y=0.15 (normal +Y, area 3), within the 0.3 m bucket and overlapping in plan.
+            // The pair must collapse onto the SMALLER skin's plane (y=0.15) - the fragile room's side - so
+            // that room closes exactly while the larger room's gap is left for the fill to recover.
+            SnappedPanel large = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+            SnappedPanel small = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0.15, 0), new Point3D(0, 0.15, 3), new Point3D(1, 0.15, 3), new Point3D(1, 0.15, 0)), 1, 0.3, 0.5);
+
+            // Sanity: the two skins genuinely oppose.
+            Assert.True(large.Plane.Normal.Unit.DotProduct(small.Plane.Normal.Unit) < -0.99, "Skins should be anti-parallel");
+
+            Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { large, small }, 5 * (System.Math.PI / 180), 1e-6);
+
+            // Both skins now lie on the smaller skin's plane (y = 0.15).
+            foreach (Point3D pt in BoundaryPoints(large.Face3D))
+            {
+                Assert.True(System.Math.Abs(pt.Y - 0.15) < 1e-6, $"Large skin point {pt} not collapsed onto the smaller skin plane y=0.15");
+            }
+            Assert.True(large.Snapped, "The larger skin should have been projected onto the smaller skin's plane");
+        }
+
+        [Fact]
+        public void SnapOpposedPartitions_SameFacingDuplicate_LeftToWeightedSnap()
+        {
+            // Two SAME-facing parallel skins (a wall imported twice) are a genuine double-wall, not a
+            // back-to-back partition; SnapOpposedPartitions must not touch them (the weighted bucket snap does).
+            SnappedPanel a = MakeWallPanel(0);
+            SnappedPanel b = MakeWallPanel(0.15);
+            Assert.True(a.Plane.Normal.Unit.DotProduct(b.Plane.Normal.Unit) > 0.99, "Skins should be parallel (same facing)");
+
+            Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { a, b }, 5 * (System.Math.PI / 180), 1e-6);
+
+            Assert.False(a.Snapped);
+            Assert.False(b.Snapped);
+        }
+
+        [Fact]
+        public void SnapOpposedPartitions_OpposingSkinsBeyondBucket_LeftAlone()
+        {
+            // Opposing skins a whole room apart (1 m, well beyond the 0.3 m bucket) are two distinct external
+            // walls, not a shared partition - they must not be collapsed.
+            SnappedPanel a = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+            SnappedPanel b = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 1, 0), new Point3D(0, 1, 3), new Point3D(2, 1, 3), new Point3D(2, 1, 0)), 1, 0.3, 0.5);
+
+            Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { a, b }, 5 * (System.Math.PI / 180), 1e-6);
+
+            Assert.False(a.Snapped);
+            Assert.False(b.Snapped);
+        }
+
+        // ──────────────────────────────────────────────────────────────
         // helpers
         // ──────────────────────────────────────────────────────────────
 

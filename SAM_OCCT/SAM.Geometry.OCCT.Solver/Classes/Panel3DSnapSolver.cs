@@ -469,6 +469,18 @@ namespace SAM.Geometry.OCCT.Solver
                 panel.StripInternalEdges();
             }
 
+            // 1b. Collapse back-to-back partitions BEFORE the weighted bucket snap can pull them onto one
+            //     side. Two near-coincident, in-plane-overlapping faces with OPPOSING (anti-parallel) normals
+            //     are the two room-facing skins of one shared partition - one wall per room. The weighted snap
+            //     below projects the lighter skin onto the heavier backer, which puts the partition ~a
+            //     wall-thickness off the lighter room's cap edges and detaches it, so that room cannot close
+            //     and the two adjacent rooms merge into a single cell. Projecting BOTH skins onto the
+            //     half-distance plane between them favours neither room, so both rooms' caps reach the
+            //     partition and each closes. Same-facing duplicates (a wall imported twice) keep parallel
+            //     normals and are left to the weighted snap. Runs in the clean (world) frame, so it is keyed
+            //     on the opposing-normal geometry, not the IsVertical test (which a tilted wall fails here).
+            SnapOpposedPartitions(panels, toleranceAngle, toleranceDistance);
+
             // 2. Bucket snap - bring within-bucket near-parallel, in-plane-overlapping panels onto one
             //    backer plane (now coplanar), and align consecutive vertical wall segments offset by a small
             //    step jog. Non-overlapping, non-colinear parallels (separate bays) are left put.
@@ -916,6 +928,78 @@ namespace SAM.Geometry.OCCT.Solver
         {
             return a.Min.X <= b.Max.X + tolerance && a.Max.X >= b.Min.X - tolerance
                 && a.Min.Y <= b.Max.Y + tolerance && a.Max.Y >= b.Min.Y - tolerance;
+        }
+
+        /// <summary>
+        /// Collapse each back-to-back partition pair onto the <em>smaller</em> skin's plane. Two faces are a
+        /// partition pair when their supporting planes are <em>anti-parallel</em> (normals oppose, within
+        /// <paramref name="toleranceAngle"/>), each lies inside the other's capture slab, and they share
+        /// surface in-plane - i.e. the two room-facing skins of one shared wall, one per room.
+        /// <para>
+        /// The general <see cref="Snap"/> projects the lighter-weight skin onto the heavier backer, which on a
+        /// default (length-weighted) solve is the LARGER room's skin. That lands the partition ~a wall-thickness
+        /// off the SMALLER room's cap edges; the native resolve only closes a room when the partition meets its
+        /// caps exactly, and the post-resolve fill reliably re-grows the larger room's caps over such a gap but
+        /// not the smaller (more fragile) room's - so the smaller room fails to close and the two rooms merge
+        /// into one cell. Snapping the pair onto the smaller skin instead makes the fragile room close exactly
+        /// and leaves the recoverable gap on the larger room, which the fill closes - so both rooms form their
+        /// own cell. (The midplane was tried and is worse: it leaves an unmet gap on BOTH rooms, closing
+        /// neither.) Same-facing duplicates (parallel, not anti-parallel) are left to the weighted bucket snap.
+        /// </para>
+        /// Largest-area first so each larger skin is projected onto its smaller partner; each face is consumed once.
+        /// </summary>
+        public static void SnapOpposedPartitions(List<SnappedPanel> panels, double toleranceAngle, double toleranceDistance)
+        {
+            if (panels == null || panels.Count < 2)
+            {
+                return;
+            }
+
+            double minDot = System.Math.Cos(toleranceAngle);
+
+            // Largest area first: the outer (larger) skin a is projected onto the inner (smaller) skin b's plane.
+            List<SnappedPanel> ordered = panels
+                .Where(x => x != null && x.Plane != null)
+                .OrderByDescending(x => x.GetArea())
+                .ToList();
+
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                SnappedPanel a = ordered[i];
+                if (a.Snapped || a.Plane == null)
+                {
+                    continue;
+                }
+
+                for (int j = i + 1; j < ordered.Count; j++)
+                {
+                    SnappedPanel b = ordered[j];
+                    if (b.Snapped || b.Plane == null)
+                    {
+                        continue;
+                    }
+
+                    // Opposing (anti-parallel) normals only: the two skins face opposite rooms. A same-facing
+                    // pair (dot > 0) is a genuine double-wall - leave it to the weighted bucket snap.
+                    if (a.Plane.Normal.Unit.DotProduct(b.Plane.Normal.Unit) > -minDot)
+                    {
+                        continue;
+                    }
+
+                    // Near-coincident (within the capture slab) AND sharing surface in-plane: a real
+                    // back-to-back partition, not two distinct parallel walls a room apart.
+                    if (!a.BucketContains(b, out bool _) || !a.OverlapsInPlane(b, toleranceDistance))
+                    {
+                        continue;
+                    }
+
+                    // Project the larger skin onto the smaller skin's plane (the fragile room's side), and mark
+                    // the smaller skin consumed (a no-op self-projection) so the weighted snap leaves it put.
+                    a.SnapToBacker(b.Plane);
+                    b.SnapToBacker(b.Plane);
+                    break; // a is consumed; move to the next a
+                }
+            }
         }
 
         /// <summary>
