@@ -471,14 +471,16 @@ namespace SAM.Geometry.OCCT.Solver
 
             // 1b. Collapse back-to-back partitions BEFORE the weighted bucket snap can pull them onto one
             //     side. Two near-coincident, in-plane-overlapping faces with OPPOSING (anti-parallel) normals
-            //     are the two room-facing skins of one shared partition - one wall per room. The weighted snap
-            //     below projects the lighter skin onto the heavier backer, which puts the partition ~a
-            //     wall-thickness off the lighter room's cap edges and detaches it, so that room cannot close
-            //     and the two adjacent rooms merge into a single cell. Projecting BOTH skins onto the
-            //     half-distance plane between them favours neither room, so both rooms' caps reach the
-            //     partition and each closes. Same-facing duplicates (a wall imported twice) keep parallel
-            //     normals and are left to the weighted snap. Runs in the clean (world) frame, so it is keyed
-            //     on the opposing-normal geometry, not the IsVertical test (which a tilted wall fails here).
+            //     AND (near) equal area are the two room-facing skins of one shared partition - one wall per
+            //     room. The weighted snap below projects the lighter skin onto the heavier backer, which puts the
+            //     partition ~a wall-thickness off the lighter room's cap edges and detaches it, so that room
+            //     cannot close and the two adjacent rooms merge into a single cell; collapsing both skins onto
+            //     the smaller (fragile) room's plane closes both rooms instead (see SnapOpposedPartitions). The
+            //     equal-area gate is essential: without it a long shared wall caught against a short partition
+            //     skin, or the differently-sized walls of two adjacent grid rooms, are mis-collapsed and merge
+            //     rooms. Same-facing duplicates (a wall imported twice) keep parallel normals and are left to the
+            //     weighted snap. Runs in the clean (world) frame, so it is keyed on the opposing-normal geometry,
+            //     not the IsVertical test (which a tilted wall fails here).
             SnapOpposedPartitions(panels, toleranceAngle, toleranceDistance);
 
             // 2. Bucket snap - bring within-bucket near-parallel, in-plane-overlapping panels onto one
@@ -948,6 +950,17 @@ namespace SAM.Geometry.OCCT.Solver
         /// </para>
         /// Largest-area first so each larger skin is projected onto its smaller partner; each face is consumed once.
         /// </summary>
+        /// <summary>
+        /// The two skins of a real back-to-back partition are the SAME wall seen from each room, so they are
+        /// congruent - equal area. A within-bucket, anti-parallel, in-plane-overlapping pair whose areas differ
+        /// by more than this fraction is therefore NOT one partition's two skins but two distinct walls (e.g. a
+        /// long shared wall caught against a short partition skin, or the differently-sized walls of two adjacent
+        /// rooms in a grid). Collapsing such a mis-pair drags one wall off its room's cap edges, which both opens
+        /// naked edges and merges the two rooms into a single cell. Observed genuine pairs sit at ratio 1.000 and
+        /// every observed mis-pair at <= 0.93, so this 0.97 floor cleanly separates them.
+        /// </summary>
+        public const double OPPOSED_PARTITION_MIN_AREA_RATIO = 0.97;
+
         public static void SnapOpposedPartitions(List<SnappedPanel> panels, double toleranceAngle, double toleranceDistance)
         {
             if (panels == null || panels.Count < 2)
@@ -989,6 +1002,17 @@ namespace SAM.Geometry.OCCT.Solver
                     // Near-coincident (within the capture slab) AND sharing surface in-plane: a real
                     // back-to-back partition, not two distinct parallel walls a room apart.
                     if (!a.BucketContains(b, out bool _) || !a.OverlapsInPlane(b, toleranceDistance))
+                    {
+                        continue;
+                    }
+
+                    // Congruent skins only: the two room-facing skins of one partition are the same wall and so
+                    // have (near) equal area. A pair whose areas differ by more is a mis-pair of two distinct
+                    // walls; collapsing it drags one wall off its room and merges the rooms (see the constant).
+                    double areaA = a.GetArea();
+                    double areaB = b.GetArea();
+                    double larger = System.Math.Max(areaA, areaB);
+                    if (larger <= 0 || System.Math.Min(areaA, areaB) / larger < OPPOSED_PARTITION_MIN_AREA_RATIO)
                     {
                         continue;
                     }

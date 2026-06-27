@@ -91,11 +91,11 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         /// <summary>
-        /// Two stacked tilted levels (287 panels). The partition collapse cuts the residual naked edges roughly
-        /// in half versus no collapse, but the inter-level slab corners (where the floor/roof slab between the
-        /// storeys meets the partition and end walls) do not yet fully close. This guards that the model still
-        /// solves natively and stays at least as closed as today; the strict 0-naked target is tracked by
-        /// <see cref="Solve3D_TwoLevelTilted_FullyCloses"/>.
+        /// Two stacked tilted levels (287 panels). The congruent-skin partition collapse closes most of the
+        /// envelope; the residual naked edges sit at the inter-level slab corners (where the floor/roof slab
+        /// between the storeys meets the partition and end walls) and are not yet fully closed. This guards that
+        /// the model still solves natively and stays at least as closed as today (~7 naked, was ~19 before the
+        /// equal-area gate); the strict 0-naked target is tracked by <see cref="Solve3D_TwoLevelTilted_FullyCloses"/>.
         /// </summary>
         [SkippableFact]
         public void Solve3D_TwoLevelTilted_SolvesAndImprovesClosure()
@@ -111,9 +111,9 @@ namespace SAM.OCCT.IntegrationTests
 
             Assert.NotNull(solved);
             Assert.True(CellCount(diagnostics) > 20, "Most rooms should still form cells");
-            // No worse than today's partition-collapse result (~19); the no-collapse baseline was ~35.
-            Assert.True((nakedPoint3Ds?.Count ?? int.MaxValue) <= 25,
-                $"Closure regressed: {nakedPoint3Ds?.Count} naked edges (expected <= 25)");
+            // No worse than today's congruent-skin result (~7 naked); the no-collapse baseline was ~15-35.
+            Assert.True((nakedPoint3Ds?.Count ?? int.MaxValue) <= 12,
+                $"Closure regressed: {nakedPoint3Ds?.Count} naked edges (expected <= 12)");
         }
 
         /// <summary>

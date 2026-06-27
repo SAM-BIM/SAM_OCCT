@@ -933,28 +933,49 @@ namespace SAM.OCCT.UnitTests
         // ──────────────────────────────────────────────────────────────
 
         [Fact]
-        public void SnapOpposedPartitions_OpposingSkinsWithinBucket_CollapseOntoSmallerSkin()
+        public void SnapOpposedPartitions_CongruentOpposingSkinsWithinBucket_CollapseOntoOnePlane()
         {
-            // Two room-facing skins of one shared partition: a large skin at y=0 (normal -Y, area 6) and a
-            // smaller skin at y=0.15 (normal +Y, area 3), within the 0.3 m bucket and overlapping in plan.
-            // The pair must collapse onto the SMALLER skin's plane (y=0.15) - the fragile room's side - so
-            // that room closes exactly while the larger room's gap is left for the fill to recover.
+            // Two room-facing skins of one shared partition are the same wall seen from each room, so they are
+            // congruent (equal area): a skin at y=0 (normal -Y) and its twin at y=0.15 (normal +Y), both
+            // 1 x 3, within the 0.3 m bucket and overlapping in plan. They must collapse onto the second
+            // skin's plane (y=0.15) so the fragile room closes exactly while the other room's gap is left for
+            // the fill to recover.
+            SnappedPanel first = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(1, 0, 0), new Point3D(1, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+            SnappedPanel second = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0.15, 0), new Point3D(0, 0.15, 3), new Point3D(1, 0.15, 3), new Point3D(1, 0.15, 0)), 1, 0.3, 0.5);
+
+            // Sanity: the two skins genuinely oppose.
+            Assert.True(first.Plane.Normal.Unit.DotProduct(second.Plane.Normal.Unit) < -0.99, "Skins should be anti-parallel");
+
+            Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { first, second }, 5 * (System.Math.PI / 180), 1e-6);
+
+            // Both skins now lie on the second skin's plane (y = 0.15).
+            foreach (Point3D pt in BoundaryPoints(first.Face3D))
+            {
+                Assert.True(System.Math.Abs(pt.Y - 0.15) < 1e-6, $"Skin point {pt} not collapsed onto the partner skin plane y=0.15");
+            }
+            Assert.True(first.Snapped, "The first skin should have been projected onto its congruent partner's plane");
+        }
+
+        [Fact]
+        public void SnapOpposedPartitions_UnequalAreaOpposingSkins_LeftAlone()
+        {
+            // Anti-parallel, within-bucket, in-plane-overlapping - but the two faces are very different sizes
+            // (area 6 vs 3), so they are NOT one partition's two (congruent) skins: e.g. a long shared wall
+            // caught against a short partition skin. Collapsing such a mis-pair drags the long wall off its
+            // room and merges two rooms into one cell, so the area-ratio gate must leave them put.
             SnappedPanel large = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
                 new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
             SnappedPanel small = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
                 new Point3D(0, 0.15, 0), new Point3D(0, 0.15, 3), new Point3D(1, 0.15, 3), new Point3D(1, 0.15, 0)), 1, 0.3, 0.5);
 
-            // Sanity: the two skins genuinely oppose.
             Assert.True(large.Plane.Normal.Unit.DotProduct(small.Plane.Normal.Unit) < -0.99, "Skins should be anti-parallel");
 
             Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { large, small }, 5 * (System.Math.PI / 180), 1e-6);
 
-            // Both skins now lie on the smaller skin's plane (y = 0.15).
-            foreach (Point3D pt in BoundaryPoints(large.Face3D))
-            {
-                Assert.True(System.Math.Abs(pt.Y - 0.15) < 1e-6, $"Large skin point {pt} not collapsed onto the smaller skin plane y=0.15");
-            }
-            Assert.True(large.Snapped, "The larger skin should have been projected onto the smaller skin's plane");
+            Assert.False(large.Snapped, "Unequal-area opposing faces are a mis-pair and must not be collapsed");
+            Assert.False(small.Snapped, "Unequal-area opposing faces are a mis-pair and must not be collapsed");
         }
 
         [Fact]
