@@ -740,8 +740,8 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             List<SnappedPanel> walls = new List<SnappedPanel>();
-            List<BoundingBox3D> caps = new List<BoundingBox3D>();
-            double roofMaxZ = double.NaN; // the highest point of the roof system (the ridge)
+            List<BoundingBox3D> capBoxes = new List<BoundingBox3D>();
+            List<Plane> capPlanes = new List<Plane>();
             foreach (SnappedPanel panel in panels)
             {
                 BoundingBox3D boundingBox3D = panel.GetBoundingBox();
@@ -762,12 +762,8 @@ namespace SAM.Geometry.OCCT.Solver
                 bool horizontal = boundingBox3D.Max.Z - boundingBox3D.Min.Z <= toleranceDistance + 0.1;
                 if (horizontal || includeRoofs)
                 {
-                    caps.Add(boundingBox3D);
-                }
-
-                if (!horizontal && (double.IsNaN(roofMaxZ) || boundingBox3D.Max.Z > roofMaxZ))
-                {
-                    roofMaxZ = boundingBox3D.Max.Z;
+                    capBoxes.Add(boundingBox3D);
+                    capPlanes.Add(panel.Plane);
                 }
             }
 
@@ -779,26 +775,37 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
+                // Whether a cap sits above (or below) a wall is decided by the cap surface DIRECTLY ABOVE the
+                // wall - the cap plane evaluated at the wall's plan centre - not by the cap's bounding-box
+                // Min/Max Z. For a flat floor the two are identical; for a SLOPED roof they diverge: the roof's
+                // eave (bbox Min.Z) can sit below the wall top while the roof surface over the wall is well
+                // above it (a large space, where the slope spans a wide Z range). Gating on bbox Min.Z then
+                // wrongly rejects that roof as "not above the wall" and leaves the wall short of it - the
+                // reported tilted-roof gap. Evaluating the cap over the wall closes it.
+                double wallPlanX = 0.5 * (wallBox.Min.X + wallBox.Max.X);
+                double wallPlanY = 0.5 * (wallBox.Min.Y + wallBox.Max.Y);
                 double wallTopZ = wallBox.Max.Z;
 
-                // The nearest cap that starts above the wall top and covers it in plan.
+                // The nearest cap whose surface above the wall sits above the wall top and covers it in plan.
                 BoundingBox3D nearestCap = null;
-                double nearestStartZ = double.MaxValue;
-                foreach (BoundingBox3D cap in caps)
+                double nearestCapZ = double.MaxValue;
+                for (int i = 0; i < capBoxes.Count; i++)
                 {
-                    if (cap.Min.Z < wallTopZ - toleranceDistance)
-                    {
-                        continue; // not above the wall
-                    }
-
+                    BoundingBox3D cap = capBoxes[i];
                     if (!OverlapsInPlan(cap, wallBox, toleranceDistance))
                     {
                         continue;
                     }
 
-                    if (cap.Min.Z < nearestStartZ)
+                    double capZ = CapZAtPlan(capPlanes[i], wallPlanX, wallPlanY, cap.Max.Z);
+                    if (capZ < wallTopZ - toleranceDistance)
                     {
-                        nearestStartZ = cap.Min.Z;
+                        continue; // the cap surface above the wall is below the wall top - not a cap above
+                    }
+
+                    if (capZ < nearestCapZ)
+                    {
+                        nearestCapZ = capZ;
                         nearestCap = cap;
                     }
                 }
@@ -814,25 +821,29 @@ namespace SAM.Geometry.OCCT.Solver
                 }
 
                 // ...and down to the nearest cap below, so the wall reaches the floor of its level and the
-                // room can close at the bottom (the "between floors" case).
+                // room can close at the bottom (the "between floors" case). Same surface-above-the-wall
+                // measure, mirrored: the cap whose surface directly under the wall is highest, yet still
+                // below the wall base.
                 double wallBottomZ = wallBox.Min.Z;
                 BoundingBox3D nearestBelow = null;
-                double nearestEndZ = double.MinValue;
-                foreach (BoundingBox3D cap in caps)
+                double nearestBelowZ = double.MinValue;
+                for (int i = 0; i < capBoxes.Count; i++)
                 {
-                    if (cap.Max.Z > wallBottomZ + toleranceDistance)
-                    {
-                        continue; // not below the wall
-                    }
-
+                    BoundingBox3D cap = capBoxes[i];
                     if (!OverlapsInPlan(cap, wallBox, toleranceDistance))
                     {
                         continue;
                     }
 
-                    if (cap.Max.Z > nearestEndZ)
+                    double capZ = CapZAtPlan(capPlanes[i], wallPlanX, wallPlanY, cap.Min.Z);
+                    if (capZ > wallBottomZ + toleranceDistance)
                     {
-                        nearestEndZ = cap.Max.Z;
+                        continue; // the cap surface under the wall is above the wall base - not a cap below
+                    }
+
+                    if (capZ > nearestBelowZ)
+                    {
+                        nearestBelowZ = capZ;
                         nearestBelow = cap;
                     }
                 }
@@ -842,6 +853,31 @@ namespace SAM.Geometry.OCCT.Solver
                     wall.ExtendBottomTo(nearestBelow.Min.Z - overshoot, toleranceDistance);
                 }
             }
+        }
+
+        /// <summary>
+        /// Elevation of a (non-vertical) cap's plane directly above/below the plan point (<paramref name="x"/>,
+        /// <paramref name="y"/>) - the Z at which the cap surface crosses the vertical line through that point.
+        /// For a flat cap this is just the cap elevation; for a sloped roof it is the roof height at that plan
+        /// location, which is what decides whether the roof sits above a given wall (its bounding-box Min/Max Z
+        /// does not). Falls back to <paramref name="fallback"/> when the plane is (near) vertical, so its Z over
+        /// a plan point is undefined.
+        /// </summary>
+        private static double CapZAtPlan(Plane capPlane, double x, double y, double fallback)
+        {
+            if (capPlane == null)
+            {
+                return fallback;
+            }
+
+            Vector3D normal = capPlane.Normal?.Unit;
+            Point3D origin = capPlane.Origin;
+            if (normal == null || origin == null || System.Math.Abs(normal.Z) <= 1e-9)
+            {
+                return fallback;
+            }
+
+            return origin.Z - (normal.X * (x - origin.X) + normal.Y * (y - origin.Y)) / normal.Z;
         }
 
         /// <summary>

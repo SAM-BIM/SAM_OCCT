@@ -351,6 +351,28 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void Extend_WallUnderSlopedRoof_EaveBelowWallTop_ExtendsUpToRoof()
+        {
+            // Large-space tilted-roof regression (issue: one wall does not extend to the roof). A wall
+            // (x 0..4, y=0, z 0..3) sits under a roof that slopes from an eave at z=2.5 - BELOW the wall top
+            // (3) - up to a ridge at z=5. The roof's bounding-box Min.Z (2.5) is below the wall top, but the
+            // roof surface directly above the wall is higher, so the wall must still extend up to the roof.
+            // Gating on the cap's bounding-box Min.Z wrongly rejected the roof and left this wall short.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+            SnappedPanel roof = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 2.5), new Point3D(4, 0, 5), new Point3D(4, 1, 5), new Point3D(0, 1, 2.5)), 1, 0.3, 0.5);
+
+            List<SnappedPanel> panels = new List<SnappedPanel> { wall, roof };
+            Panel3DSnapSolver.Extend(panels, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6, roofOvershoot: 0.5, includeRoofs: true);
+
+            // The wall must rise above its original flat top (z=3) toward the roof ridge (z=5); before the fix
+            // it stayed at 3 because the roof's eave (2.5) sat below the wall top.
+            Assert.True(wall.GetBoundingBox().Max.Z > 4.0,
+                $"Wall should extend up to the sloped roof (got top z={wall.GetBoundingBox().Max.Z})");
+        }
+
+        [Fact]
         public void Extend_WallWithNoCapAbove_LeftUntouched()
         {
             // Two parallel walls, no horizontal cap above either.
