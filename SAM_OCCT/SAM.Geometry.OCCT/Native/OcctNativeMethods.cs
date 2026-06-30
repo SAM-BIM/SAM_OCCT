@@ -8,6 +8,36 @@ namespace SAM.Geometry.OCCT.Native
 {
     internal static class OcctNativeMethods
     {
+        // SAM.Occt.Native.dll is deployed alongside this assembly (e.g. %APPDATA%\SAM)
+        // together with its own dependencies (TK*.dll, tbb12.dll, jemalloc.dll, the
+        // MSVC runtime, ...). Windows' default DLL search order only covers the host
+        // process's own directory (Rhino.exe), system32, and PATH - it does NOT
+        // include the directory of a DLL that is itself being loaded. Without this,
+        // SAM.Occt.Native.dll's transitive dependencies fail to resolve even when
+        // every file is physically present, surfacing as DllNotFoundException /
+        // "The specified module could not be found" (SAM_OCCT_NATIVE_MISSING) despite
+        // a correct native build. Widening the search path to this assembly's own
+        // directory before the first P/Invoke call fixes that.
+        static OcctNativeMethods()
+        {
+            try
+            {
+                string directory = System.IO.Path.GetDirectoryName(typeof(OcctNativeMethods).Assembly.Location);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    SetDllDirectory(directory);
+                }
+            }
+            catch
+            {
+                // Best-effort: if this fails, the native DllImport calls below fail with
+                // their own diagnostics (e.g. SAM_OCCT_NATIVE_MISSING).
+            }
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool SetDllDirectory(string lpPathName);
+
         private static readonly object abiVersionLock = new object();
         private static bool abiVersionProbed;
         private static string abiVersionString;
