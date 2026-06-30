@@ -1,8 +1,12 @@
 param(
     [string]$Configuration = "Release",
     [string]$Triplet = "x64-windows",
-    [string]$VcpkgRoot = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\vcpkg",
-    [string]$CMakePath = "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+    # Empty by default: auto-detected from the installed Visual Studio via vswhere
+    # so this works on VS 2019/2022/2026 instead of a single hardcoded version.
+    # Pass explicit values to override.
+    [string]$VcpkgRoot = "",
+    [string]$CMakePath = "",
+    [string]$Generator = "",
     [string]$NinjaPath = "",
     [string]$OpenCascadeDir = "",
     [string]$OpenCascadeIncludeDir = "",
@@ -19,14 +23,62 @@ $nativeSource = Join-Path $repoRoot "native\SAM.Occt.Native"
 $nativeBuild = Join-Path $repoRoot "native\build\$Triplet"
 $nativeOutput = Join-Path $repoRoot "build"
 $manifestInstalled = Join-Path $repoRoot "vcpkg_installed"
-$toolchain = Join-Path $VcpkgRoot "scripts\buildsystems\vcpkg.cmake"
-$vcpkgExe = Join-Path $VcpkgRoot "vcpkg.exe"
 
 function Test-FileExists($path, $label) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "$label not found: $path"
     }
 }
+
+# Locate the Visual Studio toolchain (CMake, vcpkg, Ninja, generator) via vswhere
+# so the script adapts to whichever VS is installed (2019/2022/2026) instead of a
+# hardcoded version path. Only fills in values that were not passed explicitly.
+function Find-VisualStudioInstall {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path -LiteralPath $vswhere)) { return $null }
+
+    $path = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        $path = & $vswhere -latest -products * -property installationPath 2>$null
+    }
+    if ([string]::IsNullOrWhiteSpace($path)) { return $null }
+
+    $version = & $vswhere -latest -products * -property installationVersion 2>$null
+    return [pscustomobject]@{ Path = $path.Trim(); Version = "$version".Trim() }
+}
+
+$vsInstall = Find-VisualStudioInstall
+if ($null -ne $vsInstall) {
+    if ([string]::IsNullOrWhiteSpace($CMakePath)) {
+        $candidate = Join-Path $vsInstall.Path "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+        if (Test-Path -LiteralPath $candidate) { $CMakePath = $candidate }
+    }
+    if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) {
+        $candidate = Join-Path $vsInstall.Path "VC\vcpkg"
+        if (Test-Path -LiteralPath $candidate) { $VcpkgRoot = $candidate }
+    }
+    if ([string]::IsNullOrWhiteSpace($NinjaPath)) {
+        $candidate = Join-Path $vsInstall.Path "Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+        if (Test-Path -LiteralPath $candidate) { $NinjaPath = $candidate }
+    }
+    if ([string]::IsNullOrWhiteSpace($Generator)) {
+        switch (($vsInstall.Version -split '\.')[0]) {
+            "18" { $Generator = "Visual Studio 18 2026" }
+            "17" { $Generator = "Visual Studio 17 2022" }
+            "16" { $Generator = "Visual Studio 16 2019" }
+        }
+    }
+}
+
+# Last-resort fallbacks if vswhere did not resolve everything.
+if ([string]::IsNullOrWhiteSpace($CMakePath)) {
+    $cmakeCommand = Get-Command cmake -ErrorAction SilentlyContinue
+    if ($null -ne $cmakeCommand) { $CMakePath = $cmakeCommand.Source }
+}
+if ([string]::IsNullOrWhiteSpace($Generator)) { $Generator = "Visual Studio 17 2022" }
+
+$toolchain = if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) { "" } else { Join-Path $VcpkgRoot "scripts\buildsystems\vcpkg.cmake" }
+$vcpkgExe = if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) { "" } else { Join-Path $VcpkgRoot "vcpkg.exe" }
 
 function Get-NinjaVersion($path) {
     if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
@@ -69,15 +121,29 @@ if ([string]::IsNullOrWhiteSpace($ThirdPartyRuntimeRoot) -and (Test-Path -Litera
     $ThirdPartyRuntimeRoot = Join-Path $defaultOpenCascadeRoot "3rdparty-vc14-64"
 }
 
-Test-FileExists $vcpkgExe "vcpkg"
-Test-FileExists $toolchain "vcpkg CMake toolchain"
+# When the prebuilt OpenCASCADE SDK is available (detected above or passed in), build
+# CMake directly against it - no vcpkg toolchain, no manifest-mode source build (which
+# would compile OpenCASCADE from scratch, taking 30-90 min). This mirrors how the
+# SAM_Deploy CI drives the native build. vcpkg is only required as a fallback when no
+# SDK is present.
+$useOcctSdk = (-not [string]::IsNullOrWhiteSpace($OpenCascadeIncludeDir)) -and (-not [string]::IsNullOrWhiteSpace($OpenCascadeLibraryDir))
+
 Test-FileExists $CMakePath "CMake"
+if (-not $useOcctSdk) {
+    if ([string]::IsNullOrWhiteSpace($vcpkgExe)) {
+        throw "No prebuilt OpenCASCADE SDK was found (expected under C:\OCCT or via -OpenCascadeIncludeDir/-OpenCascadeLibraryDir) and vcpkg could not be located to build it from source. Install the OCCT SDK or pass -VcpkgRoot."
+    }
+    Test-FileExists $vcpkgExe "vcpkg"
+    Test-FileExists $toolchain "vcpkg CMake toolchain"
+}
 
 if ([string]::IsNullOrWhiteSpace($NinjaPath) -and -not [string]::IsNullOrWhiteSpace($env:SAM_OCCT_NINJA)) {
     $NinjaPath = $env:SAM_OCCT_NINJA
 }
 
-if (-not [string]::IsNullOrWhiteSpace($NinjaPath)) {
+# Ninja is only used by the vcpkg manifest build path; the Visual Studio generator
+# used for the SDK-direct build does not need it.
+if (-not $useOcctSdk -and -not [string]::IsNullOrWhiteSpace($NinjaPath)) {
     Test-FileExists $NinjaPath "Ninja"
     $ninjaVersion = Get-NinjaVersion $NinjaPath
     if ($null -eq $ninjaVersion -or $ninjaVersion -lt [version]"1.13.1") {
@@ -89,7 +155,7 @@ if (-not [string]::IsNullOrWhiteSpace($NinjaPath)) {
 
 New-Item -ItemType Directory -Force -Path $nativeOutput | Out-Null
 
-if (-not $SkipVcpkgInstall) {
+if (-not $SkipVcpkgInstall -and -not $useOcctSdk) {
     & $vcpkgExe install --triplet $Triplet
     if ($LASTEXITCODE -ne 0) {
         throw "vcpkg install failed."
@@ -99,14 +165,17 @@ if (-not $SkipVcpkgInstall) {
 $configureArgs = @(
     "-S", $nativeSource,
     "-B", $nativeBuild,
-    "-G", "Visual Studio 17 2022",
+    "-G", $Generator,
     "-A", "x64",
-    "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
-    "-DVCPKG_TARGET_TRIPLET=$Triplet",
     "-DCMAKE_INSTALL_PREFIX=$nativeOutput",
     "-DCMAKE_SUPPRESS_REGENERATION=ON",
     "-DSAM_OCCT_OUTPUT_DIRECTORY=$nativeOutput"
 )
+
+if (-not $useOcctSdk) {
+    $configureArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchain"
+    $configureArgs += "-DVCPKG_TARGET_TRIPLET=$Triplet"
+}
 
 if (-not [string]::IsNullOrWhiteSpace($OpenCascadeDir)) {
     Test-FileExists (Join-Path $OpenCascadeDir "OpenCASCADEConfig.cmake") "OpenCASCADEConfig.cmake"
