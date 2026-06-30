@@ -241,16 +241,51 @@ Unit tests run on every PR via the Build workflow (coverage is collected and
 uploaded as an artifact). See `TESTING.md` for the conventions and how to run
 the integration tests against a built native library.
 
+## First-time setup on a new machine (native OCCT)
+
+To build the native engine (`SAM.Occt.Native.dll` + the OCCT runtime) so OCCT
+operations work in Rhino/Grasshopper, a machine needs **three** things. Without
+them the managed assemblies still build, but OCCT calls take the missing-native
+path (`NativeAvailable == false` / `SAM_OCCT_NATIVE_MISSING`).
+
+1. **Visual Studio with the "Desktop development with C++" workload.** This
+   provides the MSVC compiler, CMake, Ninja, and vcpkg. Any version works -
+   `build-native.ps1` auto-detects it via vswhere (VS 2019/2022/2026). Without
+   this workload there is no C++ compiler and the native build cannot run.
+
+2. **The prebuilt OpenCASCADE SDK**, extracted to `C:\OCCT`. Download
+   `opencascade-8.0.0-vc14-64-combined.zip` from this repo's
+   [Releases](../../releases) (tag `occt-sdk-8.0.0-vc14-64`) and extract so the
+   layout is:
+
+   ```text
+   C:\OCCT\occt-8.0.0\opencascade-8.0.0-vc14-64\inc
+   C:\OCCT\occt-8.0.0\opencascade-8.0.0-vc14-64\win64\vc14\lib
+   C:\OCCT\occt-8.0.0\opencascade-8.0.0-vc14-64\win64\vc14\bin
+   C:\OCCT\occt-8.0.0\3rdparty-vc14-64
+   ```
+
+   `build-native.ps1` auto-detects this path and builds CMake directly against
+   the SDK (no vcpkg manifest-mode source build).
+
+3. **A Windows Defender exclusion for the workspace** (recommended). Defender
+   has been observed to false-positive and quarantine freshly built SAM DLLs
+   (e.g. `SAM.Analytical.Grasshopper.dll`), which then breaks dependent builds.
+   In an elevated PowerShell:
+
+   ```powershell
+   Add-MpPreference -ExclusionPath "<path to your GitHub\SAM-BIM checkout>"
+   ```
+
+After that, build SAM_OCCT normally (via the IDE or `BuildAlls`) and the native
+step runs automatically. Set `SAM_OCCT_SKIP_NATIVE_BUILD=true` only when you
+deliberately want a managed-only build.
+
 ## OCCT SDK
 
-`build-native.ps1` auto-detects the default local SDK layout:
-
-```text
-C:\OCCT\occt-8.0.0\opencascade-8.0.0-vc14-64\inc
-C:\OCCT\occt-8.0.0\opencascade-8.0.0-vc14-64\win64\vc14\lib
-C:\OCCT\occt-8.0.0\opencascade-8.0.0-vc14-64\win64\vc14\bin
-C:\OCCT\occt-8.0.0\3rdparty-vc14-64
-```
+`build-native.ps1` auto-detects the default local SDK layout shown above, and
+auto-detects the Visual Studio toolchain (CMake/vcpkg/generator) for whichever
+VS version is installed.
 
 Manual native build:
 
