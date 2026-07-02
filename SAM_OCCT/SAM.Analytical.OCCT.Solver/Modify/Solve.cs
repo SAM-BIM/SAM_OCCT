@@ -113,6 +113,14 @@ namespace SAM.Analytical.OCCT.Solver
                 solver.ResolvedCellCount,
                 nakedPoint3Ds.Count));
 
+            // Surface the structured solver diagnostics (gate rejections, adopted level, ...) alongside the
+            // existing SAM_OCCT_* summary lines, so every rejection's reason is visible without changing this
+            // method's List<string> diagnostics contract.
+            foreach (SAM.Geometry.OCCT.Solver.SolverDiagnostic solverDiagnostic in solver.Diagnostics?.All ?? new List<SAM.Geometry.OCCT.Solver.SolverDiagnostic>())
+            {
+                diagnostics.Add(string.Format("SAM_OCCT_SOLVE3D_DIAGNOSTIC: {0}", solverDiagnostic));
+            }
+
             return result;
         }
 

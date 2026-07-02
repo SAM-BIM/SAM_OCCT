@@ -122,6 +122,8 @@ namespace SAM.OCCT.IntegrationTests
             Assert.NotNull(solved);
             Assert.NotEmpty(solved);
 
+            foreach (string d in diagnostics ?? new List<string>()) { output.WriteLine(d); }
+
             ClosureSignature3D signature = CaptureSignature(solved, nakedPoint3Ds);
             output.WriteLine(string.Format("{0} [raw]: {1}", fixture, signature));
 

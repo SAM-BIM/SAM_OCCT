@@ -128,6 +128,47 @@ namespace SAM.Geometry.OCCT.Solver
         /// </summary>
         public bool RetainDropped { get; set; } = true;
 
+        /// <summary>
+        /// Minimum cell volume (cubic metres) for the raw-first adoption gate (<see cref="TryRawResolve"/>): a
+        /// resolved cell smaller than this is a sliver artifact (e.g. a thin void where two modelled faces
+        /// leave a hair's-width gap), not a genuine room, and its presence means the raw solve is not trusted
+        /// as-is - the managed clean/extend pipeline runs instead. Default 0.05 m3.
+        /// </summary>
+        public double MinCellVolume { get; set; } = 0.05;
+
+        /// <summary>
+        /// Maximum fraction of input faces the raw-first adoption gate (<see cref="TryRawResolve"/>) tolerates
+        /// having no surviving representation in the resolved output. A face gets dropped when it bounds no
+        /// closed cell - a common symptom of a modelling defect (e.g. a partition that stops short of the
+        /// ceiling and so cannot split the room it was meant to divide), which is exactly the
+        /// "watertight-but-wrong" case a plain naked-edge check misses (two rooms silently merge into one
+        /// cell while the outer envelope stays watertight). Exceeding this ratio rejects the raw adoption so
+        /// the managed pipeline gets a chance to close it properly.
+        /// <para>
+        /// Default 0.30 (30%), calibrated against the 5 golden-master fixtures (docs/
+        /// TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md Phase 0): a correctly-adopted, watertight raw solve
+        /// naturally drops 0-25% of its input faces on real models (e.g. a back-to-back partition's two
+        /// coincident room-facing skins, one of which is absorbed into the other during the coplanar merge) -
+        /// this is the existing <see cref="RetainDropped"/> recovery path working as intended, not a defect.
+        /// The plan's originally-proposed 0.10 default rejected 3 of the 5 real fixtures outright and is only
+        /// meaningful as an explicit, tighter override on a specific model (or in a unit/integration test that
+        /// sets it directly) - never as the global default.
+        /// </para>
+        /// </summary>
+        public double MaxDroppedRatio { get; set; } = 0.30;
+
+        /// <summary>Machine-readable events from every stage of this solve (docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md
+        /// §N) - every gate rejection carries its reason here. Reset at the start of each <see cref="Execute"/> call.</summary>
+        public SolverDiagnostics Diagnostics { get; private set; } = new SolverDiagnostics();
+
+        /// <summary>The closure signature of the ADOPTED result (raw-first, when it was adopted). Null when the
+        /// managed pipeline ran instead (Phase 2+ populates it for the managed levels too).</summary>
+        public ClosureSignature3D Signature { get; private set; }
+
+        /// <summary>The closure signature <see cref="TryRawResolve"/> measured for the raw (L0) attempt,
+        /// whether or not it was adopted - lets a rejected raw attempt still be inspected/diagnosed.</summary>
+        public ClosureSignature3D RawAttemptSignature { get; private set; }
+
         /// <summary>Step 2: after the resolve, re-sew the resolved faces at an expanded tolerance to stitch the
         /// floor/wall slot gaps that survive the volume build, instead of patching them with fabricated faces.
         /// The sewn result is kept only when it strictly reduces the naked-edge count. Default true.</summary>
@@ -249,6 +290,9 @@ namespace SAM.Geometry.OCCT.Solver
             OpenWallFace3Ds = new List<Face3D>();
             NativeResolved = false;
             ResolvedCellCount = 0;
+            Diagnostics = new SolverDiagnostics();
+            Signature = null;
+            RawAttemptSignature = null;
 
             if (face3Ds == null || face3Ds.Count == 0)
             {
@@ -1229,6 +1273,9 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             int cells = result.Cells?.Count ?? 0;
+            // Captured before Dispose() (which only tears down a retained native topology handle, never used
+            // here): Cells itself is plain managed data, but reading it after Dispose() would be fragile.
+            List<double> cellVolumes = result.Cells == null ? new List<double>() : result.Cells.Select(x => x.Volume).ToList();
             List<Face3D> resolved = shells == null
                 ? new List<Face3D>()
                 : shells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null && x.IsValid()).ToList();
@@ -1239,46 +1286,125 @@ namespace SAM.Geometry.OCCT.Solver
                 return false;
             }
 
-            // Adopt the raw solve only when it is watertight; otherwise the managed clean+extend (gap repair) earns its keep.
-            if (NakedEdgeCount(resolved, rawOptions) > 0)
-            {
-                return false;
-            }
+            // Adopt the raw solve only when it is watertight; a gappy one leaves naked edges and the managed
+            // clean+extend (gap repair) earns its keep. Short-circuit here (skip the merge/sliver/dropped work
+            // below) exactly as before - EvaluateRawAdoption still sees the real naked-edge count and checks it
+            // first, so passing placeholder zeros for the not-yet-computed sliver/dropped inputs is safe: the
+            // rule never reaches them while naked edges are present.
+            int nakedEdgeCount = NakedEdgeCount(resolved, rawOptions);
+            int sliverCellCount = 0;
+            List<Face3D> droppedFace3Ds = new List<Face3D>();
+            double droppedRatio = 0;
 
-            // Merge coplanar neighbours so output faces are not left split where MakerVolume cut them.
-            List<Face3D> merged = GeometryQuery.MergeCoplanarFace3Ds(resolved, out OcctCellComplexResult mergeResult, ToleranceAngle, rawOptions);
-            mergeResult?.Dispose();
-            if (merged != null && merged.Count != 0)
+            if (nakedEdgeCount == 0)
             {
-                resolved = merged;
-            }
+                // Merge coplanar neighbours so output faces are not left split where MakerVolume cut them.
+                List<Face3D> merged = GeometryQuery.MergeCoplanarFace3Ds(resolved, out OcctCellComplexResult mergeResult, ToleranceAngle, rawOptions);
+                mergeResult?.Dispose();
+                if (merged != null && merged.Count != 0)
+                {
+                    resolved = merged;
+                }
 
-            // Re-add input faces the volume build did not use as a cell boundary (a partial/internal panel, or a
-            // face that bounds no closed cell). MakerVolume returns only cell-bounding faces, and the watertight
-            // check above only validates those, so without this an unrepresented input panel would be silently
-            // dropped from the output - the same RetainDropped contract the managed pipeline applies post-resolve.
-            if (RetainDropped)
-            {
-                List<Face3D> dropped = new List<Face3D>();
+                // A watertight envelope that resolves into a cell smaller than MinCellVolume is an artifact (a
+                // hair's-width void), not evidence the raw solve got the room layout right.
+                sliverCellCount = cellVolumes.Count(x => x < MinCellVolume);
+
+                // Input faces the volume build did not use as a cell boundary (a partial/internal panel, or a
+                // face that bounds no closed cell) - e.g. a partition that stops short of the ceiling and so
+                // cannot split the room it was meant to divide. MakerVolume returns only cell-bounding faces,
+                // and the watertight check above only validates those, so an unrepresented input panel would
+                // otherwise be silently dropped, and the rooms it should have separated silently merge into one
+                // cell even though the outer envelope stays watertight - the "watertight-but-wrong" gap a
+                // naked-edge check alone cannot see.
                 foreach (Face3D rawFace3D in rawFace3Ds)
                 {
                     if (rawFace3D != null && rawFace3D.IsValid() && !IsRepresented(rawFace3D, resolved))
                     {
-                        dropped.Add(rawFace3D);
+                        droppedFace3Ds.Add(rawFace3D);
                     }
                 }
 
-                if (dropped.Count != 0)
-                {
-                    resolved = resolved.Concat(dropped).ToList();
-                }
+                droppedRatio = rawFace3Ds.Count == 0 ? 0 : (double)droppedFace3Ds.Count / rawFace3Ds.Count;
+            }
+
+            RawAdoptionOutcome outcome = EvaluateRawAdoption(cells, resolved.Count, nakedEdgeCount, sliverCellCount, droppedRatio, MaxDroppedRatio);
+            switch (outcome)
+            {
+                case RawAdoptionOutcome.RejectedNakedEdges:
+                    Diagnostics.Add(SolverStage.Resolve, DiagnosticCode.NakedEdge, OcctDiagnosticSeverity.Info,
+                        string.Format("Raw (L0) resolve left {0} naked edge(s); falling through to the managed pipeline.", nakedEdgeCount),
+                        toleranceUsed: rawOptions.EffectiveSewingTolerance);
+                    return false;
+
+                case RawAdoptionOutcome.RejectedSliverCell:
+                    Diagnostics.Add(SolverStage.Resolve, DiagnosticCode.SliverCell, OcctDiagnosticSeverity.Warning,
+                        string.Format("Raw (L0) resolve produced {0} sliver cell(s) (< {1} m3); not adopted.", sliverCellCount, MinCellVolume),
+                        toleranceUsed: MinCellVolume);
+                    return false;
+
+                case RawAdoptionOutcome.RejectedDroppedRatio:
+                    Diagnostics.Add(SolverStage.Resolve, DiagnosticCode.DroppedFace, OcctDiagnosticSeverity.Warning,
+                        string.Format("Raw (L0) resolve dropped {0} of {1} input face(s) ({2:P0} > {3:P0} max); not adopted.",
+                            droppedFace3Ds.Count, rawFace3Ds.Count, droppedRatio, MaxDroppedRatio));
+                    return false;
+
+                case RawAdoptionOutcome.RejectedNoCells:
+                    return false; // unreachable here (already returned above); kept for switch exhaustiveness
+            }
+
+            // Re-add the dropped faces (RetainDropped contract) - same faces the gate above already measured,
+            // so this does not re-run IsRepresented.
+            if (RetainDropped && droppedFace3Ds.Count != 0)
+            {
+                resolved = resolved.Concat(droppedFace3Ds).ToList();
             }
 
             ResolvedFace3Ds = resolved;
             NativeResolved = true;
             ResolvedCellCount = cells;
             NakedEdgePoint3Ds = new List<Point3D>();
+
+            RawAttemptSignature = new ClosureSignature3D(cells, cellVolumes, nakedEdgeCount: 0, faceCount: resolved.Count, droppedCount: droppedFace3Ds.Count);
+            Signature = RawAttemptSignature;
+            Diagnostics.Add(SolverStage.Resolve, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info,
+                string.Format("Adopted raw (L0): {0}", Signature));
+
             return true;
+        }
+
+        /// <summary>
+        /// The raw-first (L0) adoption gate's decision rule, pure and native-free so it is unit-testable
+        /// without a kernel: given what a raw resolve measured, decides whether it is trusted as-is or the
+        /// managed pipeline should run instead. Checked in this order - no cells formed, a gappy envelope
+        /// (naked edges), then the two "watertight-but-wrong" cases a naked-edge check alone cannot see (a
+        /// sliver artifact cell, or too many input faces silently dropped because they bound no closed cell) -
+        /// each closes a distinct failure mode found on real fixtures
+        /// (docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md §C, Phase 1).
+        /// </summary>
+        public static RawAdoptionOutcome EvaluateRawAdoption(int cellCount, int resolvedFaceCount, int nakedEdgeCount, int sliverCellCount, double droppedRatio, double maxDroppedRatio)
+        {
+            if (cellCount < 1 || resolvedFaceCount == 0)
+            {
+                return RawAdoptionOutcome.RejectedNoCells;
+            }
+
+            if (nakedEdgeCount > 0)
+            {
+                return RawAdoptionOutcome.RejectedNakedEdges;
+            }
+
+            if (sliverCellCount > 0)
+            {
+                return RawAdoptionOutcome.RejectedSliverCell;
+            }
+
+            if (droppedRatio > maxDroppedRatio)
+            {
+                return RawAdoptionOutcome.RejectedDroppedRatio;
+            }
+
+            return RawAdoptionOutcome.Adopted;
         }
 
         private void Resolve(List<Face3D> snappedFace3Ds, OcctBuildOptions options)

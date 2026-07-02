@@ -182,6 +182,51 @@ unless that phase explicitly states the delta (which fixture, which number,
 why) in its PR description - an unexplained change to these numbers is a
 regression, not a refactor.
 
+## Diagnostics contract + raw-adoption gate hardening (true-3D panel solver plan, Phase 1)
+
+Phase 1 gives every later phase a single place to record machine-readable solve events, and closes
+a real "watertight-but-wrong" hole in the raw-first adoption gate:
+
+- `SAM.Geometry.OCCT.Solver.SolverDiagnostic`/`SolverDiagnostics` - stage (`SolverStage`: Snap/
+  Resolve/Heal), taxonomy code (`DiagnosticCode` - the full §N list; Phase 1 emits `NakedEdge`,
+  `SliverCell`, `DroppedFace`, `AdoptedLevel`, the rest reserved for later phases), severity,
+  message, and optional geometry/tolerance/timing. `Panel3DSnapSolver.Diagnostics` accumulates these
+  across a solve (reset each `Execute()`); `Modify.Solve3D` surfaces them as
+  `SAM_OCCT_SOLVE3D_DIAGNOSTIC:` lines alongside its existing summary diagnostics.
+- `Panel3DSnapSolver.EvaluateRawAdoption` - the raw-first (L0) adoption gate's decision rule, pure
+  and native-free (unit-tested in `RawAdoptionGateTests.cs`). Precedence: no cells formed -> naked
+  edges present -> a sliver cell (`MinCellVolume`, default 0.05 m3) -> too many dropped input faces
+  (`MaxDroppedRatio`). The last two close the gap the original `cells >= 1 && naked == 0` gate left
+  open: a watertight envelope that is nonetheless wrong (e.g. two rooms silently merged because
+  their dividing partition doesn't reach a cap and so bounds no closed cell) used to be adopted
+  outright.
+- `Panel3DSnapSolver.Signature` / `RawAttemptSignature` - the `ClosureSignature3D` (Phase 0) of the
+  adopted result, and of the raw attempt whether or not it was adopted, respectively.
+
+**Calibration finding (why `MaxDroppedRatio` defaults to 0.30, not the plan's originally-proposed
+0.10):** measured directly against the 5 golden-master fixtures, a correctly-adopted, watertight raw
+solve naturally drops 0-25% of its input faces (`whole-level-flat` ~11%, `whole-level-towers` ~11%,
+`two-level-tilted` ~8%, `tilted-two-spaces` ~25%, `whole-level-tilted` ~0%) - this is the existing
+`RetainDropped` recovery path working as intended (e.g. one of a back-to-back partition's two
+coincident room-facing skins gets absorbed into the other during the coplanar merge), not a defect.
+At the plan's proposed 0.10 default, 3 of the 5 real fixtures were rejected outright and fell through
+to the (historically weaker) managed pipeline - a golden-master regression the phase's own acceptance
+bar ("golden masters unchanged") forbids. The default is calibrated to 0.30, comfortably above the
+observed 25% ceiling; `RawGateMergedCellsIntegrationTests.cs` demonstrates the plan's original 0.10
+threshold is still meaningful as an explicit, tighter override on a small/targeted model (its
+synthetic fixture, a box with an undersized partition, naturally sits at ~14% dropped - enough to
+trip 0.10 but not 0.30). This is exactly the empirical-recalibration methodology §A of the plan
+documents: the roadmap's suggested numbers are a starting point, verified (and corrected, with the
+delta recorded here) against the real fixtures before being adopted as defaults.
+
+**New fixture:** `RawGateMergedCellsIntegrationTests.cs` builds its "two rooms with a deleted
+partition, watertight outer shell" fixture synthetically (no new `.sam` file) - a 4x4x3 m box with a
+partition that stops 0.5 m short of the ceiling. It asserts both directions: the raw gate rejects
+the merge with an explicit `MaxDroppedRatio = 0.10` (and the managed fallback then correctly
+separates the two rooms), and - as the calibration sanity check - still adopts the same merge at the
+real-world default (0.30), demonstrating why that default cannot be tightened globally without
+losing the 5 real fixtures.
+
 **Known CI drift (not fixed by Phase 0 - owner-deferred).**
 `.github/workflows/build.yml` clones the sibling `SAM` / `SAM_Solver` repos
 pinned to branch `sow/2026-Q2`, but as of this plan (2026-07-02) both sibling
