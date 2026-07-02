@@ -241,6 +241,52 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void OrderForSnap_TieOnWeightThenBucket_BreaksByWeightThenBucketThenArea()
+        {
+            // Phase 2b full ordering law (2D SnapAndAdjustWalls parity): Weight DESC, then BucketSize DESC,
+            // then Area DESC. Input is deliberately scrambled against every key so a partial sort (weight-only,
+            // or weight+bucket without the area tie-break) would land in a different order.
+            SnappedPanel lowWeight = MakeWallPanel(0, weight: 1, bucketSize: 9.0);              // biggest bucket but lowest weight -> last
+            SnappedPanel tieSmallBucket = MakeWallPanel(1, weight: 5, bucketSize: 0.1);         // top weight, small bucket
+            SnappedPanel tieBigBucket = MakeWallPanel(2, weight: 5, bucketSize: 0.5);           // top weight, big bucket -> first
+            SnappedPanel tieBucketSmallArea = new SnappedPanel(3, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(1, 0, 0), new Point3D(1, 0, 1), new Point3D(0, 0, 1)), 5, 0.1, 0.5); // top weight, same 0.1 bucket, smaller area
+
+            List<SnappedPanel> ordered = Panel3DSnapSolver.OrderForSnap(
+                new List<SnappedPanel> { lowWeight, tieSmallBucket, tieBigBucket, tieBucketSmallArea });
+
+            // Weight 5 group first, ordered big-bucket -> (0.1-bucket: bigger area before smaller area); weight-1 last.
+            Assert.Same(tieBigBucket, ordered[0]);          // weight 5, bucket 0.5
+            Assert.Same(tieSmallBucket, ordered[1]);        // weight 5, bucket 0.1, area 3 (1x3 wall)
+            Assert.Same(tieBucketSmallArea, ordered[2]);    // weight 5, bucket 0.1, area 1 (1x1)
+            Assert.Same(lowWeight, ordered[3]);             // weight 1
+        }
+
+        [Fact]
+        public void OrderForSnap_NullInput_ReturnsEmpty()
+        {
+            Assert.Empty(Panel3DSnapSolver.OrderForSnap(null));
+        }
+
+        [Fact]
+        public void CandidatePanelsNear_MixedDistances_ReturnsOnlyBoxesWithinMargin()
+        {
+            // The bbox pre-filter is a superset gate: it keeps every panel whose 3D box lies within the
+            // margin of the backer's box and rejects the rest before the expensive plane predicates run.
+            // Backer wall at y=0; near wall at y=0.2 (within a 0.3 margin); far wall at y=5 (well outside).
+            SnappedPanel backer = MakeWallPanel(0, weight: 2, bucketSize: 0.3);
+            SnappedPanel near = MakeWallPanel(0.2, weight: 1, bucketSize: 0.3);
+            SnappedPanel far = MakeWallPanel(5.0, weight: 1, bucketSize: 0.3);
+
+            List<SnappedPanel> result = Panel3DSnapSolver
+                .CandidatePanelsNear(backer, new List<SnappedPanel> { near, far }, margin: 0.3)
+                .ToList();
+
+            Assert.Contains(near, result);
+            Assert.DoesNotContain(far, result);
+        }
+
+        [Fact]
         public void Snap_ParallelWallsWithinBucketButNoInPlaneOverlap_NotSnapped()
         {
             // Two parallel walls 0.2 m apart (well within the 0.4 m bucket) and near-parallel, but lying

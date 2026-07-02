@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
+using SAM.Core.OCCT;
 using SAM.Geometry.OCCT.Solver;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
@@ -97,6 +98,120 @@ namespace SAM.OCCT.UnitTests
             {
                 Assert.True(sourceMap.HasSource(new FaceKey(i)), $"Clean face {i} was left source-orphaned");
             }
+        }
+
+        /// <summary>Wall in the XZ plane at the given Y offset (x0..1, 3 m tall), equal weight, given bucket.</summary>
+        private static SnappedPanel ParallelWall(int sourceIndex, double y, double bucketSize)
+        {
+            Face3D face3D = TestGeometry.CreatePlanarFace(
+                new Point3D(0, y, 0), new Point3D(1, y, 0), new Point3D(1, y, 3), new Point3D(0, y, 3));
+            return new SnappedPanel(sourceIndex, face3D, weight: 1, bucketSize: bucketSize, maxExtension: 0.5);
+        }
+
+        private static double CentroidY(SnappedPanel panel)
+        {
+            return panel.Face3D.GetBoundingBox().GetCentroid().Y;
+        }
+
+        /// <summary>Perpendicular spread (max - min centroid Y) of a set of parallel XZ-plane walls.</summary>
+        private static double Spread(IEnumerable<SnappedPanel> panels)
+        {
+            List<double> ys = panels.Select(CentroidY).ToList();
+            return ys.Max() - ys.Min();
+        }
+
+        [Fact]
+        public void SnapToFixedPoint_ChainedOffsetOutsideSinglePassReach_ConvergesInAtLeastTwoIterations()
+        {
+            // Chained-offset fixture (Phase 2b acceptance): three equal-weight parallel walls where the far
+            // wall only comes within the first backer's reach AFTER that backer's bucket grows from merging
+            // with the middle wall - a growth that happens LATER in the same pass than the far wall was
+            // already checked and rejected. A single greedy pass therefore cannot fully coplanarize them; the
+            // fixed-point loop must run a second pass over the now-current geometry. Input order [A, C, B]
+            // (all equal weight/bucket/area, so OrderForSnap preserves it) forces the far wall C to be scanned
+            // before the middle wall B under backer A.
+            // One greedy pass over a clone, to measure what a single pass alone achieves.
+            List<SnappedPanel> onePass = new List<SnappedPanel>
+            {
+                ParallelWall(0, y: 0.0, bucketSize: 0.3),
+                ParallelWall(2, y: 0.4, bucketSize: 0.3),
+                ParallelWall(1, y: 0.25, bucketSize: 0.3)
+            };
+            Panel3DSnapSolver.Snap(onePass, DefaultTolerances.Angle, DefaultTolerances.ArcAngle,
+                DefaultTolerances.Distance, DefaultTolerances.VerticalAngle, alignColinearOffset: 0.3);
+            double onePassSpread = Spread(onePass);
+
+            // The full fixed-point loop over an identical fresh set.
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                ParallelWall(0, y: 0.0, bucketSize: 0.3),   // first backer
+                ParallelWall(2, y: 0.4, bucketSize: 0.3),   // far wall - outside A's original 0.3 bucket
+                ParallelWall(1, y: 0.25, bucketSize: 0.3)   // middle wall - inside A's bucket
+            };
+
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+            int iterations = SnapStage.SnapToFixedPoint(panels, DefaultTolerances, alignColinearOffset: 0.3, diagnostics: diagnostics);
+            double fixedPointSpread = Spread(panels);
+
+            // Needed more than one pass, reached a genuine fixed point (no cap warning), and the extra passes
+            // did real work: the far wall is drawn measurably tighter than a single greedy pass could manage.
+            Assert.True(iterations >= 2, $"Chained offset should need >= 2 passes (got {iterations})");
+            Assert.Empty(diagnostics.OfCode(DiagnosticCode.BudgetExceeded));
+            Assert.True(fixedPointSpread < onePassSpread,
+                $"Fixed-point spread ({fixedPointSpread}) should be tighter than a single pass ({onePassSpread})");
+        }
+
+        [Fact]
+        public void SnapToFixedPoint_SinglePassSuffices_ReturnsOneIteration()
+        {
+            // Two equal-weight walls within one bucket coplanarize in the first pass; the second pass finds
+            // nothing to move, so the loop reports a single effective iteration (2D do-while parity: run,
+            // then one confirming pass). No cap warning on a trivially convergent input.
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                ParallelWall(0, y: 0.0, bucketSize: 0.3),
+                ParallelWall(1, y: 0.15, bucketSize: 0.3)
+            };
+
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+            int iterations = SnapStage.SnapToFixedPoint(panels, DefaultTolerances, alignColinearOffset: 0.3, diagnostics: diagnostics);
+
+            Assert.InRange(iterations, 1, 2);
+            Assert.Empty(diagnostics.OfCode(DiagnosticCode.BudgetExceeded));
+        }
+
+        [Fact]
+        public void SnapToFixedPoint_IterationCapReachedOnNonConvergentInput_EmitsBudgetExceededWarning()
+        {
+            // A cap of 1 pass on an input that provably needs >= 2 (the chained fixture above) leaves work
+            // undone, so the loop must surface a BudgetExceeded warning on the Snap stage rather than silently
+            // returning an incomplete model (2D SnapIterationCapReached parity).
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                ParallelWall(0, y: 0.0, bucketSize: 0.3),
+                ParallelWall(2, y: 0.4, bucketSize: 0.3),
+                ParallelWall(1, y: 0.25, bucketSize: 0.3)
+            };
+
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+            int iterations = SnapStage.SnapToFixedPoint(panels, DefaultTolerances, alignColinearOffset: 0.3, diagnostics: diagnostics, maxIterations: 1);
+
+            Assert.Equal(1, iterations);
+            SolverDiagnostic warning = Assert.Single(diagnostics.OfCode(DiagnosticCode.BudgetExceeded));
+            Assert.Equal(SolverStage.Snap, warning.Stage);
+            Assert.Equal(OcctDiagnosticSeverity.Warning, warning.Severity);
+        }
+
+        [Fact]
+        public void SnapToFixedPoint_FewerThanTwoPanels_ReturnsZeroWithoutDiagnostics()
+        {
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+            int iterations = SnapStage.SnapToFixedPoint(
+                new List<SnappedPanel> { ParallelWall(0, y: 0.0, bucketSize: 0.3) },
+                DefaultTolerances, alignColinearOffset: 0.3, diagnostics: diagnostics);
+
+            Assert.Equal(0, iterations);
+            Assert.Empty(diagnostics.All);
         }
 
         [Fact]
