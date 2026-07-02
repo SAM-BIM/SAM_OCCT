@@ -295,6 +295,76 @@ namespace SAM.Geometry.OCCT.Solver
             return true;
         }
 
+        /// <summary>
+        /// The perpendicular separation (metres) between this panel's plane and <paramref name="other"/>'s
+        /// centroid - the thickness of the gap between two near-parallel skins. Used by
+        /// <see cref="Panel3DSnapSolver.SnapOpposedPartitions"/> to tell a back-to-back partition (skins within
+        /// a wall thickness) from a genuine void/shaft (a wider gap that must survive). Winding-independent
+        /// (a magnitude), unlike a normal-sign test - see the remarks on SnapOpposedPartitions for why the
+        /// sign approach proved unreliable on real import geometry.
+        /// </summary>
+        public double PerpendicularSeparation(SnappedPanel other)
+        {
+            if (plane == null || other == null)
+            {
+                return double.MaxValue;
+            }
+
+            Point3D otherCentroid = other.GetBoundingBox()?.GetCentroid();
+            if (otherCentroid == null)
+            {
+                return double.MaxValue;
+            }
+
+            Vector3D normal = plane.Normal.Unit;
+            Point3D origin = plane.Origin;
+            double signed = normal.X * (otherCentroid.X - origin.X)
+                + normal.Y * (otherCentroid.Y - origin.Y)
+                + normal.Z * (otherCentroid.Z - origin.Z);
+            return System.Math.Abs(signed);
+        }
+
+        /// <summary>
+        /// Ratio of the in-plane overlap footprint to the larger of the two panels' footprints, both
+        /// measured in this panel's plane frame (so a near-coplanar/anti-parallel partner is projected onto
+        /// this plane first). 1.0 when the two occupy the same footprint - one partition's two skins, even
+        /// when one carries a door notch that cuts its <em>area</em> but not its bounding footprint - and
+        /// small when one footprint is much larger than the other (a long shared wall caught against a short
+        /// partition skin, or two distinct walls). Used by <see cref="Panel3DSnapSolver.SnapOpposedPartitions"/>
+        /// to tell a real back-to-back partition from a mis-pair without being fooled by a door cut (which the
+        /// old full-<em>area</em> ratio was). 0 when either footprint is degenerate or they do not overlap.
+        /// </summary>
+        public double InPlaneOverlapRatio(SnappedPanel other)
+        {
+            if (plane == null || face3D == null || other?.face3D == null)
+            {
+                return 0;
+            }
+
+            if (!FootprintBounds(plane, face3D, out double aMinU, out double aMaxU, out double aMinV, out double aMaxV))
+            {
+                return 0;
+            }
+
+            if (!FootprintBounds(plane, other.face3D, out double bMinU, out double bMaxU, out double bMinV, out double bMaxV))
+            {
+                return 0;
+            }
+
+            double overlapU = System.Math.Min(aMaxU, bMaxU) - System.Math.Max(aMinU, bMinU);
+            double overlapV = System.Math.Min(aMaxV, bMaxV) - System.Math.Max(aMinV, bMinV);
+            if (overlapU <= 0 || overlapV <= 0)
+            {
+                return 0;
+            }
+
+            double overlapArea = overlapU * overlapV;
+            double areaA = (aMaxU - aMinU) * (aMaxV - aMinV);
+            double areaB = (bMaxU - bMinU) * (bMaxV - bMinV);
+            double larger = System.Math.Max(areaA, areaB);
+            return larger <= 0 ? 0 : overlapArea / larger;
+        }
+
         /// <summary>Merges another panel's source references into this one (used when two equal-weight panels collapse).</summary>
         public void Absorb(SnappedPanel other)
         {

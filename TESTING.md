@@ -227,6 +227,62 @@ separates the two rooms), and - as the calibration sanity check - still adopts t
 real-world default (0.30), demonstrating why that default cannot be tightened globally without
 losing the 5 real fixtures.
 
+## Stage decomposition + source mapping (true-3D panel solver plan, Phase 2)
+
+Phase 2 breaks the 1449-line `Panel3DSnapSolver` monolith into explicit stages and threads source
+provenance through the managed pipeline, fixing two live defects along the way:
+
+- **Stages.** `SnapStage` (Stage A clean bucket + attribution), `ConditionStage` (extend/fill),
+  `ResolveStage` (native MakerVolume + merges + adaptive sew + validate + gap-fill), `HealStage`
+  (RetainDropped). `Panel3DSnapSolver.Execute` is now a façade orchestrating these over a
+  `SolverContext` (input faces + per-source parameters keyed by **source identity**, `SourceMap`,
+  `SolverDiagnostics`, `ToleranceBudget`). `CleanBucket` and the old `Resolve`/`NakedEdgeCount`
+  bodies were moved verbatim into the stages; `CleanBucket` stays as a public geometry-only entry
+  point delegating to `SnapStage`. (Sew + gap-fill stay inside `ResolveStage` in Phase 2 - they are
+  intertwined with the native resolve/validate; Phase 5 moves them into `HealStage` when it reworks
+  them with per-loop acceptance.)
+- **`SourceMap` + `Provenance`** (`SourceMapTests.cs`): source index → output `FaceKey`s, with
+  `Record`/`RecordMerge`/`RecordSplit`/`RecordFabricated` and a `Compose` that chains two stages.
+  Managed-only in Phase 2 (the native resolve records a coarse per-output mapping via geometric
+  attribution - nearest-source fallback so no output face is ever orphaned); Phase 3 replaces the
+  coarse resolve mapping with composed `BRepTools_History`.
+- **Fix (a) - MaxExtend by source identity** (`SnapStageTests.cs`): `SnapStage` attributes each
+  clean face to the source panels that merged into it and carries `MaxExtend = max` of those
+  sources, so a wall the caller marked to extend further keeps its reach through the merge. The
+  pre-Phase-2 code re-applied the *input* `maxExtensions` list **positionally** to the
+  merged/reordered clean faces, landing the wrong reach on the wrong panel.
+- **Fix (b) - `SnapOpposedPartitions` gates** (`Panel3DSnapSolverTests.cs`): an overlap-**footprint**
+  ratio gate (replacing the full-area ratio, so a door-cut skin - same footprint, smaller area -
+  collapses instead of staying split) and a **thickness-scale separation** gate so a genuine 0.3-0.4 m
+  void (a shaft) survives Stage A while a thin partition still collapses. Rejections emit
+  `RejectedCollapse` diagnostics.
+
+**Finding (why the separation gate is thickness-based, not the plan's proposed normal-sign test):**
+the plan proposed `normal · (centroidB − centroidA) < 0` ("facing-away" skins) to distinguish a
+partition from a void. Measured against the fixtures this proved unreliable: SAM/Revit import winding
+orients a real partition's two skin normals **toward** each other (into the wall core) - the opposite
+of a clean synthetic model - so the sign test mis-classified genuine partitions as voids and
+regressed `whole-level-tilted` from 22 to 20 cells (the managed path; it reaches the managed pipeline
+because its raw solve leaves 4 naked edges). The winding-independent **thickness-separation** gate
+(`OPPOSED_PARTITION_MAX_SEPARATION` = 0.3 m, the "driven by per-panel thickness not the 0.4 floor"
+clause of the plan) achieves the same goal without depending on normal orientation, and the same
+guard was added to the general weighted `Snap` (whose `IsParallelWith` treats anti-parallel as
+parallel and would otherwise collapse the void). Same empirical-recalibration methodology as Phase 1's
+`MaxDroppedRatio`.
+
+**Golden-master deltas (Phase 2).** Raw-path signatures are **byte-identical** to Phase 1 (the raw
+path is untouched beyond populating its `SourceMap`). Managed-path signatures: four of five unchanged;
+`whole-level-towers` (managed, forced) **improved** from 21 cells / 12 naked to **26 cells / 6 naked**
+- the intended effect of the MaxExtend-by-source fix and the partition/void gates letting more rooms
+close correctly. No managed regressions; the `Solve3D_ManagedPath` golden test asserts only
+`cells >= 1` (it records, not pins, the managed number), so no assertion re-baselining was needed.
+
+**New fixtures/tests.** `SnapStageTests` (MaxExtend carry, merge attribution, no-orphan invariant,
+wide-void survives Stage A); `SourceMapTests` (compose/merge/split algebra); `SolverContextTests`;
+the two new `SnapOpposedPartitions` truth-table cases (wide void kept, door-cut skin collapsed);
+`SourceMapMappingIntegrationTests` (native: every solved output face carries a source on both the
+raw-first and forced-managed paths). The shaft-void fixture is built synthetically (no new `.sam`).
+
 **Known CI drift (not fixed by Phase 0 - owner-deferred).**
 `.github/workflows/build.yml` clones the sibling `SAM` / `SAM_Solver` repos
 pinned to branch `sow/2026-Q2`, but as of this plan (2026-07-02) both sibling

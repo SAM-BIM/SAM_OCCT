@@ -161,6 +161,12 @@ namespace SAM.Geometry.OCCT.Solver
         /// §N) - every gate rejection carries its reason here. Reset at the start of each <see cref="Execute"/> call.</summary>
         public SolverDiagnostics Diagnostics { get; private set; } = new SolverDiagnostics();
 
+        /// <summary>Provenance of the managed pipeline's output faces: which source panel(s) each
+        /// <see cref="ResolvedFace3Ds"/> entry came from, and how (<see cref="Provenance"/>). Populated on the
+        /// managed path (Phase 2, managed-only); the native resolve/heal record a coarse per-output mapping.
+        /// Null-safe: always non-null after <see cref="Execute"/>.</summary>
+        public SourceMap SourceMap { get; private set; } = new SourceMap();
+
         /// <summary>The closure signature of the ADOPTED result (raw-first, when it was adopted). Null when the
         /// managed pipeline ran instead (Phase 2+ populates it for the managed levels too).</summary>
         public ClosureSignature3D Signature { get; private set; }
@@ -317,20 +323,34 @@ namespace SAM.Geometry.OCCT.Solver
 
             SnappedPanels = Register(face3Ds, bucketSizes_Adjusted, weights_Adjusted, maxExtensions_Adjusted);
 
-            // ---- Step 1: clean bucket (managed, native-free) ----
-            // Strip holes -> bucket-snap within-bucket parallels onto one backer -> merge coplanar (contained/overlap).
-            CleanFace3Ds = CleanBucket(SnappedPanels, ToleranceAngle, ToleranceArcAngle, ToleranceDistance, VerticalAngleTolerance, AlignColinearOffset, NormalizeCapOffset);
+            ToleranceBudget tolerances = new ToleranceBudget
+            {
+                Angle = ToleranceAngle,
+                ArcAngle = ToleranceArcAngle,
+                Distance = ToleranceDistance,
+                VerticalAngle = VerticalAngleTolerance
+            };
+
+            // ---- Stage A: SNAP (managed, native-free) ----
+            // Strip holes -> collapse opposed partitions -> bucket-snap -> normalize caps -> merge coplanar.
+            // SnapStage additionally attributes each clean face to the source panels that merged into it, so
+            // its MaxExtend is carried by source identity (snapResult.CleanMaxExtensions), not list position -
+            // the fix for the positional-MaxExtend bug in the pre-Phase-2 re-Register below.
+            SourceMap snapSourceMap = new SourceMap();
+            SnapStage.Result snapResult = SnapStage.Clean(SnappedPanels, tolerances, AlignColinearOffset, NormalizeCapOffset, Diagnostics, snapSourceMap);
+            CleanFace3Ds = snapResult.CleanFace3Ds;
 
             if (StopAfterClean)
             {
                 ResolvedFace3Ds = CleanFace3Ds;
+                SourceMap = snapSourceMap; // source -> clean face (exact: output == clean faces)
                 return;
             }
 
-            // ---- Step 2: extend + resolve ----
-            // Step 2's extend logic is written for a world-Z-up building (walls vertical, caps above/below
+            // ---- Stage B/C: condition + resolve ----
+            // The conditioning logic is written for a world-Z-up building (walls vertical, caps above/below
             // in Z, plan = XY). When the whole level is tilted, rotate the clean faces into a canonical
-            // Z-up frame (mapping the level Up axis onto world Z), run the extend there, then rotate the
+            // Z-up frame (mapping the level Up axis onto world Z), run the conditioning there, then rotate the
             // result back. For the ordinary upright case (Up null or already Z) no rotation happens.
             Vector3D up = (Up == null || Up.Length <= ToleranceDistance) ? new Vector3D(0, 0, 1) : Up.Unit;
             if (up.Z < 0)
@@ -351,10 +371,12 @@ namespace SAM.Geometry.OCCT.Solver
                 fromCanonical = Transform3D.GetPlaneToOrigin(levelPlane);
             }
 
-            // Re-wrap the clean panels: Step 1 merged/removed panels, so the per-source weights no longer
-            // apply, and bucket/weight are re-derived from geometry. The per-panel MaxExtend IS carried
-            // forward (positionally), so a wall the caller marked to extend further keeps that reach. The
-            // rotation preserves order and validity, so the maxExtensions stay index-aligned.
+            // Re-wrap the clean panels for conditioning. Weight/bucket are re-derived from geometry (defaults),
+            // but the per-panel MaxExtend is now carried by SOURCE IDENTITY via SnapStage's attribution
+            // (snapResult.CleanMaxExtensions, index-aligned to CleanFace3Ds) - so a wall the caller marked to
+            // extend further keeps that reach even though Step 1 merged/reordered panels. The rotation preserves
+            // order and validity, so the carried MaxExtend stays index-aligned. (Pre-Phase-2 this list was the
+            // ORIGINAL input maxExtensions applied positionally, landing the wrong reach on the wrong panel.)
             List<Face3D> step2Face3Ds = toCanonical == null
                 ? CleanFace3Ds
                 : CleanFace3Ds.Select(x => x.Transform(toCanonical)).ToList();
@@ -363,38 +385,32 @@ namespace SAM.Geometry.OCCT.Solver
                 step2Face3Ds,
                 AdjustListLength(null, step2Face3Ds.Count, DEFAULT_BucketSize),
                 AdjustListLength(null, step2Face3Ds.Count, DEFAULT_Weight),
-                AdjustListLength(maxExtensions, step2Face3Ds.Count, DEFAULT_MaxExtension));
+                AdjustListLength(snapResult.CleanMaxExtensions, step2Face3Ds.Count, DEFAULT_MaxExtension));
 
-            // ---- Walls first ----
-            // Close the plan loop: grow each wall sideways along its axis (up to its own MaxExtend) until its
-            // end meets the next wall, so the X/Y gaps (the ones the up/down extend below cannot touch) close
-            // into corners.
-            if (ExtendWallsToWalls)
-            {
-                ExtendWalls(SnappedPanels, VerticalAngleTolerance, WallExtendOvershoot, ToleranceDistance);
-            }
+            ConditionStage.Condition(
+                SnappedPanels,
+                new ConditionStage.Settings
+                {
+                    ExtendWallsToWalls = ExtendWallsToWalls,
+                    WallExtendOvershoot = WallExtendOvershoot,
+                    ExtendToCaps = ExtendToCaps,
+                    ExtendOvershoot = ExtendOvershoot,
+                    RoofOvershoot = RoofOvershoot,
+                    ExtendToRoofs = ExtendToRoofs,
+                    FillCapsToWalls = FillCapsToWalls,
+                    FillMargin = FillMargin,
+                    FillOvershoot = FillOvershoot
+                },
+                tolerances);
 
-            // Extend walls up to the floor/roof above and down to the floor below (the "between floors" case).
-            if (ExtendToCaps)
-            {
-                Extend(SnappedPanels, VerticalAngleTolerance, ExtendOvershoot, ToleranceDistance, RoofOvershoot, ExtendToRoofs);
-            }
-
-            // ---- Then floors and roofs ----
-            // Grow the caps out to the now-closed walls so the floor/roof-to-wall gaps close.
-            if (FillCapsToWalls)
-            {
-                Fill(SnappedPanels, VerticalAngleTolerance, FillMargin, ToleranceDistance, FillOvershoot);
-            }
-
-            // Plan-closure diagnostic: which wall ends are STILL open after the managed extend? These are the
-            // panels to upgrade (raise MaxExtend / bucket) before the floors/roofs can fill a closed polysurface.
+            // Plan-closure diagnostic: which wall ends are STILL open after conditioning? These are the panels
+            // to upgrade (raise MaxExtend / bucket) before the floors/roofs can fill a closed polysurface.
             OpenWallEndPoint3Ds = OpenWallEnds(SnappedPanels, VerticalAngleTolerance, ConnectionTolerance, ToleranceDistance, out List<Face3D> openWallFace3Ds);
             OpenWallFace3Ds = openWallFace3Ds;
 
             List<Face3D> snappedFace3Ds = SnappedPanels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
 
-            // Back to the world frame: the extend ran in the canonical Z-up frame, so rotate the extended
+            // Back to the world frame: conditioning ran in the canonical Z-up frame, so rotate the conditioned
             // faces and the plan-closure diagnostics back to where the input lives before resolving/output.
             if (fromCanonical != null)
             {
@@ -409,33 +425,166 @@ namespace SAM.Geometry.OCCT.Solver
             // is the filled caps + extended (overshooting) walls, for reviewing the pre-resolve geometry.
             if (StopAfterExtend)
             {
+                SourceMap = BuildResolvedSourceMap(ResolvedFace3Ds, face3Ds);
                 return;
             }
 
-            Resolve(snappedFace3Ds, options);
+            ResolveStage.Result resolveResult = ResolveStage.Resolve(snappedFace3Ds, options, ToleranceAngle, SewResidualGaps, SewExpandTolerance, FillHoles);
+            BucketMergedFace3Ds = resolveResult.BucketMergedFace3Ds;
+            NativeResolved = resolveResult.NativeResolved;
+            if (resolveResult.NativeResolved)
+            {
+                ResolvedCellCount = resolveResult.ResolvedCellCount;
+                ResolvedFace3Ds = resolveResult.ResolvedFace3Ds;
+                NakedEdgePoint3Ds = resolveResult.NakedEdgePoint3Ds;
+                HoleFillFace3Ds = resolveResult.HoleFillFace3Ds;
+            }
 
-            // MakerVolume returns only faces that bound a closed cell, so any face whose cell does not form
-            // - a wall or a cap (floor/roof) in a stepped/tilted region the kernel cannot close, or a roof
-            // lid the cells cap off - is dropped, leaving a hole. Re-add every face that went into the
-            // volume build but has no representation in the resolved output, using its extended geometry so
-            // the re-added face overshoots its neighbours and closes the gap. Walls and caps are treated the
-            // same: a dropped cap comes back grown (not the ungrown clean slab), so it reaches its walls.
+            // Stage C - HEAL: re-add every conditioned face the native MakerVolume dropped (bounds no closed
+            // cell), using its extended geometry so the re-added face overshoots its neighbours and closes the
+            // gap. Walls and caps alike: a dropped cap comes back grown (not the ungrown clean slab).
             if (RetainDropped && NativeResolved && ResolvedFace3Ds != null)
             {
-                List<Face3D> dropped = new List<Face3D>();
-                foreach (Face3D face3D in snappedFace3Ds)
+                HealStage.Result heal = HealStage.RetainDropped(ResolvedFace3Ds, snappedFace3Ds);
+                ResolvedFace3Ds = heal.ResolvedFace3Ds;
+            }
+
+            // Coarse source mapping over the final output faces (Phase 2, managed-only: the native resolve
+            // has no history yet - Phase 3 replaces this with composed BRepTools_History). Attributes each
+            // output face to the input source(s) it geometrically derives from, so no output face is left
+            // source-orphaned.
+            SourceMap = BuildResolvedSourceMap(ResolvedFace3Ds, face3Ds);
+        }
+
+        /// <summary>
+        /// Builds a coarse source mapping over <paramref name="outputFace3Ds"/>: each output face is attributed
+        /// to the input source(s) it is coplanar with and overlaps (bbox), falling back to the single nearest
+        /// input so every output keeps at least one source (never orphaned). This is the managed-only stand-in
+        /// (Phase 2) for the precise native <c>BRepTools_History</c> composed in Phase 3; the
+        /// <see cref="NearestSourceIndex"/>-style heuristic is honest about being coarse.
+        /// </summary>
+        private static SourceMap BuildResolvedSourceMap(List<Face3D> outputFace3Ds, List<Face3D> inputFace3Ds)
+        {
+            SourceMap map = new SourceMap();
+            if (outputFace3Ds == null)
+            {
+                return map;
+            }
+
+            List<Face3D> inputs = inputFace3Ds ?? new List<Face3D>();
+            for (int k = 0; k < outputFace3Ds.Count; k++)
+            {
+                Face3D output = outputFace3Ds[k];
+                if (output == null || !output.IsValid())
                 {
-                    if (face3D != null && face3D.IsValid() && !IsRepresented(face3D, ResolvedFace3Ds))
+                    continue;
+                }
+
+                FaceKey key = new FaceKey(k);
+                List<int> sources = new List<int>();
+                for (int i = 0; i < inputs.Count; i++)
+                {
+                    if (CoplanarBoxOverlap(output, inputs[i]))
                     {
-                        dropped.Add(face3D);
+                        sources.Add(i);
                     }
                 }
 
-                if (dropped.Count != 0)
+                if (sources.Count != 0)
                 {
-                    ResolvedFace3Ds = ResolvedFace3Ds.Concat(dropped).ToList();
+                    map.RecordMerge(sources, key, Provenance.Resolved);
+                    continue;
+                }
+
+                int nearest = NearestCoplanarInputIndex(output, inputs);
+                if (nearest >= 0)
+                {
+                    map.Record(nearest, key, Provenance.Resolved);
+                }
+                else
+                {
+                    map.RecordFabricated(key, Provenance.Resolved);
                 }
             }
+
+            return map;
+        }
+
+        /// <summary>Coarse coplanar-and-overlapping test: parallel normals, near-coincident planes, and 3D bounding
+        /// boxes overlapping (grown by a small tolerance). Used only for the Phase-2 coarse source mapping.</summary>
+        private static bool CoplanarBoxOverlap(Face3D a, Face3D b)
+        {
+            Plane planeA = a?.GetPlane();
+            Plane planeB = b?.GetPlane();
+            if (planeA == null || planeB == null)
+            {
+                return false;
+            }
+
+            if (System.Math.Abs(planeA.Normal.Unit.DotProduct(planeB.Normal.Unit)) < 0.99)
+            {
+                return false;
+            }
+
+            if (System.Math.Abs(planeA.Distance(planeB.Origin)) > 0.05)
+            {
+                return false;
+            }
+
+            BoundingBox3D boxA = a.GetBoundingBox();
+            BoundingBox3D boxB = b.GetBoundingBox();
+            if (boxA == null || boxB == null)
+            {
+                return false;
+            }
+
+            const double tolerance = 0.05;
+            return boxA.Min.X - tolerance <= boxB.Max.X && boxA.Max.X + tolerance >= boxB.Min.X
+                && boxA.Min.Y - tolerance <= boxB.Max.Y && boxA.Max.Y + tolerance >= boxB.Min.Y
+                && boxA.Min.Z - tolerance <= boxB.Max.Z && boxA.Max.Z + tolerance >= boxB.Min.Z;
+        }
+
+        /// <summary>Index of the input whose centroid is nearest <paramref name="output"/>'s centroid, preferring a
+        /// coplanar input; -1 when there are no inputs. The nearest-source fallback for the coarse mapping.</summary>
+        private static int NearestCoplanarInputIndex(Face3D output, List<Face3D> inputs)
+        {
+            Point3D outputCentre = output?.GetBoundingBox()?.GetCentroid();
+            Plane outputPlane = output?.GetPlane();
+            if (outputCentre == null || inputs == null || inputs.Count == 0)
+            {
+                return inputs != null && inputs.Count != 0 ? 0 : -1;
+            }
+
+            int best = -1;
+            double bestDistance = double.MaxValue;
+            int bestAny = -1;
+            double bestAnyDistance = double.MaxValue;
+            for (int i = 0; i < inputs.Count; i++)
+            {
+                Point3D centre = inputs[i]?.GetBoundingBox()?.GetCentroid();
+                if (centre == null)
+                {
+                    continue;
+                }
+
+                double distance = outputCentre.Distance(centre);
+                if (distance < bestAnyDistance)
+                {
+                    bestAnyDistance = distance;
+                    bestAny = i;
+                }
+
+                Plane inputPlane = inputs[i]?.GetPlane();
+                bool coplanar = inputPlane != null && outputPlane != null
+                    && System.Math.Abs(outputPlane.Normal.Unit.DotProduct(inputPlane.Normal.Unit)) >= 0.99;
+                if (coplanar && distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = i;
+                }
+            }
+
+            return best >= 0 ? best : bestAny;
         }
 
         /// <summary>
@@ -448,7 +597,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// neighbour's actual face - either would be wrongly called "represented" by a looser test. Used by
         /// RetainDropped.
         /// </summary>
-        private static bool IsRepresented(Face3D face3D, List<Face3D> resolvedFace3Ds)
+        internal static bool IsRepresented(Face3D face3D, List<Face3D> resolvedFace3Ds)
         {
             Plane plane = face3D?.GetPlane();
             BoundingBox3D box = face3D?.GetBoundingBox();
@@ -521,6 +670,11 @@ namespace SAM.Geometry.OCCT.Solver
         /// projected onto their backer plane, then coplanar faces - including a smaller panel contained in a
         /// larger one - are merged via the managed union. The output feeds Step 2 (fill/extend), or is returned
         /// as-is when only cleaning is wanted (<see cref="StopAfterClean"/>).
+        /// <para>
+        /// As of Phase 2 the body lives in <see cref="SnapStage"/> (which additionally attributes each clean
+        /// face to its source panels so <c>MaxExtend</c> is carried by identity); this static remains as the
+        /// public, geometry-only entry point and delegates there, returning the same faces it always did.
+        /// </para>
         /// </summary>
         public static List<Face3D> CleanBucket(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3, double normalizeCapOffset = 0.3)
         {
@@ -529,47 +683,15 @@ namespace SAM.Geometry.OCCT.Solver
                 return new List<Face3D>();
             }
 
-            // 1. External shape only - drop window/door openings.
-            foreach (SnappedPanel panel in panels)
+            ToleranceBudget tolerances = new ToleranceBudget
             {
-                panel.StripInternalEdges();
-            }
+                Angle = toleranceAngle,
+                ArcAngle = toleranceArcAngle,
+                Distance = toleranceDistance,
+                VerticalAngle = verticalAngleTolerance
+            };
 
-            // 1b. Collapse back-to-back partitions BEFORE the weighted bucket snap can pull them onto one
-            //     side. Two near-coincident, in-plane-overlapping faces with OPPOSING (anti-parallel) normals
-            //     AND (near) equal area are the two room-facing skins of one shared partition - one wall per
-            //     room. The weighted snap below projects the lighter skin onto the heavier backer, which puts the
-            //     partition ~a wall-thickness off the lighter room's cap edges and detaches it, so that room
-            //     cannot close and the two adjacent rooms merge into a single cell; collapsing both skins onto
-            //     the smaller (fragile) room's plane closes both rooms instead (see SnapOpposedPartitions). The
-            //     equal-area gate is essential: without it a long shared wall caught against a short partition
-            //     skin, or the differently-sized walls of two adjacent grid rooms, are mis-collapsed and merge
-            //     rooms. Same-facing duplicates (a wall imported twice) keep parallel normals and are left to the
-            //     weighted snap. Runs in the clean (world) frame, so it is keyed on the opposing-normal geometry,
-            //     not the IsVertical test (which a tilted wall fails here).
-            SnapOpposedPartitions(panels, toleranceAngle, toleranceDistance);
-
-            // 2. Bucket snap - bring within-bucket near-parallel, in-plane-overlapping panels onto one
-            //    backer plane (now coplanar), and align consecutive vertical wall segments offset by a small
-            //    step jog. Non-overlapping, non-colinear parallels (separate bays) are left put.
-            Snap(panels, toleranceAngle, toleranceArcAngle, toleranceDistance, verticalAngleTolerance, alignColinearOffset);
-
-            // 2b. Normalize caps onto one level plane - project the near-parallel, within-offset floor/roof
-            //     tiles of a level onto the dominant cap's plane. Unlike the snap above (which needs an
-            //     in-plane overlap), this groups purely by perpendicular nearness, so adjacent (edge-touching)
-            //     tiles of one slab - merged at slightly different tilts/elevations - collapse onto a single
-            //     plane and the coplanar merge below can fuse them, letting the kernel close the cell.
-            NormalizeCaps(panels, toleranceAngle, normalizeCapOffset, toleranceDistance, verticalAngleTolerance);
-
-            // 3. Coplanar merge - union coplanar/overlapping faces so a contained smaller panel collapses into one.
-            List<Face3D> face3Ds = panels.Select(x => x.Face3D).Where(x => x != null && x.IsValid()).ToList();
-            List<Face3D> merged = Geometry.Spatial.Query.Union(face3Ds, toleranceDistance);
-            if (merged == null || merged.Count == 0)
-            {
-                merged = face3Ds;
-            }
-
-            return merged.Where(x => x != null && x.IsValid()).ToList();
+            return SnapStage.Clean(panels, tolerances, alignColinearOffset, normalizeCapOffset).CleanFace3Ds;
         }
 
         /// <summary>
@@ -1017,17 +1139,57 @@ namespace SAM.Geometry.OCCT.Solver
         /// Largest-area first so each larger skin is projected onto its smaller partner; each face is consumed once.
         /// </summary>
         /// <summary>
-        /// The two skins of a real back-to-back partition are the SAME wall seen from each room, so they are
-        /// congruent - equal area. A within-bucket, anti-parallel, in-plane-overlapping pair whose areas differ
-        /// by more than this fraction is therefore NOT one partition's two skins but two distinct walls (e.g. a
-        /// long shared wall caught against a short partition skin, or the differently-sized walls of two adjacent
-        /// rooms in a grid). Collapsing such a mis-pair drags one wall off its room's cap edges, which both opens
-        /// naked edges and merges the two rooms into a single cell. Observed genuine pairs sit at ratio 1.000 and
-        /// every observed mis-pair at <= 0.93, so this 0.97 floor cleanly separates them.
+        /// Minimum in-plane <em>overlap</em> ratio (<see cref="SnappedPanel.InPlaneOverlapRatio"/>) for a pair to
+        /// count as one partition's two skins. The two skins of a real back-to-back partition occupy the SAME
+        /// footprint, so their overlap-to-larger ratio is ~1.0 - even when one skin carries a door notch that
+        /// cuts its <em>area</em> (the old full-area gate wrongly rejected such a door-cut skin at ~0.68 and left
+        /// the partition split). A pair whose footprints differ by more - a long shared wall caught against a
+        /// short partition skin, or the differently-sized walls of two adjacent grid rooms - overlaps only
+        /// partially and is a mis-pair whose collapse would drag one wall off its room and merge the two rooms
+        /// into one cell. Observed genuine pairs sit at 1.000 and mis-pairs well below, so this 0.97 floor
+        /// separates them. (Replaces the pre-Phase-2 full-area ratio, which a door cut defeated.)
         /// </summary>
-        public const double OPPOSED_PARTITION_MIN_AREA_RATIO = 0.97;
+        public const double OPPOSED_PARTITION_MIN_OVERLAP_RATIO = 0.97;
 
-        public static void SnapOpposedPartitions(List<SnappedPanel> panels, double toleranceAngle, double toleranceDistance)
+        /// <summary>
+        /// Ceiling (metres) on the perpendicular separation between two skins for them to count as one
+        /// back-to-back partition rather than a genuine void. A partition's two room-facing skins sit within a
+        /// wall thickness of one another (typically 0.1-0.3 m); a shaft/void gap is wider. Gating on this
+        /// thickness scale - rather than the <c>BucketSize</c> slab, which the analytical wrapper floors at 0.4 m
+        /// (§I) - is what lets a real 0.3-0.4 m void survive Stage A while a thin partition still collapses.
+        /// 0.3 m is a generous maximum wall thickness; a pair separated by more is not one wall's two skins.
+        /// </summary>
+        public const double OPPOSED_PARTITION_MAX_SEPARATION = 0.3;
+
+        /// <summary>
+        /// Collapse each back-to-back partition pair onto the smaller skin's plane, with gates that distinguish a
+        /// real shared partition from geometry that merely looks like one:
+        /// <list type="number">
+        /// <item><b>Anti-parallel normals</b> - the two skins face opposite rooms (a same-facing duplicate is
+        /// left to the weighted bucket snap).</item>
+        /// <item><b>Within-bucket and in-plane overlap</b> - near-coincident and sharing surface, not two walls
+        /// a room apart.</item>
+        /// <item><b>Thickness-scale separation</b> (Phase 2, <see cref="OPPOSED_PARTITION_MAX_SEPARATION"/>,
+        /// <see cref="SnappedPanel.PerpendicularSeparation"/>) - the skins must sit within a wall thickness, not
+        /// the 0.4 m-floored bucket slab. A wider gap is a genuine void (a shaft) and must survive Stage A.</item>
+        /// <item><b>In-plane overlap ratio</b> (Phase 2, <see cref="OPPOSED_PARTITION_MIN_OVERLAP_RATIO"/>) - gated
+        /// on the overlap <em>footprint</em>, not full face area, so a door-cut skin (same footprint, smaller area)
+        /// collapses while a partial-overlap mis-pair (a long wall vs a short partition) does not.</item>
+        /// </list>
+        /// <para>
+        /// The plan (§E Phase 2) proposed a <em>normal-sign</em> separation test (collapse only "facing-away"
+        /// skins). That proved unreliable on the real fixtures: SAM/Revit import winding orients a real
+        /// partition's skin normals <em>toward</em> each other (into the wall core), the opposite of a clean
+        /// synthetic model, so the sign test mis-classified genuine partitions as voids and regressed
+        /// <c>whole-level-tilted</c> from 22 to 20 cells. The winding-independent thickness-separation gate
+        /// achieves the same goal (keep a wide void, collapse a thin partition) without depending on normal
+        /// orientation - the empirical-recalibration methodology of §A.
+        /// </para>
+        /// Rejections are recorded as <see cref="DiagnosticCode.RejectedCollapse"/> so every kept pair carries its
+        /// reason. Largest-area first, so the outer (larger) skin is projected onto its smaller partner's plane
+        /// (the fragile room's side, which the post-resolve fill cannot re-grow); each face is consumed once.
+        /// </summary>
+        public static void SnapOpposedPartitions(List<SnappedPanel> panels, double toleranceAngle, double toleranceDistance, SolverDiagnostics diagnostics = null)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -1072,14 +1234,29 @@ namespace SAM.Geometry.OCCT.Solver
                         continue;
                     }
 
-                    // Congruent skins only: the two room-facing skins of one partition are the same wall and so
-                    // have (near) equal area. A pair whose areas differ by more is a mis-pair of two distinct
-                    // walls; collapsing it drags one wall off its room and merges the rooms (see the constant).
-                    double areaA = a.GetArea();
-                    double areaB = b.GetArea();
-                    double larger = System.Math.Max(areaA, areaB);
-                    if (larger <= 0 || System.Math.Min(areaA, areaB) / larger < OPPOSED_PARTITION_MIN_AREA_RATIO)
+                    // Thickness-scale separation gate (Phase 2): the two skins must sit within a wall thickness,
+                    // not the 0.4 m-floored bucket. A wider anti-parallel, overlapping pair bounds a genuine void
+                    // (a shaft) and must survive Stage A - the shaft-void fix.
+                    if (a.PerpendicularSeparation(b) > OPPOSED_PARTITION_MAX_SEPARATION)
                     {
+                        diagnostics?.Add(SolverStage.Snap, DiagnosticCode.RejectedCollapse, OcctDiagnosticSeverity.Info,
+                            string.Format("Opposed pair is {0:0.###} m apart (> {1} m wall thickness) - a real void (e.g. a shaft), not collapsed.",
+                                a.PerpendicularSeparation(b), OPPOSED_PARTITION_MAX_SEPARATION),
+                            face3D: a.Face3D, toleranceUsed: OPPOSED_PARTITION_MAX_SEPARATION);
+                        continue;
+                    }
+
+                    // Overlap-footprint gate (Phase 2): the two skins must occupy (near) the same footprint.
+                    // Gated on the overlap region, not full face area, so a door-cut skin (same footprint,
+                    // smaller area) still collapses while a partial-overlap mis-pair (a long shared wall caught
+                    // against a short partition) is left put.
+                    double overlapRatio = a.InPlaneOverlapRatio(b);
+                    if (overlapRatio < OPPOSED_PARTITION_MIN_OVERLAP_RATIO)
+                    {
+                        diagnostics?.Add(SolverStage.Snap, DiagnosticCode.RejectedCollapse, OcctDiagnosticSeverity.Info,
+                            string.Format("Opposed pair overlaps only {0:P0} of the larger footprint (< {1:P0}) - distinct walls, not one partition.",
+                                overlapRatio, OPPOSED_PARTITION_MIN_OVERLAP_RATIO),
+                            face3D: a.Face3D, toleranceUsed: toleranceDistance);
                         continue;
                     }
 
@@ -1162,6 +1339,18 @@ namespace SAM.Geometry.OCCT.Solver
                         && backer.AbutsColinearWithin(candidate, alignColinearOffset, toleranceDistance);
 
                     if (!overlap && !abut)
+                    {
+                        continue;
+                    }
+
+                    // Void guard (Phase 2): never collapse an OPPOSING (anti-parallel) pair separated by more
+                    // than a wall thickness - that is a genuine void (a shaft), not a double-wall. Thin opposing
+                    // partitions were already consumed by SnapOpposedPartitions (marked Snapped, skipped above),
+                    // so any opposing pair reaching here beyond the thickness ceiling bounds real space and must
+                    // survive Stage A. IsParallelWith treats anti-parallel as parallel, so without this the
+                    // weighted snap would delete the void just like the pre-Phase-2 opposed-collapse did.
+                    if (backer.Plane.Normal.Unit.DotProduct(candidate.Plane.Normal.Unit) < 0
+                        && backer.PerpendicularSeparation(candidate) > OPPOSED_PARTITION_MAX_SEPARATION)
                     {
                         continue;
                     }
@@ -1291,7 +1480,7 @@ namespace SAM.Geometry.OCCT.Solver
             // below) exactly as before - EvaluateRawAdoption still sees the real naked-edge count and checks it
             // first, so passing placeholder zeros for the not-yet-computed sliver/dropped inputs is safe: the
             // rule never reaches them while naked edges are present.
-            int nakedEdgeCount = NakedEdgeCount(resolved, rawOptions);
+            int nakedEdgeCount = ResolveStage.NakedEdgeCount(resolved, rawOptions);
             int sliverCellCount = 0;
             List<Face3D> droppedFace3Ds = new List<Face3D>();
             double droppedRatio = 0;
@@ -1365,6 +1554,11 @@ namespace SAM.Geometry.OCCT.Solver
             ResolvedCellCount = cells;
             NakedEdgePoint3Ds = new List<Point3D>();
 
+            // Coarse source mapping over the adopted raw output (Phase 2, managed-only stand-in for the native
+            // history composed in Phase 3): every output face is attributed to the raw input face(s) it derives
+            // from, so no output face is source-orphaned.
+            SourceMap = BuildResolvedSourceMap(resolved, rawFace3Ds);
+
             RawAttemptSignature = new ClosureSignature3D(cells, cellVolumes, nakedEdgeCount: 0, faceCount: resolved.Count, droppedCount: droppedFace3Ds.Count);
             Signature = RawAttemptSignature;
             Diagnostics.Add(SolverStage.Resolve, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info,
@@ -1405,147 +1599,6 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return RawAdoptionOutcome.Adopted;
-        }
-
-        private void Resolve(List<Face3D> snappedFace3Ds, OcctBuildOptions options)
-        {
-            if (snappedFace3Ds == null || snappedFace3Ds.Count == 0)
-            {
-                return;
-            }
-
-            // Healing defaults for the solver use-case: sew near-touching faces before the volume build
-            // (bridges residual sub-mm gaps the managed fill leaves) and keep internal floors/partitions as
-            // shared cell faces (a zoned complex, not just the outer envelope). Callers can override.
-            if (options == null)
-            {
-                options = new OcctBuildOptions
-                {
-                    AvoidInternalShapes = false,
-                    SewBeforeBuild = true,
-                    SewingTolerance = 0.01 // 1 cm: bridges the cm-scale floor/wall gaps typical of Revit exports
-                };
-            }
-
-            // Native coplanar pre-merge BEFORE the volume build. After Step 2's fill/extend, extended walls
-            // and grown caps overlap coplanar neighbours; collapsing those overlaps (the share of
-            // self-intersections MakerVolume cannot otherwise digest) is what lets the kernel form a zoned
-            // cell complex instead of a single envelope cell.
-            List<Face3D> buildFace3Ds = snappedFace3Ds;
-            List<Face3D> preMerged = GeometryQuery.MergeCoplanarFace3Ds(snappedFace3Ds, out OcctCellComplexResult preMergeResult, ToleranceAngle, options);
-            preMergeResult?.Dispose();
-            if (preMerged != null && preMerged.Count != 0)
-            {
-                buildFace3Ds = preMerged;
-            }
-
-            BucketMergedFace3Ds = buildFace3Ds; // expose the MakerVolume input for debugging
-
-            // MakerVolume: split panels at mutual intersections and resolve 3-way junctions.
-            List<Shell> shells = GeometryCreate.Shells(buildFace3Ds, out OcctCellComplexResult cellResult, options);
-            if (cellResult == null || !cellResult.NativeAvailable)
-            {
-                // Native kernel not present (e.g. non-Windows agent): keep the managed snap result.
-                cellResult?.Dispose();
-                return;
-            }
-
-            NativeResolved = true;
-            ResolvedCellCount = cellResult.Cells?.Count ?? 0;
-
-            List<Face3D> resolved = shells == null
-                ? new List<Face3D>()
-                : shells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null).ToList();
-            cellResult.Dispose();
-
-            if (resolved.Count == 0)
-            {
-                // No closed cells formed (open wall soup): fall back to the pre-merged faces.
-                resolved = buildFace3Ds;
-            }
-
-            // Merge resolved coplanar neighbours (the colinear-merge analogue).
-            List<Face3D> merged = GeometryQuery.MergeCoplanarFace3Ds(resolved, out OcctCellComplexResult mergeResult, ToleranceAngle, options);
-            mergeResult?.Dispose();
-            if (merged != null && merged.Count != 0)
-            {
-                resolved = merged;
-            }
-
-            // ---- Adaptive native sew pass ----
-            // The pre-build sew (SewingTolerance ~1 cm) only bridges sub-cm gaps; the floor/wall slot gaps
-            // that survive into the resolved faces are wider. Re-sew the resolved faces at an expanded
-            // tolerance to stitch the two free edges of each slot directly - no fabricated air face - and keep
-            // the sewn result only when it strictly reduces the naked-edge count, so over-merging unrelated
-            // near edges is rejected. GapFill below then handles only what sewing could not close.
-            if (SewResidualGaps)
-            {
-                int nakedBefore = NakedEdgeCount(resolved, options);
-                if (nakedBefore > 0)
-                {
-                    double sewTolerance = System.Math.Min(System.Math.Max(SewExpandTolerance, options.SewingTolerance), 0.3);
-                    OcctBuildOptions sewOptions = new OcctBuildOptions(options)
-                    {
-                        SewBeforeBuild = true,
-                        SewingTolerance = sewTolerance
-                    };
-
-                    List<Shell> sewnShells = GeometryQuery.Sew(resolved, out OcctCellComplexResult sewResult, sewOptions, false);
-                    sewResult?.Dispose();
-
-                    List<Face3D> sewn = sewnShells == null
-                        ? null
-                        : sewnShells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null && x.IsValid()).ToList();
-
-                    if (sewn != null && sewn.Count != 0 && NakedEdgeCount(sewn, options) < nakedBefore)
-                    {
-                        resolved = sewn;
-                    }
-                }
-            }
-
-            ResolvedFace3Ds = resolved;
-
-            // Report naked (free) boundary edges - true boundaries vs unresolved gaps.
-            GeometryQuery.Validate(resolved, out OcctValidationReport report, out OcctCellComplexResult validateResult, options, false);
-            validateResult?.Dispose();
-            if (report != null)
-            {
-                NakedEdgePoint3Ds = report
-                    .IssuesOf(OcctValidationIssueCategory.NakedEdge)
-                    .Where(x => x?.Location != null)
-                    .Select(x => x.Location)
-                    .ToList();
-            }
-
-            // Close the residual holes: build a Face3D over each naked-boundary loop. These are added to the
-            // air-panel candidates so every space is fully enclosed.
-            if (FillHoles && NakedEdgePoint3Ds.Count != 0)
-            {
-                List<Face3D> gapFace3Ds = GapFill.NakedLoopFace3Ds(resolved, NakedEdgePoint3Ds, 0.01);
-                if (gapFace3Ds.Count != 0)
-                {
-                    HoleFillFace3Ds = (HoleFillFace3Ds ?? new List<Face3D>()).Concat(gapFace3Ds).ToList();
-                }
-            }
-        }
-
-        /// <summary>
-        /// Counts the naked (free) boundary edges in a resolved face set via the native validator. Used by the
-        /// adaptive sew pass to accept a re-sew only when it strictly reduces the count. Returns
-        /// <see cref="int.MaxValue"/> when the validator is unavailable, so a sew is never accepted on a
-        /// count it could not measure.
-        /// </summary>
-        private static int NakedEdgeCount(List<Face3D> face3Ds, OcctBuildOptions options)
-        {
-            if (face3Ds == null || face3Ds.Count == 0)
-            {
-                return 0;
-            }
-
-            GeometryQuery.Validate(face3Ds, out OcctValidationReport report, out OcctCellComplexResult result, options, false);
-            result?.Dispose();
-            return report?.CountOf(OcctValidationIssueCategory.NakedEdge) ?? int.MaxValue;
         }
 
         private static List<SnappedPanel> Register(List<Face3D> face3Ds, List<double> bucketSizes, List<double> weights, List<double> maxExtensions)

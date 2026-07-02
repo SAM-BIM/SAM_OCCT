@@ -1009,6 +1009,58 @@ namespace SAM.OCCT.UnitTests
             Assert.False(b.Snapped);
         }
 
+        [Fact]
+        public void SnapOpposedPartitions_WideVoid_LeftAlone()
+        {
+            // Two walls bounding a 0.35 m shaft void: anti-parallel, within the 0.4 m bucket, overlapping in
+            // plan and congruent - so every pre-Phase-2 gate said "collapse" and the void was deleted. The gap
+            // (0.35 m) is wider than any wall thickness (> the 0.3 m ceiling), so the thickness-separation gate
+            // now keeps them: a real void survives Stage A.
+            SnappedPanel a = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(0, 0, 3), new Point3D(1, 0, 3), new Point3D(1, 0, 0)), 1, 0.4, 0.5);
+            SnappedPanel b = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0.35, 0), new Point3D(1, 0.35, 0), new Point3D(1, 0.35, 3), new Point3D(0, 0.35, 3)), 1, 0.4, 0.5);
+
+            // Sanity: anti-parallel and within the 0.4 m bucket (so the old gates would have collapsed it), but
+            // the 0.35 m separation exceeds the wall-thickness ceiling.
+            Assert.True(a.Plane.Normal.Unit.DotProduct(b.Plane.Normal.Unit) < -0.99, "Void walls should be anti-parallel");
+            Assert.True(a.PerpendicularSeparation(b) > Panel3DSnapSolver.OPPOSED_PARTITION_MAX_SEPARATION, "The void gap should exceed a wall thickness");
+
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+            Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { a, b }, 5 * (System.Math.PI / 180), 1e-6, diagnostics);
+
+            Assert.False(a.Snapped, "A real shaft void must survive Stage A - the two walls must not collapse");
+            Assert.False(b.Snapped);
+            Assert.Contains(diagnostics.All, d => d.Code == DiagnosticCode.RejectedCollapse);
+        }
+
+        [Fact]
+        public void SnapOpposedPartitions_DoorCutSkin_CollapsesViaOverlapGate()
+        {
+            // Two facing-away skins of one partition, but the second carries a door-shaped NOTCH in its
+            // external boundary (a U-shape rising from the floor), so its face AREA is well below the full
+            // skin's - the old full-area 0.97 gate rejected it (~0.68) and left the partition split. Its
+            // bounding FOOTPRINT is unchanged, so the Phase-2 overlap-footprint gate collapses it correctly.
+            SnappedPanel full = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+
+            // Door notch: outline goes up around a 0.8 x 2.1 opening at the floor, centred on the wall.
+            Face3D doorCut = TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0.15, 0), new Point3D(0, 0.15, 3), new Point3D(2, 0.15, 3), new Point3D(2, 0.15, 0),
+                new Point3D(1.4, 0.15, 0), new Point3D(1.4, 0.15, 2.1), new Point3D(0.6, 0.15, 2.1), new Point3D(0.6, 0.15, 0));
+            SnappedPanel notched = new SnappedPanel(1, doorCut, 1, 0.3, 0.5);
+
+            // Sanity: the notch cut the area well below the full-area gate, but the footprints match.
+            double areaRatio = System.Math.Min(full.GetArea(), notched.GetArea()) / System.Math.Max(full.GetArea(), notched.GetArea());
+            Assert.True(areaRatio < Panel3DSnapSolver.OPPOSED_PARTITION_MIN_OVERLAP_RATIO, "The door notch should defeat the old full-area gate");
+            Assert.True(full.InPlaneOverlapRatio(notched) >= Panel3DSnapSolver.OPPOSED_PARTITION_MIN_OVERLAP_RATIO, "The footprints should still match");
+            Assert.True(full.Plane.Normal.Unit.DotProduct(notched.Plane.Normal.Unit) < -0.99, "Skins should be anti-parallel");
+
+            Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { full, notched }, 5 * (System.Math.PI / 180), 1e-6);
+
+            Assert.True(full.Snapped, "A door-cut skin shares the partition footprint and must collapse via the overlap gate");
+        }
+
         // ──────────────────────────────────────────────────────────────
         // helpers
         // ──────────────────────────────────────────────────────────────
