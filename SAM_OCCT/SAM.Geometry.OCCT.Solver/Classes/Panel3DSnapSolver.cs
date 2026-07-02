@@ -93,6 +93,16 @@ namespace SAM.Geometry.OCCT.Solver
         /// pre-resolve geometry be reviewed before <c>Solve3D</c> runs the native MakerVolume split. Default false.</summary>
         public bool StopAfterExtend { get; set; } = false;
 
+        /// <summary>
+        /// Diagnostic-only override: skip the raw-first attempt (<see cref="TryRawResolve"/>) and always run
+        /// the managed clean/extend/resolve pipeline (Steps 1-2 + native resolve), even on an input the raw
+        /// solve would otherwise adopt watertight. Lets golden-master tests capture the managed-pipeline
+        /// signature on the SAME fixtures the raw-first optimization exists to bypass (see
+        /// docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md, Phase 0). Default false preserves the existing
+        /// raw-first-then-managed-fallback behaviour for every other caller.
+        /// </summary>
+        public bool ForceManagedPipeline { get; set; } = false;
+
         /// <summary>Step 2: grow floors/roofs out to the surrounding walls (close floor-to-wall gaps). Default true.</summary>
         public bool FillCapsToWalls { get; set; } = true;
 
@@ -252,7 +262,7 @@ namespace SAM.Geometry.OCCT.Solver
             // faces first and keep that result when it is watertight (no naked edges); only fall through to the
             // managed pipeline when the raw solve leaves gaps. Skipped for the diagnostic StopAfter* modes, which
             // exist to inspect the managed clean/extend geometry itself.
-            if (!StopAfterClean && !StopAfterExtend && TryRawResolve(options))
+            if (!ForceManagedPipeline && !StopAfterClean && !StopAfterExtend && TryRawResolve(options))
             {
                 return;
             }

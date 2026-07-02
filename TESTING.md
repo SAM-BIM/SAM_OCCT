@@ -136,3 +136,59 @@ chaining and point-in-solid coverage lives in `OcctTopologyIntegrationTests`
 and `TopologyChainingIntegrationTests` (integration, native-gated). When the
 native ABI changes, rebuild with `.\build-native.ps1` and run the full
 integration suite locally - CI does not build the native layer.
+
+## Golden-master closure signatures (true-3D panel solver plan, Phase 0)
+
+`docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md` phases the evolution of the
+true-3D panel solver (`Panel3DSnapSolver` / `Modify.Solve3D`). Phase 0 froze
+the solver's *current* closure behaviour as a machine-checked baseline before
+any of the later phases touch it:
+
+- `SAM.Geometry.OCCT.Solver.ClosureSignature3D` - a comparable fingerprint of
+  a resolved cell complex (cell count, per-cell/total volume, naked-edge
+  count, face count, dropped-source count) and `IsRegressionOf(other,
+  volumeTolerance)`, which later phases use to gate whether a pipeline change
+  (an adopted resolve level, an escalation round, a re-sew) is kept. Unit
+  tests: `Testing/SAM.OCCT.UnitTests/ClosureSignature3DTests.cs`.
+  `DroppedCount` is a plain caller-supplied count in this phase - the plan's
+  mapping-derived definition (via a `SourceMap`) arrives with source mapping
+  in Phase 2/3.
+- `Testing/SAM.OCCT.IntegrationTests/GoldenMasterIntegrationTests.cs` locks
+  the signature of the five reference fixtures
+  (`whole-level-flat.sam`, `tilted-two-spaces.sam`, `whole-level-tilted.sam`,
+  `two-level-tilted.sam`, `whole-level-towers.sam`) on two paths:
+  - **Raw path** (`Solve3D_RawPath_ClosureSignatureMatchesGoldenMaster`) -
+    today's default behaviour (raw-first adoption). Asserts the exact
+    cell/naked-edge targets from the plan (22/0, 2/0, 22/0, ≥40/0, ≥31/0) -
+    these already had individual coverage in `FlatSolveIntegrationTests` /
+    `TiltedSolveIntegrationTests`; this test additionally locks total volume
+    via `ClosureSignature3D` output logged to the test console.
+  - **Managed path** (`Solve3D_ManagedPath_ClosureSignatureIsRecorded`) -
+    the pre-raw-first clean/extend/resolve pipeline, forced via
+    `Panel3DSnapSolver.ForceManagedPipeline` (threaded through
+    `Modify.Solve3D`'s `forceManagedPipeline` parameter). Both default to
+    `false` and change no existing behaviour; setting either skips only the
+    raw-first shortcut and always runs the managed pipeline, which is known
+    (see plan §A) to under-close some of these exact fixtures relative to
+    the raw path. This test records today's number as the baseline - it does
+    not assert a specific value, since Phase 0 makes no pipeline changes.
+
+**Local-integration merge gate.** Every phase in the plan (0-9) is merged
+under the same protocol already documented above: `dotnet test` on
+`SAM.OCCT.UnitTests` must be green, and `SAM.OCCT.IntegrationTests` must be
+run locally against the committed `build/` native DLLs, with the pass/skip
+summary pasted into the PR. A phase's golden-master values must not change
+unless that phase explicitly states the delta (which fixture, which number,
+why) in its PR description - an unexplained change to these numbers is a
+regression, not a refactor.
+
+**Known CI drift (not fixed by Phase 0 - owner-deferred).**
+`.github/workflows/build.yml` clones the sibling `SAM` / `SAM_Solver` repos
+pinned to branch `sow/2026-Q2`, but as of this plan (2026-07-02) both sibling
+repos live on `sow/2026-Q3`. CI currently still passes because the pinned
+`sow/2026-Q2` branch state happens to still build against this repo's needs,
+but the pin no longer reflects where development is actually happening and
+should be bumped (or parameterized) in a follow-up hygiene change - out of
+scope here because CI native build is separately owner-deferred (CI stays
+managed-only; see the native-native gap below) and this plan's phases are
+gated by the *local* integration run, not CI.

@@ -29,6 +29,11 @@ namespace SAM.Analytical.OCCT.Solver
         /// <param name="minBucketSize">Lower bound on the capture half-width, in metres.</param>
         /// <param name="thicknessFactor">Fraction of construction thickness used as the capture half-width.</param>
         /// <param name="options">OCCT build options (distance/fuzzy/glue tolerances).</param>
+        /// <param name="forceManagedPipeline">Diagnostic-only: skip the raw-first attempt and always run the
+        /// managed clean/extend/resolve pipeline, even on input the raw solve would otherwise adopt watertight.
+        /// Lets golden-master tests capture the managed-pipeline signature on well-modelled fixtures (see
+        /// <see cref="Geometry.OCCT.Solver.Panel3DSnapSolver.ForceManagedPipeline"/>). Default false preserves
+        /// the existing raw-first-then-managed-fallback behaviour.</param>
         /// <returns>The resolved panels, or null when no usable panels were supplied.</returns>
         public static List<Panel> Solve3D(
             this IEnumerable<Panel> panels,
@@ -40,7 +45,8 @@ namespace SAM.Analytical.OCCT.Solver
             double thicknessFactor = 0.6,
             double alignColinearOffset = 0.3,
             double normalizeCapOffset = 0.3,
-            OcctBuildOptions options = null)
+            OcctBuildOptions options = null,
+            bool forceManagedPipeline = false)
         {
             nakedPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
@@ -58,7 +64,8 @@ namespace SAM.Analytical.OCCT.Solver
             {
                 Up = ResolveUp(sources),
                 AlignColinearOffset = alignColinearOffset,
-                NormalizeCapOffset = normalizeCapOffset
+                NormalizeCapOffset = normalizeCapOffset,
+                ForceManagedPipeline = forceManagedPipeline
             };
             solver.Execute(options);
 
