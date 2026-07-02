@@ -310,6 +310,34 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void Snap_ParallelWallsWithinBucketButLowInPlaneOverlap_NotSnapped()
+        {
+            // Two walls sharing a supporting plane (both near y~0, within a 0.5 m bucket) and near-parallel,
+            // but offset in-plane so their footprints meet only at a corner: backer x[0..2]/z[0..3], candidate
+            // x[1.5..3.5]/z[2..5]. Overlap is 0.5x1 of a 2x3 footprint => ratio ~0.083, well below the
+            // co-parallel floor. The candidate sits at y=0.4 - beyond the step-jog align offset (0.3) so the
+            // abut path cannot fire either, isolating the overlap gate. This is the whole-level-tilted.sam
+            // mis-pair signature (two distinct perimeter walls at a similar plane offset but metres apart
+            // in-plane); the Phase-2b overlap-ratio guard must keep them apart so their collapse cannot merge
+            // two cells. Regression for the tilted-closure fix.
+            SnappedPanel backer = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.5, 0.5);
+            SnappedPanel candidate = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(1.5, 0.4, 2), new Point3D(3.5, 0.4, 2), new Point3D(3.5, 0.4, 5), new Point3D(1.5, 0.4, 5)), 1, 0.5, 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel> { backer, candidate };
+
+            bool changed = Panel3DSnapSolver.Snap(panels, toleranceAngle: 0.1, toleranceArcAngle: 0.01, toleranceDistance: 1e-6);
+
+            Assert.False(changed, "A low-overlap distinct-wall pair must not snap together");
+            Assert.False(candidate.Snapped);
+            Assert.False(backer.Snapped);
+            foreach (Point3D pt in BoundaryPoints(candidate.Face3D))
+            {
+                Assert.Equal(0.4, pt.Y, 6); // candidate stays on its own plane
+            }
+        }
+
+        [Fact]
         public void Snap_PerpendicularPanels_NotSnapped()
         {
             // Backer is a Y-normal wall; candidate is a Z-normal floor — they are not parallel

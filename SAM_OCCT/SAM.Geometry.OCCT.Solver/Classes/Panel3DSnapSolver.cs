@@ -1152,6 +1152,18 @@ namespace SAM.Geometry.OCCT.Solver
         public const double OPPOSED_PARTITION_MIN_OVERLAP_RATIO = 0.97;
 
         /// <summary>
+        /// Minimum in-plane overlap-to-larger-footprint ratio for a CO-parallel pair to snap together in
+        /// <see cref="Snap"/> (Phase 2b distinct-wall guard). Below this the two share a supporting plane but
+        /// sit at different in-plane locations - two distinct walls, not one double-wall - and collapsing them
+        /// would merge two cells (observed on whole-level-tilted.sam, where the Phase-2b ordering/midpoint
+        /// change first exposed such a mis-pair at ratio ~0.10). Set well below
+        /// <see cref="OPPOSED_PARTITION_MIN_OVERLAP_RATIO"/> because a genuine co-parallel double-wall (skins
+        /// offset along the run, or of unequal size) overlaps less fully than a coincident opposed partition:
+        /// observed genuine co-parallel snaps sit at 0.78-0.97, mis-pairs at or below 0.30.
+        /// </summary>
+        public const double COPARALLEL_SNAP_MIN_OVERLAP_RATIO = 0.5;
+
+        /// <summary>
         /// Ceiling (metres) on the perpendicular separation between two skins for them to count as one
         /// back-to-back partition rather than a genuine void. A partition's two room-facing skins sit within a
         /// wall thickness of one another (typically 0.1-0.3 m); a shaft/void gap is wider. Gating on this
@@ -1384,8 +1396,17 @@ namespace SAM.Geometry.OCCT.Solver
 
                     // (a) A genuine double-wall: within the bucket slab AND sharing surface in-plane. A
                     // near-parallel wall that sits over a different part of the plane (the next bay's wall)
-                    // is a separate wall and must not be dragged onto its neighbour.
-                    bool overlap = withinBucket && backer.OverlapsInPlane(candidate, toleranceDistance);
+                    // is a separate wall and must not be dragged onto its neighbour. The in-plane overlap must
+                    // also cover a real fraction of the larger footprint (Phase 2b): two distinct walls that
+                    // merely share a supporting plane - e.g. two perimeter walls of a tilted level at a similar
+                    // plane offset but metres apart in-plane - touch only at a corner (ratio well below the
+                    // floor) and must NOT collapse together, which would drag one wall off its room and merge
+                    // two cells. The co-parallel analogue of SnapOpposedPartitions' overlap-ratio gate, but at
+                    // a lower floor because a genuine co-parallel double-wall (offset along the run, or unequal
+                    // skins) legitimately overlaps less fully than a coincident opposed partition.
+                    bool overlap = withinBucket
+                        && backer.OverlapsInPlane(candidate, toleranceDistance)
+                        && backer.InPlaneOverlapRatio(candidate) >= COPARALLEL_SNAP_MIN_OVERLAP_RATIO;
 
                     // (b) Consecutive segments of one vertical wall run with a small perpendicular jog at a
                     // step: abutting/overlapping along the run, heights overlapping, offset within the align
