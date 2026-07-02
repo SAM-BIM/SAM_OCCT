@@ -1270,23 +1270,84 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
-        /// Managed snap: sort by <c>Weight</c> descending so backers are processed first, then project each
-        /// not-yet-snapped lower-weight, near-parallel panel onto the backer plane when either: (a) it lies
+        /// Sorts <paramref name="panels"/> by the snap-priority law (Phase 2b - the 2D
+        /// <c>SnapAndAdjustWalls</c> ordering, SAM_Solver <c>SnapSolver.cs:962-967</c>, lifted to 3D): backers
+        /// are processed before subordinates, and a tie at one key is broken by the next. <b>Weight</b>
+        /// descending (primary - who dominates), then <b>BucketSize</b> descending (secondary - a wider
+        /// capture reach outranks a narrower one at equal weight, so the panel that can actually reach a
+        /// distant equal-weight partner is the one whose bucket does the reaching), then <b>Area</b>
+        /// descending (tertiary - the larger surface anchors the smaller, mirroring the 2D law's Length key).
+        /// Exposed (not inlined into <see cref="Snap"/>) so the ordering law itself is unit-testable.
+        /// </summary>
+        public static List<SnappedPanel> OrderForSnap(IEnumerable<SnappedPanel> panels)
+        {
+            return (panels ?? Enumerable.Empty<SnappedPanel>())
+                .OrderByDescending(x => x.Weight)
+                .ThenByDescending(x => x.BucketSize)
+                .ThenByDescending(x => x.GetArea())
+                .ToList();
+        }
+
+        /// <summary>
+        /// Cheap bounding-box pre-filter for <see cref="Snap"/>'s candidate scan (Phase 2b, "shared with
+        /// Phase 9"): only panels whose 3D bounding box lies within <paramref name="margin"/> of
+        /// <paramref name="backer"/>'s box can possibly satisfy <c>BucketContains</c>/<c>AbutsColinearWithin</c>,
+        /// so this rejects the rest before the more expensive plane/footprint predicates run. A superset, never
+        /// a false negative: <paramref name="margin"/> should be at least as large as the reach any downstream
+        /// test can accept (the caller passes backer's bucket size plus the colinear-align offset).
+        /// </summary>
+        public static IEnumerable<SnappedPanel> CandidatePanelsNear(SnappedPanel backer, IEnumerable<SnappedPanel> panels, double margin)
+        {
+            BoundingBox3D backerBox = backer?.GetBoundingBox();
+            if (backerBox == null || panels == null)
+            {
+                yield break;
+            }
+
+            foreach (SnappedPanel candidate in panels)
+            {
+                BoundingBox3D box = candidate?.GetBoundingBox();
+                if (box == null)
+                {
+                    continue;
+                }
+
+                if (backerBox.Min.X - margin <= box.Max.X && backerBox.Max.X + margin >= box.Min.X
+                    && backerBox.Min.Y - margin <= box.Max.Y && backerBox.Max.Y + margin >= box.Min.Y
+                    && backerBox.Min.Z - margin <= box.Max.Z && backerBox.Max.Z + margin >= box.Min.Z)
+                {
+                    yield return candidate;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Managed snap - ONE pass (docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md §F "the live one-shot
+        /// greedy pass"; <see cref="SnapStage.SnapToFixedPoint"/> is what iterates this to convergence,
+        /// Phase 2b). Sorts by <see cref="OrderForSnap"/> so backers are processed first, then projects each
+        /// not-yet-snapped, near-parallel panel within reach onto the backer plane when either: (a) it lies
         /// within the backer's bucket slab AND overlaps it in-plane (a genuine double-wall); or (b) backer
         /// and candidate are both (near) vertical walls that are consecutive segments of one run - abutting
         /// or overlapping along the run, heights overlapping - offset by no more than
         /// <paramref name="alignColinearOffset"/> (a small Y-jog at a step). A near-parallel panel that
         /// merely passes through the slab but covers a different part of the plane (the next bay's wall),
         /// or is offset by more than the align distance, is a distinct wall and is left where it is.
+        /// <para>
+        /// Equal-weight (within 1%) pairs use the midpoint rule (Phase 2b, mirrors the 2D solver's tie-break,
+        /// <see cref="SnappedPanel.MoveToMidplaneWith"/>): BOTH panels move to the midplane and BOTH buckets
+        /// grow by the distance moved, rather than the earlier-sorted panel staying an unconditional backer.
+        /// </para>
         /// </summary>
-        public static void Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance = Tolerance.Distance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3)
+        /// <returns>True when at least one panel moved this pass - the fixed-point loop's convergence signal.</returns>
+        public static bool Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance = Tolerance.Distance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3)
         {
             if (panels == null || panels.Count < 2)
             {
-                return;
+                return false;
             }
 
-            List<SnappedPanel> ordered = panels.OrderByDescending(x => x.Weight).ToList();
+            List<SnappedPanel> ordered = OrderForSnap(panels);
+            bool anyChanged = false;
 
             for (int i = 0; i < ordered.Count; i++)
             {
@@ -1296,20 +1357,17 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
-                for (int j = i + 1; j < ordered.Count; j++)
+                double margin = backer.BucketSize + alignColinearOffset;
+                foreach (SnappedPanel candidate in CandidatePanelsNear(backer, ordered.Skip(i + 1), margin).ToList())
                 {
-                    SnappedPanel candidate = ordered[j];
                     if (candidate.Snapped || candidate.Plane == null)
                     {
                         continue;
                     }
 
-                    // Within-bucket near-parallel panels snap onto the backer. Equal-weight neighbours
-                    // are absorbed too - the descending sort makes the earlier panel the backer, so
-                    // coincident/offset "double-wall" pairs of the same weight collapse onto one plane
-                    // (and then merge as coplanar). This matches the 2D TryBucketSnap and this method's
-                    // own contract; the sort guarantees candidate.Weight <= backer.Weight, so only a
-                    // strictly higher-weight candidate (never produced by the sort) is skipped.
+                    // Near-parallel panels snap onto the backer. Equal-weight neighbours are captured too
+                    // (see the midpoint rule below); the sort guarantees candidate.Weight <= backer.Weight,
+                    // so only a strictly higher-weight candidate (never produced by the sort) is skipped.
                     if (candidate.Weight > backer.Weight)
                     {
                         continue;
@@ -1355,9 +1413,31 @@ namespace SAM.Geometry.OCCT.Solver
                         continue;
                     }
 
-                    candidate.SnapToBacker(backer.Plane);
+                    // Equal-weight (within 1%) midpoint rule (Phase 2b): move BOTH to the midplane and grow
+                    // BOTH buckets by the distance moved, instead of treating the earlier-sorted panel as an
+                    // unconditional backer. Reads backer.Plane live, so a backer already moved by an earlier
+                    // candidate in this SAME pass is reached from its updated position.
+                    bool equalWeight = System.Math.Abs(backer.Weight - candidate.Weight) <= backer.Weight * 0.01;
+                    if (equalWeight)
+                    {
+                        double halfOffset = backer.PerpendicularSeparation(candidate) / 2.0;
+                        bool backerMoved = backer.MoveToMidplaneWith(candidate, toleranceDistance);
+                        bool candidateMoved = candidate.SnapToBacker(backer.Plane);
+                        if (candidateMoved)
+                        {
+                            candidate.GrowBucket(halfOffset);
+                        }
+
+                        anyChanged = anyChanged || backerMoved || candidateMoved;
+                    }
+                    else
+                    {
+                        anyChanged = candidate.SnapToBacker(backer.Plane) || anyChanged;
+                    }
                 }
             }
+
+            return anyChanged;
         }
 
         /// <summary>

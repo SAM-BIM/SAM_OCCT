@@ -195,19 +195,49 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
-        public void Snap_EqualWeightPanelsWithinBucket_LaterAbsorbedByEarlier()
+        public void Snap_EqualWeightPanelsWithinBucket_BothMoveToMidplaneAndGrowBuckets()
         {
-            // Equal weight, within-bucket, near-parallel: the later panel is absorbed onto the earlier
-            // backer (deterministic by the stable descending-weight sort) so coincident/offset
-            // "double-wall" pairs of the same weight collapse onto one plane instead of staying apart.
+            // Equal weight, within-bucket, near-parallel: Phase 2b's midpoint rule moves BOTH panels to the
+            // midplane (0.075 = 0.15 / 2) and grows BOTH buckets by the distance moved (0.075), rather than
+            // treating the earlier-sorted panel as an unconditional backer that stays put.
             SnappedPanel a = MakeWallPanel(0, weight: 1, bucketSize: 0.3);
             SnappedPanel b = MakeWallPanel(0.15, weight: 1, bucketSize: 0.3);
             List<SnappedPanel> panels = new List<SnappedPanel> { a, b };
 
-            Panel3DSnapSolver.Snap(panels, toleranceAngle: 0.1, toleranceArcAngle: 0.01);
+            bool changed = Panel3DSnapSolver.Snap(panels, toleranceAngle: 0.1, toleranceArcAngle: 0.01);
 
-            Assert.False(a.Snapped, "The first equal-weight panel is the backer and stays put");
-            Assert.True(b.Snapped, "The second equal-weight panel within the bucket snaps onto the backer");
+            Assert.True(changed);
+            Assert.True(a.Snapped, "Both equal-weight panels move to the midplane");
+            Assert.True(b.Snapped);
+            foreach (Point3D pt in BoundaryPoints(a.Face3D))
+            {
+                Assert.Equal(0.075, pt.Y, 6);
+            }
+            foreach (Point3D pt in BoundaryPoints(b.Face3D))
+            {
+                Assert.Equal(0.075, pt.Y, 6);
+            }
+            Assert.Equal(0.375, a.BucketSize, 6); // 0.3 + 0.075
+            Assert.Equal(0.375, b.BucketSize, 6);
+        }
+
+        [Fact]
+        public void Snap_EqualWeightDifferentBucketSize_LargerBucketPrioritizedAsBacker()
+        {
+            // Equal weight but very different bucket sizes; input list order deliberately puts the SMALL-
+            // bucket panel first (so a Weight-only sort, ignoring BucketSize as a secondary key, would treat
+            // it as higher-priority and fail to reach the far panel). Weight DESC -> BucketSize DESC ordering
+            // (Phase 2b) makes the LARGE-bucket panel the backer regardless of input order, so the 0.3 m
+            // offset (within the large bucket, well outside the small one) is captured.
+            SnappedPanel smallBucket = MakeWallPanel(0, weight: 1, bucketSize: 0.1);
+            SnappedPanel largeBucket = MakeWallPanel(0.3, weight: 1, bucketSize: 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel> { smallBucket, largeBucket };
+
+            bool changed = Panel3DSnapSolver.Snap(panels, toleranceAngle: 0.1, toleranceArcAngle: 0.01);
+
+            Assert.True(changed, "The large-bucket panel's reach should have captured the pair");
+            Assert.True(smallBucket.Snapped);
+            Assert.True(largeBucket.Snapped);
         }
 
         [Fact]

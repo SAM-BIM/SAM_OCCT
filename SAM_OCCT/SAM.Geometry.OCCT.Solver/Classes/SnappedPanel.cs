@@ -296,14 +296,12 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
-        /// The perpendicular separation (metres) between this panel's plane and <paramref name="other"/>'s
-        /// centroid - the thickness of the gap between two near-parallel skins. Used by
-        /// <see cref="Panel3DSnapSolver.SnapOpposedPartitions"/> to tell a back-to-back partition (skins within
-        /// a wall thickness) from a genuine void/shaft (a wider gap that must survive). Winding-independent
-        /// (a magnitude), unlike a normal-sign test - see the remarks on SnapOpposedPartitions for why the
-        /// sign approach proved unreliable on real import geometry.
+        /// Signed perpendicular offset from this panel's plane to <paramref name="other"/>'s centroid,
+        /// measured along this plane's own normal (positive on the side the normal points to). The raw
+        /// building block for <see cref="PerpendicularSeparation"/> and the equal-weight midpoint rule
+        /// (<see cref="MoveToMidplaneWith"/>). <see cref="double.MaxValue"/> when undefined.
         /// </summary>
-        public double PerpendicularSeparation(SnappedPanel other)
+        private double SignedSeparationTo(SnappedPanel other)
         {
             if (plane == null || other == null)
             {
@@ -318,10 +316,64 @@ namespace SAM.Geometry.OCCT.Solver
 
             Vector3D normal = plane.Normal.Unit;
             Point3D origin = plane.Origin;
-            double signed = normal.X * (otherCentroid.X - origin.X)
+            return normal.X * (otherCentroid.X - origin.X)
                 + normal.Y * (otherCentroid.Y - origin.Y)
                 + normal.Z * (otherCentroid.Z - origin.Z);
-            return System.Math.Abs(signed);
+        }
+
+        /// <summary>
+        /// The perpendicular separation (metres) between this panel's plane and <paramref name="other"/>'s
+        /// centroid - the thickness of the gap between two near-parallel skins. Used by
+        /// <see cref="Panel3DSnapSolver.SnapOpposedPartitions"/> to tell a back-to-back partition (skins within
+        /// a wall thickness) from a genuine void/shaft (a wider gap that must survive). Winding-independent
+        /// (a magnitude), unlike a normal-sign test - see the remarks on SnapOpposedPartitions for why the
+        /// sign approach proved unreliable on real import geometry.
+        /// </summary>
+        public double PerpendicularSeparation(SnappedPanel other)
+        {
+            double signed = SignedSeparationTo(other);
+            return signed == double.MaxValue ? double.MaxValue : System.Math.Abs(signed);
+        }
+
+        /// <summary>
+        /// Moves this panel halfway toward <paramref name="other"/>'s plane (along this plane's own normal)
+        /// and grows this panel's <see cref="BucketSize"/> by the distance moved - the 3D analogue of the 2D
+        /// solver's equal-weight tie-break (average position + bucket bump,
+        /// <c>SnapSolver.TryBucketSnap</c>/<c>SnappedWall.cs:417-426</c>), used when two panels of (near) equal
+        /// <see cref="Weight"/> are captured together so neither is treated as unconditionally subordinate to
+        /// the other. No-op (returns false) when the two are already effectively coincident.
+        /// </summary>
+        public bool MoveToMidplaneWith(SnappedPanel other, double tolerance)
+        {
+            if (plane == null || other?.plane == null)
+            {
+                return false;
+            }
+
+            double halfOffset = SignedSeparationTo(other) / 2.0;
+            if (System.Math.Abs(halfOffset) <= tolerance)
+            {
+                return false; // already effectively coincident - nothing to move
+            }
+
+            Plane midPlane = (Plane)plane.GetMoved(plane.Normal.Unit * halfOffset);
+            if (!SnapToBacker(midPlane))
+            {
+                return false;
+            }
+
+            GrowBucket(System.Math.Abs(halfOffset));
+            return true;
+        }
+
+        /// <summary>Widens the capture slab by <paramref name="amount"/> (never negative) - the bucket-growth
+        /// half of the equal-weight midpoint rule (<see cref="MoveToMidplaneWith"/>).</summary>
+        public void GrowBucket(double amount)
+        {
+            if (amount > 0)
+            {
+                BucketSize += amount;
+            }
         }
 
         /// <summary>

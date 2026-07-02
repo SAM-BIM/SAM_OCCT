@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
+using SAM.Core.OCCT;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
 using System.Linq;
@@ -34,6 +35,59 @@ namespace SAM.Geometry.OCCT.Solver
 
             /// <summary>The source indices attributed to each clean face (index-aligned to <see cref="CleanFace3Ds"/>).</summary>
             public List<List<int>> SourceIndicesPerFace { get; } = new List<List<int>>();
+
+            /// <summary>How many <see cref="Panel3DSnapSolver.Snap"/> passes <see cref="SnapToFixedPoint"/> ran
+            /// before no panel changed further (1 when a single pass already converged).</summary>
+            public int SnapIterationCount { get; set; }
+        }
+
+        /// <summary>
+        /// Upper bound on <see cref="SnapToFixedPoint"/>'s passes (Phase 2b, 2D parity -
+        /// <c>SnapSolver.MAX_SNAP_ADJUST_ITERATIONS</c>) - a safety backstop, not an expected count: real
+        /// fixtures converge in a handful of passes. Hitting it emits a <see cref="DiagnosticCode.BudgetExceeded"/>
+        /// warning rather than looping forever on a pathological/oscillating input.
+        /// </summary>
+        public const int MaxSnapIterations = 1000;
+
+        /// <summary>
+        /// Runs <see cref="Panel3DSnapSolver.Snap"/> repeatedly until no panel changes further (a fixed point)
+        /// or <paramref name="maxIterations"/> is reached (docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md
+        /// §E Phase 2b - the 2D <c>SnapAndAdjustWalls</c> do-while, lifted to 3D). A single greedy pass can
+        /// miss a chained relationship - panel C only comes within panel A's reach after A's bucket grows from
+        /// merging with B earlier in the SAME pass, but C was already checked (and rejected) before that
+        /// growth happened; the next pass re-evaluates everyone against the now-current geometry and catches
+        /// it. Returns the number of passes run.
+        /// </summary>
+        public static int SnapToFixedPoint(
+            List<SnappedPanel> panels,
+            ToleranceBudget tolerances,
+            double alignColinearOffset,
+            SolverDiagnostics diagnostics = null,
+            int maxIterations = MaxSnapIterations)
+        {
+            if (panels == null || panels.Count < 2)
+            {
+                return 0;
+            }
+
+            ToleranceBudget tol = tolerances ?? new ToleranceBudget();
+
+            int iteration = 0;
+            bool anyChanged;
+            do
+            {
+                anyChanged = Panel3DSnapSolver.Snap(panels, tol.Angle, tol.ArcAngle, tol.Distance, tol.VerticalAngle, alignColinearOffset);
+                iteration++;
+            }
+            while (anyChanged && iteration < maxIterations);
+
+            if (anyChanged && iteration >= maxIterations)
+            {
+                diagnostics?.Add(SolverStage.Snap, DiagnosticCode.BudgetExceeded, OcctDiagnosticSeverity.Warning,
+                    string.Format("Snap fixed-point iteration reached the cap ({0}); the snapped model may be incomplete.", maxIterations));
+            }
+
+            return iteration;
         }
 
         /// <summary>
@@ -69,9 +123,10 @@ namespace SAM.Geometry.OCCT.Solver
             //     geometry. Now guarded by the separation-sign + overlap-footprint gates (Phase 2).
             Panel3DSnapSolver.SnapOpposedPartitions(panels, tol.Angle, tol.Distance, diagnostics);
 
-            // 2. Bucket snap - within-bucket near-parallel, in-plane-overlapping panels onto one backer plane,
-            //    and align consecutive vertical wall segments offset by a small step jog.
-            Panel3DSnapSolver.Snap(panels, tol.Angle, tol.ArcAngle, tol.Distance, tol.VerticalAngle, alignColinearOffset);
+            // 2. Bucket snap to a FIXED POINT (Phase 2b) - within-bucket near-parallel, in-plane-overlapping
+            //    panels onto one backer plane, and align consecutive vertical wall segments offset by a small
+            //    step jog, repeated until nothing changes (see SnapToFixedPoint).
+            result.SnapIterationCount = SnapToFixedPoint(panels, tol, alignColinearOffset, diagnostics);
 
             // 2b. Normalize a level's caps onto one plane.
             Panel3DSnapSolver.NormalizeCaps(panels, tol.Angle, normalizeCapOffset, tol.Distance, tol.VerticalAngle);
