@@ -174,5 +174,102 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(20.0, signature.TotalVolume, 6);
             Assert.Equal(1, signature.DroppedCount);
         }
+
+        // ──────────────────────────────────────────────────────────────
+        // SliverCellCount (Phase 5a - additive)
+        // ──────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void Constructor_NoSliverCountSupplied_DefaultsToZero()
+        {
+            // Arrange & Act - the pre-5a 5-arg constructor path (no sliver term).
+            ClosureSignature3D signature = new ClosureSignature3D(2, new List<double> { 10, 15 }, 0, 6, 0);
+
+            // Assert - additive term defaults to 0, so existing callers are unchanged.
+            Assert.Equal(0, signature.SliverCellCount);
+        }
+
+        [Fact]
+        public void Constructor_SliverCountSupplied_RoundTrips()
+        {
+            // Arrange & Act
+            ClosureSignature3D signature = new ClosureSignature3D(3, new List<double> { 10, 15, 0.001 }, 0, 9, 0, sliverCellCount: 1);
+
+            // Assert
+            Assert.Equal(1, signature.SliverCellCount);
+        }
+
+        [Fact]
+        public void FromCellComplexResult_WithMinCellVolume_CountsCellsBelowThreshold()
+        {
+            // Arrange - two genuine cells and one sliver (0.001 m3, below the 0.05 floor).
+            OcctCellComplexResult result = new OcctCellComplexResult();
+            result.AddCell(new OcctCell(TestGeometry.CreateSingleFaceShell(), 12.5));
+            result.AddCell(new OcctCell(TestGeometry.CreateSingleFaceShell(), 0.001));
+            result.AddCell(new OcctCell(TestGeometry.CreateSingleFaceShell(), 7.5));
+
+            // Act
+            ClosureSignature3D signature = ClosureSignature3D.FromCellComplexResult(result, nakedEdgeCount: 0, faceCount: 3, droppedCount: 0, minCellVolume: 0.05);
+
+            // Assert - the sliver term counts only the sub-threshold cell; totals are unaffected.
+            Assert.Equal(3, signature.CellCount);
+            Assert.Equal(1, signature.SliverCellCount);
+            Assert.Equal(20.001, signature.TotalVolume, 6);
+        }
+
+        [Fact]
+        public void FromCellComplexResult_WithoutMinCellVolume_LeavesSliverCountZero()
+        {
+            // Arrange - a sub-0.05 cell present, but the 4-arg (pre-5a) overload does not measure slivers.
+            OcctCellComplexResult result = new OcctCellComplexResult();
+            result.AddCell(new OcctCell(TestGeometry.CreateSingleFaceShell(), 0.001));
+
+            // Act
+            ClosureSignature3D signature = ClosureSignature3D.FromCellComplexResult(result, nakedEdgeCount: 0, faceCount: 1, droppedCount: 0);
+
+            // Assert
+            Assert.Equal(0, signature.SliverCellCount);
+        }
+
+        [Fact]
+        public void ToString_WithSliverCount_IncludesSliverTerm()
+        {
+            // Arrange
+            ClosureSignature3D signature = new ClosureSignature3D(1, new List<double> { 5 }, 0, 6, 0, sliverCellCount: 2);
+
+            // Act
+            string text = signature.ToString();
+
+            // Assert
+            Assert.Contains("2 sliver cell(s)", text);
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // IsRegressionOf semantics UNCHANGED by the additive sliver term
+        // ──────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void IsRegressionOf_MoreSliverCellsOnly_ReturnsFalse()
+        {
+            // Arrange - candidate is worse ONLY on the (new) sliver axis; every locked axis is equal.
+            ClosureSignature3D baseline = new ClosureSignature3D(22, new List<double> { 100 }, 0, 90, 0, sliverCellCount: 0);
+            ClosureSignature3D candidate = new ClosureSignature3D(22, new List<double> { 100 }, 0, 90, 0, sliverCellCount: 5);
+
+            // Assert - IsRegressionOf ignores the sliver term (its semantics are locked); the
+            // sliver gate lives in the separate Phase-5e acceptance helper, not here.
+            Assert.False(candidate.IsRegressionOf(baseline));
+        }
+
+        [Fact]
+        public void IsRegressionOf_FewerSliverCellsOnly_ReturnsFalse()
+        {
+            // Arrange - candidate is better on the sliver axis; still not a regression, and not
+            // spuriously "improved" via a term IsRegressionOf must not read.
+            ClosureSignature3D baseline = new ClosureSignature3D(22, new List<double> { 100 }, 0, 90, 0, sliverCellCount: 5);
+            ClosureSignature3D candidate = new ClosureSignature3D(22, new List<double> { 100 }, 0, 90, 0, sliverCellCount: 0);
+
+            // Assert
+            Assert.False(candidate.IsRegressionOf(baseline));
+        }
     }
 }

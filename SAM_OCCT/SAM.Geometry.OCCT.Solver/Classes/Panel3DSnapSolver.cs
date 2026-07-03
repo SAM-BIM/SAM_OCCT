@@ -487,6 +487,80 @@ namespace SAM.Geometry.OCCT.Solver
                 ResolveHistorySourceMap = null;
                 SourceMap = BuildResolvedSourceMap(ResolvedFace3Ds, face3Ds);
             }
+
+            // Managed-path signature (Phase 5a). Until now only the adopted raw path populated Signature;
+            // AutoTune3D (Phase 5e) reads it as the loop-condition/acceptance input on EVERY path, so the
+            // managed pipeline must expose one too (docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §D.8).
+            // This is a read-only measurement over the ALREADY-resolved faces - it never mutates
+            // ResolvedFace3Ds, so the solved geometry (and the golden masters) are byte-identical.
+            Signature = CaptureManagedSignature(options);
+        }
+
+        /// <summary>
+        /// Builds the <see cref="ClosureSignature3D"/> of the managed pipeline's final
+        /// <see cref="ResolvedFace3Ds"/>. Independently decodes them into a zoned cell complex purely to
+        /// read cell count/volumes (reusing the existing <c>OcctCellComplexResult</c> cell metadata - no new
+        /// native operation, no geometry change), mirroring the golden-master capture. The naked-edge count
+        /// is the one the resolve already validated (<see cref="NakedEdgePoint3Ds"/>), not re-measured; the
+        /// dropped count is map-driven (sources with no surviving face); the sliver term uses
+        /// <see cref="MinCellVolume"/>. Best-effort: an empty result or an unavailable native kernel yields a
+        /// zero-cell signature rather than throwing.
+        /// </summary>
+        private ClosureSignature3D CaptureManagedSignature(OcctBuildOptions options)
+        {
+            List<Face3D> resolved = ResolvedFace3Ds?.Where(x => x != null && x.IsValid()).ToList() ?? new List<Face3D>();
+            int nakedEdgeCount = NakedEdgePoint3Ds?.Count ?? 0;
+            int droppedCount = DroppedSourceCount();
+
+            if (!NativeResolved || resolved.Count == 0)
+            {
+                // No native cell decode is possible/meaningful; report the managed data we do have.
+                return new ClosureSignature3D(0, new List<double>(), nakedEdgeCount, resolved.Count, droppedCount);
+            }
+
+            // Same options the resolve/golden-master capture uses: a zoned complex (internal shapes kept),
+            // pre-build sew at 1 cm. Independent decode - not fed back into ResolvedFace3Ds.
+            OcctBuildOptions signatureOptions = options ?? new OcctBuildOptions
+            {
+                AvoidInternalShapes = false,
+                SewBeforeBuild = true,
+                SewingTolerance = 0.01
+            };
+
+            GeometryCreate.Shells(resolved, out OcctCellComplexResult result, signatureOptions);
+            try
+            {
+                return ClosureSignature3D.FromCellComplexResult(result, nakedEdgeCount, resolved.Count, droppedCount, MinCellVolume);
+            }
+            finally
+            {
+                result?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Number of input source faces with no surviving representation in the resolved output, driven by
+        /// the composed <see cref="SourceMap"/> (a source whose <c>FacesOf</c> is empty is genuinely
+        /// unrepresented - docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §B). The geometric backfill
+        /// guarantees every OUTPUT face carries a source, so this measures dropped INPUTS, by index.
+        /// </summary>
+        private int DroppedSourceCount()
+        {
+            if (face3Ds == null || face3Ds.Count == 0)
+            {
+                return 0;
+            }
+
+            int dropped = 0;
+            for (int i = 0; i < face3Ds.Count; i++)
+            {
+                if (SourceMap == null || SourceMap.FacesOf(i).Count == 0)
+                {
+                    dropped++;
+                }
+            }
+
+            return dropped;
         }
 
         /// <summary>Shallow copy of a <see cref="SourceMap"/>'s records, so backfilling the solver's public

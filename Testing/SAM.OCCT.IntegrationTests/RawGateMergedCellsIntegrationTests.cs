@@ -65,13 +65,18 @@ namespace SAM.OCCT.IntegrationTests
             // The raw gate saw the merged (watertight-but-wrong) single cell, measured the dropped
             // partition against the 10% ceiling, and rejected it - never silently adopting the merge.
             Assert.Contains(solver.Diagnostics.All, d => d.Code == DiagnosticCode.DroppedFace);
-            Assert.Null(solver.Signature); // the raw attempt was rejected, not adopted
 
             // The managed clean/extend pipeline picks up where raw left off: it extends the undersized
             // partition up to the ceiling like any other wall, closing the gap the raw kernel could not
             // use, so the two rooms now form their own cells instead of merging into one.
             Assert.True(solver.NativeResolved, "Expected the managed fallback to still resolve natively");
             Assert.True(solver.ResolvedCellCount >= 2, $"Expected the managed fallback to separate the two rooms, got {solver.ResolvedCellCount} cell(s)");
+
+            // Phase 5a: the managed pipeline now populates Signature too (previously only the adopted raw
+            // path did), because AutoTune3D reads it as its loop condition. The raw attempt was rejected,
+            // but the managed result carries a valid signature reflecting the separated rooms.
+            Assert.NotNull(solver.Signature);
+            Assert.True(solver.Signature.CellCount >= 2, $"Expected the managed signature to reflect >= 2 cells, got {solver.Signature.CellCount}");
         }
 
         [SkippableFact]
