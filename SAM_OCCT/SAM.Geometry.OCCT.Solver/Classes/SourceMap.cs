@@ -178,6 +178,30 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
+        /// The distinct <see cref="Provenance"/> values recorded for output <paramref name="key"/> across all
+        /// sources (Phase 5b). Lets a consumer tell a fabricated gap-fill patch (<see cref="Provenance.GapFill"/>)
+        /// apart from a retained dropped face (<see cref="Provenance.DroppedRetained"/>) even though both use
+        /// the <see cref="FabricatedSource"/> sentinel - e.g. panel reconstruction emits a GapFill face as an
+        /// air panel rather than a solid.
+        /// </summary>
+        public IReadOnlyList<Provenance> ProvenancesOf(FaceKey key)
+        {
+            HashSet<Provenance> result = new HashSet<Provenance>();
+            foreach (KeyValuePair<int, List<Entry>> pair in bySource)
+            {
+                foreach (Entry entry in pair.Value)
+                {
+                    if (entry.Key.Equals(key))
+                    {
+                        result.Add(entry.Provenance);
+                    }
+                }
+            }
+
+            return result.ToList();
+        }
+
+        /// <summary>
         /// Chains this map (source -> intermediate <see cref="FaceKey"/>s) with <paramref name="next"/>
         /// (intermediate face -> output <see cref="FaceKey"/>s, keyed by the intermediate
         /// <see cref="FaceKey.Value"/> as its source index), yielding source -> output. A source that

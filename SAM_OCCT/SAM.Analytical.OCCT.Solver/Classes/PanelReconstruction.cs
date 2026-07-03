@@ -88,6 +88,17 @@ namespace SAM.Analytical.OCCT.Solver
                     continue;
                 }
 
+                // Phase 5b: a fabricated gap-fill patch folded into the resolved set by the consolidation
+                // rebuild is emitted as an air panel elsewhere (from the solver's HoleFillFace3Ds, stamped
+                // Provenance=GapFill), not as a solid here - skip it so it is not double-built. This guard is
+                // inert on every pre-5b path (no GapFill-provenance face ever reached ResolvedFace3Ds before),
+                // so it changes no existing (raw-path) output.
+                if (sourceMap.ProvenancesOf(new FaceKey(faceIndex)).Contains(Provenance.GapFill)
+                    && !sourceMap.HasSource(new FaceKey(faceIndex)))
+                {
+                    continue;
+                }
+
                 List<int> sourceIndices = sourceMap.SourcesOf(new FaceKey(faceIndex))
                     .Where(i => i >= 0 && i < sources.Count && sources[i] != null)
                     .Distinct()

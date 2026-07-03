@@ -205,6 +205,16 @@ namespace SAM.Geometry.OCCT.Solver
         /// outright.)</summary>
         public bool FillHoles { get; set; } = true;
 
+        /// <summary>
+        /// Phase 5b: after gap-fill patches and retained faces are assembled, run ONE signature-gated
+        /// consolidation rebuild (<c>Create.Shells</c> over resolved + patches + retained) instead of appending
+        /// them unimprinted - the kernel then mutually imprints and trims them into the cell complex. The
+        /// rebuilt faces are adopted only when they do not regress the closure (cells not reduced, naked not
+        /// increased vs the appended set); otherwise the appended set is kept with a Warning. Default true; set
+        /// false to keep the pre-5b append-unimprinted behaviour (docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §H).
+        /// </summary>
+        public bool ConsolidateRebuild { get; set; } = true;
+
         /// <summary>Angle within which a panel's normal counts as horizontal, so the panel is "vertical" (a wall).</summary>
         public double VerticalAngleTolerance { get; set; } = 20 * (System.Math.PI / 180);
 
@@ -444,93 +454,277 @@ namespace SAM.Geometry.OCCT.Solver
                 return;
             }
 
-            ResolveStage.Result resolveResult = ResolveStage.Resolve(snappedFace3Ds, options, ToleranceAngle, SewResidualGaps, SewExpandTolerance, FillHoles, Diagnostics);
+            // Native RESOLVE (Stage B). Gap-fill is NOT run here any more (fillHoles: false): Phase 5b moves
+            // it into FinalizeAndValidate so the FINAL naked count is measured AFTER patches/retains, not
+            // before (the "pre-patch naked-count lie" §B/§H). The wires/naked points the resolve reports are
+            // INTERMEDIATE diagnostics only - the outward truth is produced by FinalizeAndValidate.
+            ResolveStage.Result resolveResult = ResolveStage.Resolve(snappedFace3Ds, options, ToleranceAngle, SewResidualGaps, SewExpandTolerance, false, Diagnostics);
             BucketMergedFace3Ds = resolveResult.BucketMergedFace3Ds;
             NativeResolved = resolveResult.NativeResolved;
-            NakedWires = resolveResult.NakedWires ?? new List<OcctNakedWire>();
-            if (resolveResult.NativeResolved)
+
+            if (!resolveResult.NativeResolved)
             {
-                ResolvedCellCount = resolveResult.ResolvedCellCount;
-                ResolvedFace3Ds = resolveResult.ResolvedFace3Ds;
-                NakedEdgePoint3Ds = resolveResult.NakedEdgePoint3Ds;
-                HoleFillFace3Ds = resolveResult.HoleFillFace3Ds;
+                // Native kernel unavailable (e.g. non-Windows agent): keep the managed snap result
+                // (ResolvedFace3Ds already = snappedFace3Ds) and report a best-effort zero-cell signature.
+                NakedWires = resolveResult.NakedWires ?? new List<OcctNakedWire>();
+                ResolveHistorySourceMap = null;
+                SourceMap = BuildResolvedSourceMap(ResolvedFace3Ds, face3Ds);
+                Signature = new ClosureSignature3D(0, new List<double>(), NakedEdgePoint3Ds?.Count ?? 0, ResolvedFace3Ds?.Count ?? 0, DroppedSourceCount());
+                return;
             }
 
-            // Stage C - HEAL: re-add every conditioned face the native MakerVolume dropped (bounds no closed
-            // cell), using its extended geometry so the re-added face overshoots its neighbours and closes the
-            // gap. Walls and caps alike: a dropped cap comes back grown (not the ungrown clean slab).
-            if (RetainDropped && NativeResolved && ResolvedFace3Ds != null)
-            {
-                HealStage.Result heal = HealStage.RetainDropped(ResolvedFace3Ds, snappedFace3Ds);
-                ResolvedFace3Ds = heal.ResolvedFace3Ds;
-            }
+            List<Face3D> resolvedFace3Ds = resolveResult.ResolvedFace3Ds ?? new List<Face3D>();
 
-            // Source mapping over the final output faces. Phase 3: when the native resolve supplied a
-            // composed BRepTools_History (input snapped face -> resolved output ordinal), bridge it back
-            // to the original sources through the geometric snapped->source attribution and use it - the
-            // resolve leg (splits/merges) is then exact. When history was unavailable (pre-v4 native, the
-            // sew-before-build path, or an adopted residual sew) it degrades to the fully geometric
-            // Phase-2 map, so no output face is ever left source-orphaned.
-            SourceMap resolveHistoryMap = resolveResult.SourceMap;
-            if (resolveHistoryMap != null)
+            // Base source map over the INTERMEDIATE resolved faces (pre-heal, pre-patch): exact via composed
+            // native history when available, geometric fallback otherwise. FinalizeAndValidate carries this
+            // forward across the consolidation rebuild, never discarding it (owner caution 2).
+            SourceMap resolvedSourceMap;
+            if (resolveResult.SourceMap != null)
             {
-                // Bridge the exact resolve history (snapped input -> resolved ordinal) back to the
-                // original sources through the geometric snapped->source attribution. ResolveHistorySourceMap
-                // carries ONLY the history-resolved faces (null in the geometric-fallback path), so a
-                // consumer can safely prefer it and fall back to NearestSourceIndex face-by-face.
                 SourceMap snappedToSource = BuildResolvedSourceMap(snappedFace3Ds, face3Ds);
-                ResolveHistorySourceMap = snappedToSource.Compose(resolveHistoryMap);
-                SourceMap = BackfillGeometric(CloneSourceMap(ResolveHistorySourceMap), ResolvedFace3Ds, face3Ds);
+                ResolveHistorySourceMap = snappedToSource.Compose(resolveResult.SourceMap);
+                resolvedSourceMap = BackfillGeometric(CloneSourceMap(ResolveHistorySourceMap), resolvedFace3Ds, face3Ds);
             }
             else
             {
                 ResolveHistorySourceMap = null;
-                SourceMap = BuildResolvedSourceMap(ResolvedFace3Ds, face3Ds);
+                resolvedSourceMap = BuildResolvedSourceMap(resolvedFace3Ds, face3Ds);
             }
 
-            // Managed-path signature (Phase 5a). Until now only the adopted raw path populated Signature;
-            // AutoTune3D (Phase 5e) reads it as the loop-condition/acceptance input on EVERY path, so the
-            // managed pipeline must expose one too (docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §D.8).
-            // This is a read-only measurement over the ALREADY-resolved faces - it never mutates
-            // ResolvedFace3Ds, so the solved geometry (and the golden masters) are byte-identical.
-            Signature = CaptureManagedSignature(options);
+            // Stage C - HEAL (RetainDropped, Phase-2 behaviour; v2 is 5c): the dropped conditioned faces to
+            // re-add, taken as a LIST. The imprint into the resolved set is the consolidation rebuild's job
+            // (FinalizeAndValidate), not a raw append.
+            List<Face3D> retainedFace3Ds = RetainDropped
+                ? HealStage.RetainDropped(resolvedFace3Ds, snappedFace3Ds).RetainedFace3Ds.ToList()
+                : new List<Face3D>();
+
+            // GapFill v2: patch the residual naked loops from the NATIVE ordered wires (the legacy managed
+            // walk survives only as the pre-v4 fallback). Every loop outcome is diagnosed.
+            List<Face3D> patchFace3Ds = FillHoles
+                ? BuildGapFillPatches(resolvedFace3Ds, resolveResult.NakedWires, resolveResult.NakedEdgePoint3Ds)
+                : new List<Face3D>();
+
+            // The single final-truth step: assemble resolved + patches + retained, run the signature-gated
+            // consolidation rebuild, compose provenance, and produce the FINAL naked count / wires / cells /
+            // signature (docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §H).
+            FinalizeAndValidate(resolvedFace3Ds, patchFace3Ds, retainedFace3Ds, resolvedSourceMap, resolveResult.ResolvedCellCount, options);
         }
 
         /// <summary>
-        /// Builds the <see cref="ClosureSignature3D"/> of the managed pipeline's final
-        /// <see cref="ResolvedFace3Ds"/>. Independently decodes them into a zoned cell complex purely to
-        /// read cell count/volumes (reusing the existing <c>OcctCellComplexResult</c> cell metadata - no new
-        /// native operation, no geometry change), mirroring the golden-master capture. The naked-edge count
-        /// is the one the resolve already validated (<see cref="NakedEdgePoint3Ds"/>), not re-measured; the
-        /// dropped count is map-driven (sources with no surviving face); the sliver term uses
-        /// <see cref="MinCellVolume"/>. Best-effort: an empty result or an unavailable native kernel yields a
-        /// zero-cell signature rather than throwing.
+        /// Builds the residual-loop patch faces for the managed pipeline. Primary input: the native ordered
+        /// naked <paramref name="nakedWires"/> (ABI v4) via <see cref="GapFill.FromNakedWires"/>. Falls back to
+        /// the legacy managed loop-walk (<see cref="GapFill.NakedLoopFace3Ds"/>) ONLY when the wires are
+        /// unavailable (a pre-v4 native) but naked points remain - emitting an Info diagnostic that the
+        /// fallback ran (docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §G).
         /// </summary>
-        private ClosureSignature3D CaptureManagedSignature(OcctBuildOptions options)
+        private List<Face3D> BuildGapFillPatches(List<Face3D> resolvedFace3Ds, List<OcctNakedWire> nakedWires, List<Point3D> nakedPoint3Ds)
         {
-            List<Face3D> resolved = ResolvedFace3Ds?.Where(x => x != null && x.IsValid()).ToList() ?? new List<Face3D>();
-            int nakedEdgeCount = NakedEdgePoint3Ds?.Count ?? 0;
-            int droppedCount = DroppedSourceCount();
-
-            if (!NativeResolved || resolved.Count == 0)
+            List<OcctNakedWire> wires = nakedWires ?? new List<OcctNakedWire>();
+            if (wires.Count != 0)
             {
-                // No native cell decode is possible/meaningful; report the managed data we do have.
-                return new ClosureSignature3D(0, new List<double>(), nakedEdgeCount, resolved.Count, droppedCount);
+                return GapFill.FromNakedWires(wires, Diagnostics, ToleranceDistance).Patches;
             }
 
-            // Same options the resolve/golden-master capture uses: a zoned complex (internal shapes kept),
-            // pre-build sew at 1 cm. Independent decode - not fed back into ResolvedFace3Ds.
-            OcctBuildOptions signatureOptions = options ?? new OcctBuildOptions
+            if (nakedPoint3Ds != null && nakedPoint3Ds.Count != 0)
+            {
+                Diagnostics.Add(SolverStage.Heal, DiagnosticCode.NakedLoop, OcctDiagnosticSeverity.Info,
+                    "GapFill: native naked wires unavailable; using the legacy managed loop-walk fallback.");
+                return GapFill.NakedLoopFace3Ds(resolvedFace3Ds, nakedPoint3Ds, 0.01);
+            }
+
+            return new List<Face3D>();
+        }
+
+        /// <summary>
+        /// The single final-truth step (Phase 5b, docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §H).
+        /// Assembles <paramref name="resolvedFace3Ds"/> + <paramref name="patchFace3Ds"/> +
+        /// <paramref name="retainedFace3Ds"/>; when either the patches or retained set is non-empty and
+        /// <see cref="ConsolidateRebuild"/> is on, runs ONE <c>Create.Shells</c> consolidation rebuild
+        /// (the direct build path, which captures ABI v4 history) and adopts its faces only when they do not
+        /// regress the closure (cells &gt;= pre-rebuild cells AND naked &lt;= the appended set's naked) -
+        /// otherwise keeps the appended (unimprinted) set with a Warning. Provenance is preserved: the
+        /// pre-rebuild map is composed with the rebuild history (patch faces keep their GapFill identity via
+        /// history), and geometric backfill runs ONLY for faces left unmapped - never overwriting a mapped
+        /// entry. Ends with the ONE outward <c>Validate</c> that produces the reported naked count / wires,
+        /// and the managed-path <see cref="Signature"/>.
+        /// </summary>
+        private void FinalizeAndValidate(
+            List<Face3D> resolvedFace3Ds,
+            List<Face3D> patchFace3Ds,
+            List<Face3D> retainedFace3Ds,
+            SourceMap resolvedSourceMap,
+            int resolveCellCount,
+            OcctBuildOptions options)
+        {
+            OcctBuildOptions occtOptions = options ?? new OcctBuildOptions
             {
                 AvoidInternalShapes = false,
                 SewBeforeBuild = true,
                 SewingTolerance = 0.01
             };
 
-            GeometryCreate.Shells(resolved, out OcctCellComplexResult result, signatureOptions);
+            int patchStart = resolvedFace3Ds.Count;
+
+            // The appended (unimprinted) set: resolved, then patches, then retained - a fixed order the
+            // pre-rebuild source map and the rebuild history are both keyed against.
+            List<Face3D> appended = new List<Face3D>(resolvedFace3Ds);
+            appended.AddRange(patchFace3Ds);
+            appended.AddRange(retainedFace3Ds);
+
+            // Pre-rebuild map over `appended`: resolved keep their attribution; patches are fabricated GapFill;
+            // retained are left for geometric backfill (they are real dropped walls, attributed to a source).
+            SourceMap preMap = CloneSourceMap(resolvedSourceMap);
+            for (int i = 0; i < patchFace3Ds.Count; i++)
+            {
+                preMap.RecordFabricated(new FaceKey(patchStart + i), Provenance.GapFill);
+            }
+
+            List<Face3D> finalFaces = appended;
+            List<double> cellVolumes = new List<double>();
+            int cellCount = resolveCellCount;
+            SourceMap finalMap = null;
+            bool adoptedRebuild = false;
+
+            bool tryRebuild = ConsolidateRebuild && (patchFace3Ds.Count + retainedFace3Ds.Count) > 0;
+            int appendedNaked = tryRebuild ? ResolveStage.NakedEdgeCount(appended, occtOptions) : 0;
+
+            if (tryRebuild)
+            {
+                // The DIRECT build path (SewBeforeBuild = false) - the only one that captures ABI v4 history,
+                // so the rebuild's provenance can be composed onto the existing map.
+                OcctBuildOptions rebuildOptions = new OcctBuildOptions(occtOptions)
+                {
+                    SewBeforeBuild = false,
+                    AvoidInternalShapes = false
+                };
+
+                List<Shell> shells = GeometryCreate.Shells(appended, out OcctCellComplexResult rebuildResult, rebuildOptions);
+                if (rebuildResult != null && rebuildResult.NativeAvailable)
+                {
+                    List<Face3D> rebuiltFaces = shells == null
+                        ? new List<Face3D>()
+                        : shells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null && x.IsValid()).ToList();
+                    int rebuiltCells = rebuildResult.Cells?.Count ?? 0;
+                    List<double> rebuiltVolumes = rebuildResult.Cells == null ? new List<double>() : rebuildResult.Cells.Select(x => x.Volume).ToList();
+                    OcctHistory rebuildHistory = rebuildResult.History;
+                    int rebuiltNaked = ResolveStage.NakedEdgeCount(rebuiltFaces, occtOptions);
+
+                    // Accept iff the rebuild does not regress: cells not reduced AND naked not increased
+                    // versus the appended-unimprinted alternative (§H / §I acceptance rule).
+                    if (rebuiltFaces.Count != 0 && rebuiltCells >= resolveCellCount && rebuiltNaked <= appendedNaked)
+                    {
+                        finalFaces = rebuiltFaces;
+                        cellCount = rebuiltCells;
+                        cellVolumes = rebuiltVolumes;
+                        finalMap = ComposeRebuildMap(preMap, rebuildHistory, patchStart, patchFace3Ds.Count, rebuiltFaces);
+                        adoptedRebuild = true;
+                        Diagnostics.Add(SolverStage.Heal, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info,
+                            string.Format("Consolidation rebuild adopted: {0} cell(s), {1} naked edge(s) (appended alternative had {2}).", rebuiltCells, rebuiltNaked, appendedNaked));
+                    }
+                    else
+                    {
+                        Diagnostics.Add(SolverStage.Heal, DiagnosticCode.RejectedSew, OcctDiagnosticSeverity.Warning,
+                            string.Format("Consolidation rebuild regressed (cells {0} vs pre {1}; naked {2} vs appended {3}); patches/retained appended unimprinted.", rebuiltCells, resolveCellCount, rebuiltNaked, appendedNaked));
+                    }
+                }
+
+                rebuildResult?.Dispose();
+            }
+
+            if (!adoptedRebuild)
+            {
+                // Keep the appended set. Attribute it geometrically, then re-assert the explicit GapFill mark
+                // on the patch faces so they still surface as air (not solids) downstream.
+                finalMap = BuildResolvedSourceMap(appended, face3Ds);
+                for (int i = 0; i < patchFace3Ds.Count; i++)
+                {
+                    finalMap.RecordFabricated(new FaceKey(patchStart + i), Provenance.GapFill);
+                }
+
+                cellVolumes = DecodeCellVolumes(appended, occtOptions, out cellCount);
+            }
+
+            // Publish the adopted geometry + provenance. HoleFillFace3Ds stays the patch set (the air-panel
+            // candidates) - empty when fill+sew closed everything, so the "no fabricated air face" contract holds.
+            ResolvedFace3Ds = finalFaces;
+            ResolvedCellCount = cellCount;
+            HoleFillFace3Ds = patchFace3Ds ?? new List<Face3D>();
+            SourceMap = finalMap ?? new SourceMap();
+
+            // The ONE outward validate: naked count + wires measured AFTER patches/retains (the single
+            // final-truth producer; every earlier validate is an intermediate diagnostic only).
+            GeometryQuery.Validate(finalFaces, out OcctValidationReport report, out OcctCellComplexResult validateResult, occtOptions, false);
+            validateResult?.Dispose();
+
+            List<Point3D> nakedPoint3Ds = new List<Point3D>();
+            List<OcctNakedWire> nakedWires = new List<OcctNakedWire>();
+            if (report != null)
+            {
+                nakedPoint3Ds = report
+                    .IssuesOf(OcctValidationIssueCategory.NakedEdge)
+                    .Where(x => x?.Location != null)
+                    .Select(x => x.Location)
+                    .ToList();
+                nakedWires = report.NakedWires?.ToList() ?? new List<OcctNakedWire>();
+            }
+
+            NakedEdgePoint3Ds = nakedPoint3Ds;
+            NakedWires = nakedWires;
+            Signature = new ClosureSignature3D(cellCount, cellVolumes, nakedPoint3Ds.Count, finalFaces.Count, DroppedSourceCount(), cellVolumes.Count(x => x < MinCellVolume));
+        }
+
+        /// <summary>
+        /// Composes the pre-rebuild source map onto the consolidation rebuild's ABI v4 history so every
+        /// existing source is carried from its appended-set ordinal to its rebuilt ordinal (owner caution 2 -
+        /// provenance is never discarded). Patch faces keep their <see cref="Provenance.GapFill"/> identity via
+        /// the same history (their input ordinals -&gt; rebuilt ordinals). Geometric backfill runs ONLY for
+        /// rebuilt faces still unmapped (retained-derived, or a history gap), never overwriting a mapped entry.
+        /// When history is unavailable, falls back to a full geometric attribution over the rebuilt faces.
+        /// </summary>
+        private SourceMap ComposeRebuildMap(SourceMap preMap, OcctHistory rebuildHistory, int patchStart, int patchCount, List<Face3D> rebuiltFaces)
+        {
+            if (rebuildHistory == null)
+            {
+                return BuildResolvedSourceMap(rebuiltFaces, face3Ds);
+            }
+
+            SourceMap historyHop = HistorySourceMap.ToSourceMap(rebuildHistory, Provenance.Resolved, Diagnostics);
+            SourceMap composed = preMap.Compose(historyHop);
+
+            // Re-assert GapFill on the patch-derived rebuilt faces (Compose adopts the later hop's provenance,
+            // which would otherwise relabel them Resolved). History-precise, no geometry.
+            for (int p = 0; p < patchCount; p++)
+            {
+                int input = patchStart + p;
+                foreach (int ordinal in rebuildHistory.ModifiedOrdinals(input))
+                {
+                    composed.RecordFabricated(new FaceKey(ordinal), Provenance.GapFill);
+                }
+
+                foreach (int ordinal in rebuildHistory.GeneratedOrdinals(input))
+                {
+                    composed.RecordFabricated(new FaceKey(ordinal), Provenance.GapFill);
+                }
+            }
+
+            return BackfillGeometric(composed, rebuiltFaces, face3Ds);
+        }
+
+        /// <summary>Decodes <paramref name="face3Ds"/> into a cell complex once to read its cell count/volumes
+        /// (the appended-set signature metrics when the consolidation rebuild is off or rejected).</summary>
+        private static List<double> DecodeCellVolumes(List<Face3D> face3Ds, OcctBuildOptions options, out int cellCount)
+        {
+            cellCount = 0;
+            if (face3Ds == null || face3Ds.Count == 0)
+            {
+                return new List<double>();
+            }
+
+            GeometryCreate.Shells(face3Ds, out OcctCellComplexResult result, options);
             try
             {
-                return ClosureSignature3D.FromCellComplexResult(result, nakedEdgeCount, resolved.Count, droppedCount, MinCellVolume);
+                cellCount = result?.Cells?.Count ?? 0;
+                return result?.Cells == null ? new List<double>() : result.Cells.Select(x => x.Volume).ToList();
             }
             finally
             {
