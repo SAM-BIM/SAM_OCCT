@@ -55,6 +55,7 @@ endif()
 add_library(SAM.Occt.Native SHARED
     src/CellComplexBuilder.cpp
     src/DataExchangeRuntime.cpp
+    src/History.cpp
     src/ShapeHandle.cpp
     src/ShapeExtrude.cpp
     src/ShapeOffset.cpp

@@ -516,6 +516,103 @@ SAM_OCCT_API int sam_occt_result_point(
     double* y,
     double* z);
 
+/* ---- ABI v4: observational history / naked wires / tolerance drift ----
+   Additive (probe/degrade like the v3 glue path): a stale pre-v4 native build
+   lacks these symbols, so managed callers probe sam_occt_abi_version >= 4 and
+   fall back to the geometric NearestSourceIndex heuristic. None of these change
+   the geometry the ops produce - they only expose provenance already computed.
+   Design record: docs/P3_ABI_V4_NATIVE_HISTORY_DESIGN_REVIEW.md.
+
+   HISTORY (on the existing result handle; captured by sam_occt_build_cell_complex
+   and sam_occt_merge_coplanar). Output faces are addressed by FLAT ORDINAL - the
+   cell-major, face-minor enumeration of the result (cell 0's faces, then cell 1's,
+   ...), identical to walking sam_occt_result_cell_count / _cell_face_count. A face
+   shared by two cells has two ordinals and is listed under both. Input faces are
+   addressed by the caller's flattened-array face order. */
+
+/* 1 = history captured, 0 = not captured, -1 = invalid handle. */
+SAM_OCCT_API int sam_occt_result_history_available(void* result_handle);
+
+/* Number of input faces the producing op saw. -1 invalid handle, 0 unavailable. */
+SAM_OCCT_API int sam_occt_result_history_input_count(void* result_handle);
+
+/* Per-input-face record sizes. deleted 1/0. Status: 0 ok, 10 null out pointer,
+   40 index out of range / history unavailable, 50 invalid handle. */
+SAM_OCCT_API int sam_occt_result_history_face(
+    void* result_handle,
+    int input_index,
+    int* deleted,
+    int* modified_count,
+    int* generated_count);
+
+/* Fills caller-allocated arrays with the flat output ordinals this input face was
+   modified into / generated. Capacities are explicit - native writes at most
+   *_capacity entries and returns 11 when a capacity is below the corresponding
+   count (re-query counts and retry). An array may be null only when its count is
+   0. Status: 0 ok, 10 null array with non-zero count, 11 insufficient capacity,
+   40 index out of range / history unavailable, 50 invalid handle. */
+SAM_OCCT_API int sam_occt_result_history_entries(
+    void* result_handle,
+    int input_index,
+    int* modified_ordinals,
+    int modified_capacity,
+    int* generated_ordinals,
+    int generated_capacity);
+
+/* Max / average sub-shape tolerance stored at op time for the one-shot face-list
+   builders. Both 0 when the op did not capture it. Status: 0 ok, 10 null out
+   pointer, 50 invalid handle. */
+SAM_OCCT_API int sam_occt_result_max_tolerance(
+    void* result_handle,
+    double* max_tolerance,
+    double* average_tolerance);
+
+/* NAKED WIRES (on the existing validation handle; grouped from the same
+   ShapeAnalysis_FreeBounds pass sam_occt_shape_validate already runs). */
+
+/* Number of free-boundary wires (open + closed). -1 invalid handle. */
+SAM_OCCT_API int sam_occt_validation_wire_count(void* validation_handle);
+
+/* point_count = ordered polyline vertices (closing vertex NOT duplicated);
+   edge_count = point_count for a closed wire, point_count - 1 for an open wire;
+   is_closed 1/0. Status: 0 ok, 10 null out pointer, 40 index out of range,
+   50 invalid handle. */
+SAM_OCCT_API int sam_occt_validation_wire_info(
+    void* validation_handle,
+    int wire_index,
+    int* point_count,
+    int* edge_count,
+    int* is_closed);
+
+/* Ordered polyline vertex. Status: 0 ok, 10 null out pointer, 40 index out of
+   range, 50 invalid handle. */
+SAM_OCCT_API int sam_occt_validation_wire_point(
+    void* validation_handle,
+    int wire_index,
+    int point_index,
+    double* x,
+    double* y,
+    double* z);
+
+/* Owning face index of free edge `edge_index` (its position in the validated
+   shape's face enumeration order), or -1 when unknown. Best-effort - managed
+   callers must tolerate -1. Status: 0 ok, 10 null out pointer, 40 index out of
+   range, 50 invalid handle. */
+SAM_OCCT_API int sam_occt_validation_wire_edge_owner(
+    void* validation_handle,
+    int wire_index,
+    int edge_index,
+    int* input_face_index);
+
+/* TOLERANCE DRIFT on a live shape handle. subshape_type: 0 any, 1 vertex,
+   2 edge, 3 face. Status: 0 ok, 10 null out pointer, 50 invalid handle,
+   99 exception. */
+SAM_OCCT_API int sam_occt_shape_max_tolerance(
+    void* shape_handle,
+    int subshape_type,
+    double* max_tolerance,
+    double* average_tolerance);
+
 #ifdef __cplusplus
 }
 #endif
