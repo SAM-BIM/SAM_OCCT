@@ -425,6 +425,20 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
   a healing sew legitimately exceeds 10× a 1e-6 input). Consequence: implement the full ABI v4
   (history on MakerVolume + merge-coplanar + sew, all merged via `BRepTools_History::Merge`) as
   designed in `docs/P3_ABI_V4_NATIVE_HISTORY_DESIGN_REVIEW.md`; no scope cuts.
+- **Phase 3 COMPLETE (2026-07-03).** ABI v4 native committed (`099301c`) + validated end-to-end and
+  the managed layer landed. Native rebuilt from source, both suites green against the ABI v4 DLL with
+  **unchanged golden masters** (observationality proven). Delivered: `OcctHistory` (pure managed
+  snapshot on `OcctCellComplexResult.History`, captured by `build_cell_complex` + `merge_coplanar`);
+  `HistorySourceMap.ToSourceMap` adapter (split/merge/delete + `HistoryGap`/reverse-gap diagnostics);
+  `ResolveStage` per-adopted-hop composition (`ResolveHistorySourceMap`); `Solve3D.BuildPanels`
+  consumes the exact map with `NearestSourceIndex` demoted to a per-face fallback; naked wires on
+  `OcctValidationReport.NakedWires`; max/avg tolerance export. Tests: unit **265/265**
+  (`OcctHistorySourceMapTests`, +9), integration **107 pass / 1 skip** (`HistoryExportIntegrationTests`
+  - split 1→2, shared-face two-ordinals, merge 2→1, naked wire, drift ceiling, null-history degrade,
+  50-build soak). **Deviation carried:** the §F.4 sew-hop scope cut (§7.1 of the handover) - the
+  standalone sew→decode hop captures no history, so the default sew-before-build solver path falls back
+  to the geometric heuristic (which is why the golden masters are unchanged); history composition runs
+  on the direct `build_cell_complex` path. See `TESTING.md` (Phase 3) and the design review.
 
 ### Phase 4 — Panel reconstruction fidelity: Guid, parameters, apertures, provenance
 - **Objective:** restore 2D output parity — solved panels are the *same* panels with new geometry.

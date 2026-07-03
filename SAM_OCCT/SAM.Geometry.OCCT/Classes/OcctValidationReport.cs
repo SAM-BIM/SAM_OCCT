@@ -16,12 +16,19 @@ namespace SAM.Geometry.OCCT
     public class OcctValidationReport
     {
         private readonly List<OcctValidationIssue> issues;
+        private readonly List<OcctNakedWire> nakedWires;
 
         public OcctValidationReport(bool isValid, bool isWatertight, IEnumerable<OcctValidationIssue> issues)
+            : this(isValid, isWatertight, issues, null)
+        {
+        }
+
+        public OcctValidationReport(bool isValid, bool isWatertight, IEnumerable<OcctValidationIssue> issues, IEnumerable<OcctNakedWire> nakedWires)
         {
             IsValid = isValid;
             IsWatertight = isWatertight;
             this.issues = issues?.Where(x => x != null).ToList() ?? new List<OcctValidationIssue>();
+            this.nakedWires = nakedWires?.Where(x => x != null).ToList() ?? new List<OcctNakedWire>();
         }
 
         /// <summary>True when BRepCheck_Analyzer and the argument analyzer found no faults.</summary>
@@ -33,6 +40,17 @@ namespace SAM.Geometry.OCCT
         public IReadOnlyList<OcctValidationIssue> Issues
         {
             get { return issues; }
+        }
+
+        /// <summary>
+        /// Free-boundary (naked) wires as ordered polylines with closed flags and best-effort
+        /// per-edge owner faces (ABI v4, observational). Empty on a pre-v4 native build; the
+        /// located <see cref="Issues"/> of category <see cref="OcctValidationIssueCategory.NakedEdge"/>
+        /// remain the always-available naked-edge signal.
+        /// </summary>
+        public IReadOnlyList<OcctNakedWire> NakedWires
+        {
+            get { return nakedWires; }
         }
 
         /// <summary>

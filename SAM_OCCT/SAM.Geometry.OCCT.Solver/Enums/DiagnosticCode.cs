@@ -42,6 +42,13 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>An input face has no surviving representation in the resolved output.</summary>
         DroppedFace,
 
+        /// <summary>
+        /// A native-history composition gap: an input face that the history neither mapped to an
+        /// output nor recorded as deleted, or an output face no input maps to (reverse gap). The
+        /// affected face falls back to the geometric <c>NearestSourceIndex</c> heuristic - never silent.
+        /// </summary>
+        HistoryGap,
+
         /// <summary>An adaptive/expanded sew was attempted and rejected (would fuse distinct faces).</summary>
         RejectedSew,
 

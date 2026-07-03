@@ -36,6 +36,21 @@ namespace SAM.Geometry.OCCT.Solver
             public List<Point3D> NakedEdgePoint3Ds { get; set; } = new List<Point3D>();
 
             public List<Face3D> HoleFillFace3Ds { get; set; } = new List<Face3D>();
+
+            /// <summary>
+            /// Native-history source map (Phase 3): the input face index -> the output flat ordinal
+            /// (index into <see cref="ResolvedFace3Ds"/>) composed across the adopted resolve hops via
+            /// <c>BRepTools_History</c>. Null when native history was unavailable for any load-bearing
+            /// hop (pre-v4 native, the sew-before-build path, or an adopted sew hop - the §7.1 scope
+            /// cut), in which case callers keep the geometric <c>NearestSourceIndex</c> heuristic.
+            /// </summary>
+            public SourceMap SourceMap { get; set; }
+
+            /// <summary>Free-boundary wires as ordered polylines (Phase 3, native); empty on a pre-v4 native.</summary>
+            public List<OcctNakedWire> NakedWires { get; set; } = new List<OcctNakedWire>();
+
+            /// <summary>Max sub-shape tolerance the native resolve left on its result; 0 when not captured.</summary>
+            public double MaxTolerance { get; set; }
         }
 
         /// <summary>
@@ -51,13 +66,22 @@ namespace SAM.Geometry.OCCT.Solver
             double toleranceAngle,
             bool sewResidualGaps,
             double sewExpandTolerance,
-            bool fillHoles)
+            bool fillHoles,
+            SolverDiagnostics diagnostics = null)
         {
             Result result = new Result();
             if (snappedFace3Ds == null || snappedFace3Ds.Count == 0)
             {
                 return result;
             }
+
+            // Phase 3 (observational): compose an exact input->output SourceMap across the adopted
+            // resolve hops from each hop's native BRepTools_History, keyed from an identity over this
+            // stage's input. Any load-bearing hop without history (pre-v4 native, the sew-before-build
+            // path, or an adopted residual-sew hop - the §7.1 scope cut) disables the composition, so
+            // the caller keeps the geometric NearestSourceIndex heuristic instead of a map that lies.
+            SourceMap historyMap = IdentitySourceMap(snappedFace3Ds.Count);
+            bool historyUsable = true;
 
             // Healing defaults for the solver use-case: sew near-touching faces before the volume build
             // (bridges residual sub-mm gaps the managed fill leaves) and keep internal floors/partitions as
@@ -78,10 +102,22 @@ namespace SAM.Geometry.OCCT.Solver
             // cell complex instead of a single envelope cell.
             List<Face3D> buildFace3Ds = snappedFace3Ds;
             List<Face3D> preMerged = GeometryQuery.MergeCoplanarFace3Ds(snappedFace3Ds, out OcctCellComplexResult preMergeResult, toleranceAngle, options);
+            OcctHistory preMergeHistory = preMergeResult?.History;
             preMergeResult?.Dispose();
             if (preMerged != null && preMerged.Count != 0)
             {
                 buildFace3Ds = preMerged;
+
+                // Pre-merge adopted: compose its history (input -> pre-merged ordinals).
+                SourceMap hop = HistorySourceMap.ToSourceMap(preMergeHistory, Provenance.Resolved, diagnostics);
+                if (hop == null)
+                {
+                    historyUsable = false;
+                }
+                else
+                {
+                    historyMap = historyMap.Compose(hop);
+                }
             }
 
             result.BucketMergedFace3Ds = buildFace3Ds; // expose the MakerVolume input for debugging
@@ -101,20 +137,55 @@ namespace SAM.Geometry.OCCT.Solver
             List<Face3D> resolved = shells == null
                 ? new List<Face3D>()
                 : shells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null).ToList();
+            OcctHistory cellBuildHistory = cellResult.History;
             cellResult.Dispose();
 
             if (resolved.Count == 0)
             {
                 // No closed cells formed (open wall soup): fall back to the pre-merged faces.
+                // There is no meaningful build history over an empty cell set.
                 resolved = buildFace3Ds;
+                historyUsable = false;
+            }
+            else if (historyUsable)
+            {
+                // MakerVolume hop (always run when cells formed). The build history's output
+                // ordinals are the cell-major/face-minor enumeration - exactly the SelectMany
+                // order that produced `resolved`, which is what makes the composition valid.
+                SourceMap hop = HistorySourceMap.ToSourceMap(cellBuildHistory, Provenance.Resolved, diagnostics);
+                if (hop == null)
+                {
+                    historyUsable = false;
+                }
+                else
+                {
+                    historyMap = historyMap.Compose(hop);
+                    result.MaxTolerance = System.Math.Max(result.MaxTolerance, cellBuildHistory.MaxTolerance);
+                }
             }
 
             // Merge resolved coplanar neighbours (the colinear-merge analogue).
             List<Face3D> merged = GeometryQuery.MergeCoplanarFace3Ds(resolved, out OcctCellComplexResult mergeResult, toleranceAngle, options);
+            OcctHistory postMergeHistory = mergeResult?.History;
             mergeResult?.Dispose();
             if (merged != null && merged.Count != 0)
             {
                 resolved = merged;
+
+                // Post-merge adopted: compose its history (build ordinals -> merged ordinals).
+                if (historyUsable)
+                {
+                    SourceMap hop = HistorySourceMap.ToSourceMap(postMergeHistory, Provenance.Resolved, diagnostics);
+                    if (hop == null)
+                    {
+                        historyUsable = false;
+                    }
+                    else
+                    {
+                        historyMap = historyMap.Compose(hop);
+                        result.MaxTolerance = System.Math.Max(result.MaxTolerance, postMergeHistory.MaxTolerance);
+                    }
+                }
             }
 
             // ---- Adaptive native sew pass ----
@@ -145,11 +216,25 @@ namespace SAM.Geometry.OCCT.Solver
                     if (sewn != null && sewn.Count != 0 && NakedEdgeCount(sewn, options) < nakedBefore)
                     {
                         resolved = sewn;
+
+                        // §7.1 scope cut: the standalone sew->decode hop captures no history, so once
+                        // it is adopted the composed ordinals no longer address the output faces.
+                        // Disable the composition; those faces fall back to NearestSourceIndex.
+                        historyUsable = false;
                     }
                 }
             }
 
             result.ResolvedFace3Ds = resolved;
+
+            // Finalise the native-history map: keep it only if every load-bearing hop supplied
+            // history, then flag any output face no input maps to (reverse gap) so it, too, takes
+            // the geometric fallback rather than being silently source-orphaned.
+            if (historyUsable)
+            {
+                result.SourceMap = historyMap;
+                HistorySourceMap.ReportReverseGaps(historyMap, resolved.Count, diagnostics);
+            }
 
             // Report naked (free) boundary edges - true boundaries vs unresolved gaps.
             GeometryQuery.Validate(resolved, out OcctValidationReport report, out OcctCellComplexResult validateResult, options, false);
@@ -161,6 +246,9 @@ namespace SAM.Geometry.OCCT.Solver
                     .Where(x => x?.Location != null)
                     .Select(x => x.Location)
                     .ToList();
+
+                // Phase 3 (native): ordered free-boundary wires from the same free-bounds pass.
+                result.NakedWires = report.NakedWires?.ToList() ?? new List<OcctNakedWire>();
             }
 
             // Close the residual holes: build a Face3D over each naked-boundary loop. These are added to the
@@ -175,6 +263,21 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// The identity map over an <paramref name="count"/>-element input list (input i -> FaceKey i),
+        /// the seed the native-history hops compose onto (docs/P3 review §H).
+        /// </summary>
+        private static SourceMap IdentitySourceMap(int count)
+        {
+            SourceMap map = new SourceMap();
+            for (int i = 0; i < count; i++)
+            {
+                map.Record(i, new FaceKey(i), Provenance.Resolved);
+            }
+
+            return map;
         }
 
         /// <summary>

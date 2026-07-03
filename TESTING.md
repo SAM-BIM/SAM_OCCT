@@ -100,7 +100,8 @@ Contract:
   `Dispose`/finalization may occur on another thread.
 - **Topology keys** are only comparable within one decoded result.
 - **ABI probe** - `OcctCellComplexResult.NativeVersion` reports
-  `sam_occt_abi_version` ("3"); a stale native build degrades to diagnostics
+  `sam_occt_abi_version` ("4" as of Phase 3; "3" adds validation/glue, "2" adds
+  the shape handle); a stale native build degrades to diagnostics
   (`SAM_OCCT_NATIVE_ENTRYPOINT_MISSING`) instead of crashing.
 
 ## Validation, watertightness diagnostics & BOP glue (issue #37 follow-on, native ABI v3)
@@ -282,6 +283,56 @@ wide-void survives Stage A); `SourceMapTests` (compose/merge/split algebra); `So
 the two new `SnapOpposedPartitions` truth-table cases (wide void kept, door-cut skin collapsed);
 `SourceMapMappingIntegrationTests` (native: every solved output face carries a source on both the
 raw-first and forced-managed paths). The shaft-void fixture is built synthetically (no new `.sam`).
+
+## Native history / naked-wire / tolerance export (true-3D panel solver plan, Phase 3, native ABI v4)
+
+Phase 3 adds the **observational** ABI v4 exports and threads exact provenance through the resolve
+stage (design record: `docs/P3_ABI_V4_NATIVE_HISTORY_DESIGN_REVIEW.md`). "Observational" is the hard
+constraint: capturing history / wires / tolerance must **not** change the geometry the ops produce -
+the golden-master signatures are unchanged from Phase 2 (verified: the raw and managed paths route
+the cell build through the sew-before-build path, which does not capture history, so panel
+reconstruction keeps the geometric `NearestSourceIndex` heuristic and the output is byte-identical).
+
+- **`OcctHistory`** (`SAM.Geometry.OCCT`, pure managed snapshot - no native lifetime, nothing to
+  dispose) copies the native `BRepTools_History` off a result handle: per input face, its deletion
+  flag and the **flat output ordinals** (cell-major, face-minor - identical to the managed decode
+  walk) it was `Modified`/`Generated` into, plus the result's max/average sub-shape tolerance.
+  Captured by the two ops that record history - `sam_occt_build_cell_complex` and
+  `sam_occt_merge_coplanar` - and surfaced on `OcctCellComplexResult.History` (null on a pre-v4
+  native or when the op does not capture it).
+- **`HistorySourceMap.ToSourceMap`** (`SAM.Geometry.OCCT.Solver`) adapts a snapshot into a composable
+  `SourceMap` hop (source = input ordinal, `FaceKey` = output ordinal): a 1→N split fans out, an N→1
+  merge collapses, a deleted input is excluded, and an input that is neither mapped nor deleted (or an
+  output ordinal no input maps to) is emitted as a `DiagnosticCode.HistoryGap` warning - never silent.
+  `ResolveStage` composes it per **adopted** hop (pre-merge → MakerVolume → post-merge), disabling the
+  composition when any load-bearing hop lacks history or an adaptive residual sew is adopted (the §7.1
+  scope cut below); `Modify.Solve3D`'s `BuildPanels` then prefers the exact map and demotes
+  `NearestSourceIndex` to a per-face fallback.
+- **Naked wires** - `Query.Validate` now also returns `OcctValidationReport.NakedWires`: the
+  free-boundary edges from the same `ShapeAnalysis_FreeBounds` pass, grouped into ordered polylines
+  with a closed flag and best-effort per-edge owner faces (`-1`-tolerant). Empty on a pre-v4 native;
+  the located `NakedEdge` issues remain the always-available signal.
+- **Tolerance drift** - `sam_occt_result_max_tolerance` (per op) and `sam_occt_shape_max_tolerance`
+  (live handle) expose max/average sub-shape tolerance for the `ToleranceDrift` signal.
+
+**§7.1 scope cut (documented deviation).** History is captured on `build_cell_complex` and
+`merge_coplanar` only. The standalone `sam_occt_sew_faces`→`sam_occt_shape_decode` hop (used by the
+solver's sew-before-build cell build and by `ResolveStage`'s adaptive residual sew) captures **no**
+history by design. Consequently the default solver path (sew-before-build) produces a null
+`ResolveHistorySourceMap` and falls back to the geometric heuristic - which is exactly why the
+observational golden masters are unchanged. History composition is exercised end-to-end on the direct
+`build_cell_complex` path (a caller-supplied `OcctBuildOptions` defaults to `SewBeforeBuild = false`).
+
+- **Unit** (`OcctHistorySourceMapTests.cs`, pure managed via the public `OcctHistory` snapshot
+  constructor): split, merge, deletion, deleted-then-regenerated compose-to-nothing, the
+  shared-face-two-ordinals decode-order invariant, gap and reverse-gap diagnostics, and the null-history
+  (pre-v4) fallback.
+- **Integration** (`HistoryExportIntegrationTests.cs`, native-gated): the 7-face split fixture (unit
+  box + mid plane, `AvoidInternalShapes = false`) - 7 inputs, a wall splits 1→2, the shared mid face
+  gets two ordinals; coplanar merge 2→1; open-box naked wire (1 closed 4-vertex wire at z = 1); the
+  drift ceiling on a clean build (< 10× input tolerance); the null-history degrade on the
+  sew-before-build path; and a 50-build soak asserting managed memory plateaus (the snapshot has no
+  native lifetime by design).
 
 **Known CI drift (not fixed by Phase 0 - owner-deferred).**
 `.github/workflows/build.yml` clones the sibling `SAM` / `SAM_Solver` repos

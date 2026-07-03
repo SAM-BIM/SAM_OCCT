@@ -167,6 +167,21 @@ namespace SAM.Geometry.OCCT.Solver
         /// Null-safe: always non-null after <see cref="Execute"/>.</summary>
         public SourceMap SourceMap { get; private set; } = new SourceMap();
 
+        /// <summary>
+        /// The exact native-history resolve map (Phase 3): source panel -> resolved output ordinal,
+        /// composed from <c>BRepTools_History</c> across the adopted resolve hops. Non-null ONLY when
+        /// native history was available for every load-bearing hop; null in the geometric-fallback path
+        /// (pre-v4 native, the sew-before-build path, or an adopted residual sew - the §7.1 scope cut).
+        /// Consumers prefer it and fall back to the geometric heuristic face-by-face, which is what
+        /// demotes <c>NearestSourceIndex</c> to a fallback without perturbing the fallback path.
+        /// </summary>
+        public SourceMap ResolveHistorySourceMap { get; private set; }
+
+        /// <summary>Free-boundary (naked) wires of the resolved output as ordered polylines (Phase 3, native
+        /// ABI v4). Empty on a pre-v4 native build; the <see cref="NakedEdgePoint3Ds"/> remain the
+        /// always-available naked-edge signal. Reset at the start of each <see cref="Execute"/> call.</summary>
+        public List<OcctNakedWire> NakedWires { get; private set; } = new List<OcctNakedWire>();
+
         /// <summary>The closure signature of the ADOPTED result (raw-first, when it was adopted). Null when the
         /// managed pipeline ran instead (Phase 2+ populates it for the managed levels too).</summary>
         public ClosureSignature3D Signature { get; private set; }
@@ -429,9 +444,10 @@ namespace SAM.Geometry.OCCT.Solver
                 return;
             }
 
-            ResolveStage.Result resolveResult = ResolveStage.Resolve(snappedFace3Ds, options, ToleranceAngle, SewResidualGaps, SewExpandTolerance, FillHoles);
+            ResolveStage.Result resolveResult = ResolveStage.Resolve(snappedFace3Ds, options, ToleranceAngle, SewResidualGaps, SewExpandTolerance, FillHoles, Diagnostics);
             BucketMergedFace3Ds = resolveResult.BucketMergedFace3Ds;
             NativeResolved = resolveResult.NativeResolved;
+            NakedWires = resolveResult.NakedWires ?? new List<OcctNakedWire>();
             if (resolveResult.NativeResolved)
             {
                 ResolvedCellCount = resolveResult.ResolvedCellCount;
@@ -449,11 +465,80 @@ namespace SAM.Geometry.OCCT.Solver
                 ResolvedFace3Ds = heal.ResolvedFace3Ds;
             }
 
-            // Coarse source mapping over the final output faces (Phase 2, managed-only: the native resolve
-            // has no history yet - Phase 3 replaces this with composed BRepTools_History). Attributes each
-            // output face to the input source(s) it geometrically derives from, so no output face is left
-            // source-orphaned.
-            SourceMap = BuildResolvedSourceMap(ResolvedFace3Ds, face3Ds);
+            // Source mapping over the final output faces. Phase 3: when the native resolve supplied a
+            // composed BRepTools_History (input snapped face -> resolved output ordinal), bridge it back
+            // to the original sources through the geometric snapped->source attribution and use it - the
+            // resolve leg (splits/merges) is then exact. When history was unavailable (pre-v4 native, the
+            // sew-before-build path, or an adopted residual sew) it degrades to the fully geometric
+            // Phase-2 map, so no output face is ever left source-orphaned.
+            SourceMap resolveHistoryMap = resolveResult.SourceMap;
+            if (resolveHistoryMap != null)
+            {
+                // Bridge the exact resolve history (snapped input -> resolved ordinal) back to the
+                // original sources through the geometric snapped->source attribution. ResolveHistorySourceMap
+                // carries ONLY the history-resolved faces (null in the geometric-fallback path), so a
+                // consumer can safely prefer it and fall back to NearestSourceIndex face-by-face.
+                SourceMap snappedToSource = BuildResolvedSourceMap(snappedFace3Ds, face3Ds);
+                ResolveHistorySourceMap = snappedToSource.Compose(resolveHistoryMap);
+                SourceMap = BackfillGeometric(CloneSourceMap(ResolveHistorySourceMap), ResolvedFace3Ds, face3Ds);
+            }
+            else
+            {
+                ResolveHistorySourceMap = null;
+                SourceMap = BuildResolvedSourceMap(ResolvedFace3Ds, face3Ds);
+            }
+        }
+
+        /// <summary>Shallow copy of a <see cref="SourceMap"/>'s records, so backfilling the solver's public
+        /// <see cref="SourceMap"/> does not mutate the exact <see cref="ResolveHistorySourceMap"/>.</summary>
+        private static SourceMap CloneSourceMap(SourceMap source)
+        {
+            SourceMap copy = new SourceMap();
+            if (source == null)
+            {
+                return copy;
+            }
+
+            foreach (int sourceIndex in source.Sources)
+            {
+                foreach (FaceKey key in source.FacesOf(sourceIndex))
+                {
+                    copy.Record(sourceIndex, key, Provenance.Resolved);
+                }
+            }
+
+            return copy;
+        }
+
+        /// <summary>
+        /// Fills the gaps a native-history composition leaves: any output face the composed
+        /// <paramref name="composed"/> map has no source for (an adopted-sew face, a heal-appended
+        /// face, or a reverse-gap ordinal) is attributed geometrically so it is never source-orphaned.
+        /// Faces the history did resolve keep their exact composed sources.
+        /// </summary>
+        private static SourceMap BackfillGeometric(SourceMap composed, List<Face3D> outputFace3Ds, List<Face3D> inputFace3Ds)
+        {
+            if (outputFace3Ds == null)
+            {
+                return composed ?? new SourceMap();
+            }
+
+            SourceMap geometric = BuildResolvedSourceMap(outputFace3Ds, inputFace3Ds);
+            for (int k = 0; k < outputFace3Ds.Count; k++)
+            {
+                FaceKey key = new FaceKey(k);
+                if (composed.SourcesOf(key).Count != 0)
+                {
+                    continue;
+                }
+
+                foreach (int source in geometric.SourcesOf(key))
+                {
+                    composed.Record(source, key, Provenance.Resolved);
+                }
+            }
+
+            return composed;
         }
 
         /// <summary>

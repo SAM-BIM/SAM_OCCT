@@ -79,7 +79,13 @@ namespace SAM.Analytical.OCCT.Solver
             }
 
             double tolerance = options?.Tolerance ?? Tolerance.Distance;
-            List<Panel> result = BuildPanels(resolved, sources, bucketSizes, effectiveWeights, effectiveMaxExtends, tolerance);
+
+            // Phase 3: prefer the exact native-history source map (which resolved output face came from
+            // which input source via composed BRepTools_History) and demote the geometric
+            // NearestSourceIndex to a per-face fallback. Null in the geometric-fallback path (pre-v4
+            // native, sew-before-build, or an adopted residual sew), where every face uses the heuristic
+            // exactly as before - so the fallback path is unchanged.
+            List<Panel> result = BuildPanels(resolved, sources, bucketSizes, effectiveWeights, effectiveMaxExtends, tolerance, solver.ResolveHistorySourceMap);
 
             // Step-2 gap-fill faces (residual naked-boundary loops) become air panels: each is emitted as a
             // PanelType.Air panel (null construction), a virtual boundary rather than solid wall. Sliver
@@ -414,12 +420,21 @@ namespace SAM.Analytical.OCCT.Solver
         /// source used, so the output feeds <c>SAMAnalytical.Visualize</c> (which reads those
         /// <see cref="SolverParameter"/>s) - letting the extend assumptions be seen and adjusted.
         /// </summary>
-        private static List<Panel> BuildPanels(List<Face3D> face3Ds, List<Panel> sources, List<double> bucketSizes, List<double> weights, List<double> maxExtends, double tolerance)
+        private static List<Panel> BuildPanels(List<Face3D> face3Ds, List<Panel> sources, List<double> bucketSizes, List<double> weights, List<double> maxExtends, double tolerance, SAM.Geometry.OCCT.Solver.SourceMap sourceMap = null)
         {
             List<Panel> result = new List<Panel>();
-            foreach (Face3D face3D in face3Ds)
+            for (int faceIndex = 0; faceIndex < face3Ds.Count; faceIndex++)
             {
-                int index = NearestSourceIndex(face3D, sources, tolerance);
+                Face3D face3D = face3Ds[faceIndex];
+
+                // Phase 3: the exact native-history source for this output face, when available;
+                // otherwise the geometric NearestSourceIndex heuristic (the demoted fallback).
+                int index = DominantSourceIndex(sourceMap, faceIndex, sources);
+                if (index < 0)
+                {
+                    index = NearestSourceIndex(face3D, sources, tolerance);
+                }
+
                 if (index < 0)
                 {
                     continue;
@@ -532,6 +547,40 @@ namespace SAM.Analytical.OCCT.Solver
             }
 
             return System.Math.Max(minBucketSize, thickness * thicknessFactor);
+        }
+
+        /// <summary>
+        /// The dominant source panel for the resolved output face at <paramref name="faceIndex"/> per the
+        /// exact native-history <paramref name="sourceMap"/> (Phase 3): the recorded source whose panel has
+        /// the largest face area (the backer that most explains a merged/split output). Returns -1 when the
+        /// map is null, has no source for this face, or the sources are fabricated only - the caller then
+        /// falls back to the geometric <see cref="NearestSourceIndex"/> heuristic.
+        /// </summary>
+        private static int DominantSourceIndex(SAM.Geometry.OCCT.Solver.SourceMap sourceMap, int faceIndex, List<Panel> sources)
+        {
+            if (sourceMap == null || sources == null || sources.Count == 0)
+            {
+                return -1;
+            }
+
+            int best = -1;
+            double bestArea = double.NegativeInfinity;
+            foreach (int source in sourceMap.SourcesOf(new SAM.Geometry.OCCT.Solver.FaceKey(faceIndex)))
+            {
+                if (source < 0 || source >= sources.Count)
+                {
+                    continue; // fabricated (-1) or out-of-range source: no panel to carry forward.
+                }
+
+                double area = sources[source]?.GetFace3D()?.GetArea() ?? 0;
+                if (area > bestArea)
+                {
+                    bestArea = area;
+                    best = source;
+                }
+            }
+
+            return best;
         }
 
         /// <summary>
