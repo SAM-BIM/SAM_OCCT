@@ -466,6 +466,30 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
   attached to Spaces (not a SAM concept) and never silently dropped.
 - **Depends:** Phase 3 (mapping). **Out of scope:** aperture re-projection onto *moved* planes
   beyond what the Panel ctor's trim already does; openings participating in solving.
+- **Phase 4 COMPLETE (2026-07-03).** Delivered: `PanelReconstruction.Build` (`SAM.Analytical.OCCT.
+  Solver`, pure/native-free) consuming the solver's `SourceMap` for the 1:1/split/merge Guid policy
+  exactly as specified; apertures re-hosted via the existing `Create.Panel(guid, panel, face3D,
+  apertures, trimGeometry, minArea, maxDistance)` ctor with no bespoke matching (every contributing
+  source's apertures are tried against every produced piece, which already realises "assigned to the
+  piece that geometrically contains it"); air panels stamped `PanelProvenanceParameter.Provenance =
+  "GapFill"`; the post-resolve angle tightening to `Tolerance.Angle`. Tests: unit
+  `PanelReconstructionTests` (1:1/split/merge/orphan/fallback, 6 cases), integration
+  `AperturePreservationIntegrationTests` (sealed-room window round-trip, native-gated). Full suite
+  after Phase 4: unit **271/271**, integration **108 pass / 1 skip**.
+  **Two deviations from this section's literal wording (both scope-narrowing, not scope-cutting):**
+  (1) the orphan report is `Modify.Solve3D`'s new `out List<OrphanedAperture> orphanedApertures`
+  parameter on an additive overload, not a `Solver3DResult` type - introducing a new aggregate result
+  class would have changed `Solve3D`'s return shape, and C# `out` parameters cannot be optional, so a
+  new *required* one could only be added as a new overload without breaking the shipped Grasshopper
+  `SAMOCCT.Solve3D` component (which calls the 2-out-param form positionally); the "try re-hosting on
+  the nearest same-source piece" leg of the orphan policy is subsumed by trying every produced piece
+  (no separate retry step exists to fail before returning an orphan). (2) the acceptance's aperture
+  fixture (a `.sam` room with 2 windows + a door) was not built; the 1:1 leg is proven end-to-end
+  through the real kernel on a synthetic sealed room with one window (`AperturePreservationIntegrationTests`),
+  and the split/merge Guid legs - which need a literal `BOPAlgo_MakerVolume` split, not a stable
+  substrate for a fast deterministic assertion - are proven with a hand-built `SourceMap` in the unit
+  tests instead. Golden-master delta from the angle-tightening: **none measured** (see TESTING.md) -
+  documented per the local merge-gate protocol.
 
 ### Phase 5 — Diagnosis-driven closure: AutoTune3D, per-loop sew acceptance, RetainDropped v2
 - **Objective:** replace blind margins with bounded, diagnosed, locally-escalated closure — the

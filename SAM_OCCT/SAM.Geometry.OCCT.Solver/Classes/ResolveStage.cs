@@ -164,8 +164,11 @@ namespace SAM.Geometry.OCCT.Solver
                 }
             }
 
-            // Merge resolved coplanar neighbours (the colinear-merge analogue).
-            List<Face3D> merged = GeometryQuery.MergeCoplanarFace3Ds(resolved, out OcctCellComplexResult mergeResult, toleranceAngle, options);
+            // Merge resolved coplanar neighbours (the colinear-merge analogue). Tightened to SAM's
+            // canonical Tolerance.Angle (~2 deg) rather than the caller's (typically 5 deg) toleranceAngle:
+            // post-resolve, faces are already snapped/split by the kernel, so 5 deg is generous enough to
+            // fuse slightly-sloped roof planes that should stay distinct (docs plan §C live-defect list).
+            List<Face3D> merged = GeometryQuery.MergeCoplanarFace3Ds(resolved, out OcctCellComplexResult mergeResult, SAM.Core.Tolerance.Angle, options);
             OcctHistory postMergeHistory = mergeResult?.History;
             mergeResult?.Dispose();
             if (merged != null && merged.Count != 0)

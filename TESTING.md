@@ -334,6 +334,69 @@ observational golden masters are unchanged. History composition is exercised end
   sew-before-build path; and a 50-build soak asserting managed memory plateaus (the snapshot has no
   native lifetime by design).
 
+## Panel reconstruction fidelity: Guid, parameters, apertures, provenance (true-3D panel solver plan, Phase 4)
+
+Phase 4 restores 2D output parity: a solved panel is the *same* panel with new geometry, not a
+construction/type-only rebuild that silently drops Guid, parameters and apertures (the pre-Phase-4
+`Solve3D` behaviour). It consumes the solver's `SourceMap` (exact via Phase 3's composed native
+history when available, geometric fallback otherwise - never null) instead of the single-winner
+`NearestSourceIndex`, so a genuine split or merge is reconstructed as such.
+
+- **`PanelReconstruction.Build`** (`SAM.Analytical.OCCT.Solver`, pure and native-free - unit-tested
+  without any OCCT DLL): for each resolved output face, reads its source set from the `SourceMap` and
+  applies one of three policies:
+  - **1:1** (one source, itself unsplit): keeps the source's own Guid via
+    `Analytical.Create.Panel(source.Guid, source, face3D, ...)` - construction, type and every
+    parameter survive untouched.
+  - **Split** (one source mapping to more than one output face): each piece gets a fresh Guid and a
+    `PanelProvenanceParameter.SourceGuid` stamp naming the original source.
+  - **Merge** (more than one source mapping to one output face): the dominant (largest-area) source
+    keeps its own Guid ("wins Guid"); the others are stamped as
+    `PanelProvenanceParameter.MergedSourceGuids` (comma-separated).
+  - `BucketSize`/`Weight`/`MaxExtend` are stamped from the dominant source in every case, so the
+    existing `SAMAnalytical.Visualize` contract (Phase 2) is unaffected.
+- **Apertures are never matched by hand.** Every contributing source's own apertures are handed to
+  `Create.Panel`, whose ctor already re-hosts each one only if it lands within `maxDistance` of that
+  particular output face (trimmed to fit, via the existing `Modify.AddApertures` bounding-box gate) -
+  trying an aperture against every piece a split produced *is* "assigned to the piece that
+  geometrically contains it", for free, with no bespoke matching logic. An aperture that fits no
+  produced piece is collected into `orphanedApertures` (never silently dropped) with its original
+  world-space geometry and source Guid, and surfaced as a `SAM_OCCT_SOLVE3D_APERTURE_ORPHANED:`
+  diagnostic line - the orphan policy's "return for manual re-hosting" leg (the plan does not require
+  a "try the nearest piece" retry step beyond what re-trying every produced piece already achieves).
+- **Air/gap-fill panels** are stamped `PanelProvenanceParameter.Provenance = "GapFill"` so they are
+  distinguishable from a "real" opening an analytical model might otherwise carry.
+- **API shape.** `Modify.Solve3D` gained a new overload with an `out List<OrphanedAperture>
+  orphanedApertures` parameter (plus `minApertureArea`/`maxApertureDistance`); the existing
+  2-out-param overload is now a thin wrapper over it, so the shipped Grasshopper `SAMOCCT.Solve3D`
+  component keeps compiling and behaving identically without modification (out-parameters cannot be
+  optional in C#, so a new required one could not be added to the existing signature without breaking
+  every positional caller - this is the same additive-overload pattern used for the ABI probes).
+  `Clean3D`/`Extend3D`/`OpenPanels3D` are untouched: they keep the original `BuildPanels`/
+  `NearestSourceIndex` path (no `SourceMap` is threaded through those pre-resolve inspection passes).
+- **Post-resolve angle-tolerance tightening (live-defect fix, plan §C).** Both post-resolve
+  `MergeCoplanarFace3Ds` calls (`ResolveStage.Resolve`'s post-merge hop; `Panel3DSnapSolver.
+  TryRawResolve`'s raw-path merge) were tightened from the caller's `ToleranceAngle` (5° by default)
+  to SAM's canonical `Tolerance.Angle` (~2°): post-resolve, faces are already split by the kernel, so
+  5° was generous enough to fuse slightly-sloped roof planes that should stay distinct. **Measured
+  delta: none.** All 5 golden-master fixtures (raw and managed paths, 10 signatures total) were
+  captured before and after the change (`git stash` on the two touched files, rebuild, re-run) and
+  are byte-identical - none of the reference fixtures happen to have a roof/wall pair in the 2°-5°
+  drift band, so this is a defensive fix with no observed effect on today's fixture set, not a
+  regression.
+
+**New tests.** `PanelReconstructionTests.cs` (unit): 1:1 preserves Guid/construction/parameters;
+split assigns fresh Guids + `SourceGuid` stamps; an aperture placed inside one split piece's footprint
+lands only there; merge keeps the dominant's Guid and stamps `MergedSourceGuids`; an aperture in the
+gap between two split pieces is reported as orphaned; a face with no `SourceMap` entry at all falls
+back to `NearestSourceIndex` rather than being dropped. `AperturePreservationIntegrationTests.cs`
+(native-gated): a synthetic sealed room with one window round-trips through `Solve3D` end-to-end -
+Guid, construction, parameters and the trimmed aperture all survive, with zero orphans (the raw-first
+path adopts an already-closed box as-is, so this exercises the 1:1 leg through the real kernel; the
+split/merge legs are exercised without native geometry in the unit tests above, since forcing a
+literal split deterministically through `BOPAlgo_MakerVolume` is not a stable substrate for a fast
+unit-style assertion).
+
 **Known CI drift (not fixed by Phase 0 - owner-deferred).**
 `.github/workflows/build.yml` clones the sibling `SAM` / `SAM_Solver` repos
 pinned to branch `sow/2026-Q2`, but as of this plan (2026-07-02) both sibling

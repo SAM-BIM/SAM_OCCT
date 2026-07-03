@@ -1674,7 +1674,10 @@ namespace SAM.Geometry.OCCT.Solver
             if (nakedEdgeCount == 0)
             {
                 // Merge coplanar neighbours so output faces are not left split where MakerVolume cut them.
-                List<Face3D> merged = GeometryQuery.MergeCoplanarFace3Ds(resolved, out OcctCellComplexResult mergeResult, ToleranceAngle, rawOptions);
+                // Tightened to SAM's canonical Tolerance.Angle (~2 deg): post-resolve, faces are already
+                // split by the kernel, so the caller's (typically 5 deg) ToleranceAngle is generous enough
+                // to fuse slightly-sloped roof planes that should stay distinct (docs plan §C live-defect list).
+                List<Face3D> merged = GeometryQuery.MergeCoplanarFace3Ds(resolved, out OcctCellComplexResult mergeResult, Tolerance.Angle, rawOptions);
                 mergeResult?.Dispose();
                 if (merged != null && merged.Count != 0)
                 {

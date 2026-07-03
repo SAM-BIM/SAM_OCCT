@@ -48,8 +48,41 @@ namespace SAM.Analytical.OCCT.Solver
             OcctBuildOptions options = null,
             bool forceManagedPipeline = false)
         {
+            return Solve3D(panels, out nakedPoint3Ds, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, forceManagedPipeline);
+        }
+
+        /// <summary>
+        /// Phase 4 overload: as <see cref="Solve3D(IEnumerable{Panel}, out List{Point3D}, out List{string}, IEnumerable{double}, IEnumerable{double}, double, double, double, double, OcctBuildOptions, bool)"/>,
+        /// additionally reporting apertures that could not be re-hosted on any resolved panel (the
+        /// orphan policy: docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md Phase 4). Solved panels
+        /// preserve the source's Guid/parameters/construction on a clean 1:1 mapping, get a fresh Guid
+        /// stamped with the original source's Guid on a split, and keep the dominant (largest-area)
+        /// source's Guid (with the others stamped) on a merge - see <see cref="PanelReconstruction"/>.
+        /// </summary>
+        /// <param name="orphanedApertures">Apertures whose source panel contributed to the solve but no
+        /// resolved output face came within <paramref name="maxApertureDistance"/> of them - original
+        /// world-space geometry and source Guid, for manual re-hosting. Never silently dropped.</param>
+        /// <param name="minApertureArea">Minimum aperture area to re-host onto a resolved panel (the Panel ctor's own gate).</param>
+        /// <param name="maxApertureDistance">Max distance between a resolved panel and an aperture for it to be re-hosted there.</param>
+        public static List<Panel> Solve3D(
+            this IEnumerable<Panel> panels,
+            out List<Point3D> nakedPoint3Ds,
+            out List<string> diagnostics,
+            out List<OrphanedAperture> orphanedApertures,
+            IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
+            double minBucketSize = 0.4,
+            double thicknessFactor = 0.6,
+            double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3,
+            OcctBuildOptions options = null,
+            bool forceManagedPipeline = false,
+            double minApertureArea = Tolerance.MacroDistance,
+            double maxApertureDistance = Tolerance.MacroDistance)
+        {
             nakedPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
+            orphanedApertures = new List<OrphanedAperture>();
 
             if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
             {
@@ -80,12 +113,21 @@ namespace SAM.Analytical.OCCT.Solver
 
             double tolerance = options?.Tolerance ?? Tolerance.Distance;
 
-            // Phase 3: prefer the exact native-history source map (which resolved output face came from
-            // which input source via composed BRepTools_History) and demote the geometric
-            // NearestSourceIndex to a per-face fallback. Null in the geometric-fallback path (pre-v4
-            // native, sew-before-build, or an adopted residual sew), where every face uses the heuristic
-            // exactly as before - so the fallback path is unchanged.
-            List<Panel> result = BuildPanels(resolved, sources, bucketSizes, effectiveWeights, effectiveMaxExtends, tolerance, solver.ResolveHistorySourceMap);
+            // Phase 4: rebuild via the source-set-aware policy (1:1 keeps the source's Guid, a split gets
+            // fresh Guids stamped back to the source, a merge keeps the dominant source's Guid) instead of
+            // the single-winner BuildPanels/NearestSourceIndex path. solver.SourceMap is always populated
+            // (exact via composed native history when Phase 3 provided it, geometric fallback otherwise),
+            // so every resolved face still gets a Panel even where history is unavailable.
+            List<Panel> result = PanelReconstruction.Build(resolved, sources, solver.SourceMap, bucketSizes, effectiveWeights, effectiveMaxExtends, tolerance, out orphanedApertures, minApertureArea, maxApertureDistance);
+
+            foreach (OrphanedAperture orphan in orphanedApertures)
+            {
+                diagnostics.Add(string.Format(
+                    "SAM_OCCT_SOLVE3D_APERTURE_ORPHANED: Aperture {0} from source panel {1} did not land within {2} m of any resolved panel; returned for manual re-hosting.",
+                    orphan.Aperture?.Guid,
+                    orphan.SourceGuid,
+                    maxApertureDistance));
+            }
 
             // Step-2 gap-fill faces (residual naked-boundary loops) become air panels: each is emitted as a
             // PanelType.Air panel (null construction), a virtual boundary rather than solid wall. Sliver
@@ -103,6 +145,9 @@ namespace SAM.Analytical.OCCT.Solver
                 Panel airPanel = global::SAM.Analytical.Create.Panel(null, PanelType.Air, holeFace3D);
                 if (airPanel != null)
                 {
+                    // Provenance-stamped so a gap-fill air panel is distinguishable from a "real" opening
+                    // an analytical model might otherwise carry (docs plan Phase 4).
+                    airPanel.SetValue(PanelProvenanceParameter.Provenance, "GapFill");
                     result.Add(airPanel);
                     airCount++;
                 }
@@ -189,7 +234,7 @@ namespace SAM.Analytical.OCCT.Solver
         /// Step 1 + Step 2 managed fill/extend, WITHOUT the native resolve (the split). Cleans the panels, grows
         /// floors/roofs out to the surrounding walls, and extends walls up to the cap above / down to the floor
         /// below (overshooting their caps). Returns those filled/extended panels so the pre-resolve geometry can
-        /// be reviewed before <see cref="Solve3D"/> runs the native MakerVolume split - no cells are formed and
+        /// be reviewed before <see cref="Modify.Solve3D(IEnumerable{Panel}, out List{Point3D}, out List{string}, IEnumerable{double}, IEnumerable{double}, double, double, double, double, OcctBuildOptions, bool)"/> runs the native MakerVolume split - no cells are formed and
         /// no walls are trimmed here. Output panels carry the bucket/weight/max-extend stamps for
         /// <c>SAMAnalytical.Visualize</c>, so the extend assumptions can be seen (and the per-panel
         /// <c>SolverParameter.MaxExtend</c> adjusted) before solving.
@@ -589,7 +634,9 @@ namespace SAM.Analytical.OCCT.Solver
         /// construction/type (and the bucket/weight stamps) forward, since native boolean resolution
         /// loses the 1:1 source mapping. Returns -1 only when there are no sources.
         /// </summary>
-        private static int NearestSourceIndex(Face3D face3D, List<Panel> sources, double tolerance)
+        /// <summary>Visible to <see cref="PanelReconstruction"/> as the last-resort fallback when a
+        /// face has no <see cref="SAM.Geometry.OCCT.Solver.SourceMap"/> attribution at all.</summary>
+        internal static int NearestSourceIndex(Face3D face3D, List<Panel> sources, double tolerance)
         {
             if (sources == null || sources.Count == 0)
             {
