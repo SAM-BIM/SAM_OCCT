@@ -491,12 +491,17 @@ namespace SAM.Geometry.OCCT.Solver
                 resolvedSourceMap = BuildResolvedSourceMap(resolvedFace3Ds, face3Ds);
             }
 
-            // Stage C - HEAL (RetainDropped, Phase-2 behaviour; v2 is 5c): the dropped conditioned faces to
-            // re-add, taken as a LIST. The imprint into the resolved set is the consolidation rebuild's job
-            // (FinalizeAndValidate), not a raw append.
-            List<Face3D> retainedFace3Ds = RetainDropped
-                ? HealStage.RetainDropped(resolvedFace3Ds, snappedFace3Ds).RetainedFace3Ds.ToList()
-                : new List<Face3D>();
+            // Stage C - HEAL (RetainDropped v2, Phase 5c): re-add the ORIGINAL CLEAN geometry (SnapStage
+            // output) for every input source the native resolve DROPPED - detected map-side
+            // (resolvedSourceMap.FacesOf(source) empty), not via a geometric nearest-source guess - behind
+            // area/dedup safety filters, tagged for Provenance.DroppedRetained and diagnosed. The clean faces
+            // (snapResult.CleanFace3Ds) and their per-face source indices are world-frame and index-aligned to
+            // the resolved output, so IsRepresented dedups correctly. The imprint into the cell complex is the
+            // consolidation rebuild's job (FinalizeAndValidate), not a raw append.
+            HealStage.RetainDroppedResult retainResult = RetainDropped
+                ? HealStage.RetainDroppedV2(resolvedFace3Ds, snapResult.CleanFace3Ds, snapResult.SourceIndicesPerFace, resolvedSourceMap, Diagnostics)
+                : new HealStage.RetainDroppedResult();
+            List<Face3D> retainedFace3Ds = retainResult.RetainedFace3Ds;
 
             // GapFill v2: patch the residual naked loops from the NATIVE ordered wires (the legacy managed
             // walk survives only as the pre-v4 fallback). Every loop outcome is diagnosed.
@@ -507,7 +512,7 @@ namespace SAM.Geometry.OCCT.Solver
             // The single final-truth step: assemble resolved + patches + retained, run the signature-gated
             // consolidation rebuild, compose provenance, and produce the FINAL naked count / wires / cells /
             // signature (docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §H).
-            FinalizeAndValidate(resolvedFace3Ds, patchFace3Ds, retainedFace3Ds, resolvedSourceMap, resolveResult.ResolvedCellCount, options);
+            FinalizeAndValidate(resolvedFace3Ds, patchFace3Ds, retainedFace3Ds, retainResult.RetainedSourceIndices, resolvedSourceMap, resolveResult.ResolvedCellCount, options);
         }
 
         /// <summary>
@@ -552,6 +557,7 @@ namespace SAM.Geometry.OCCT.Solver
             List<Face3D> resolvedFace3Ds,
             List<Face3D> patchFace3Ds,
             List<Face3D> retainedFace3Ds,
+            List<List<int>> retainedSourceIndices,
             SourceMap resolvedSourceMap,
             int resolveCellCount,
             OcctBuildOptions options)
@@ -564,6 +570,7 @@ namespace SAM.Geometry.OCCT.Solver
             };
 
             int patchStart = resolvedFace3Ds.Count;
+            int retainedStart = patchStart + patchFace3Ds.Count;
 
             // The appended (unimprinted) set: resolved, then patches, then retained - a fixed order the
             // pre-rebuild source map and the rebuild history are both keyed against.
@@ -572,12 +579,16 @@ namespace SAM.Geometry.OCCT.Solver
             appended.AddRange(retainedFace3Ds);
 
             // Pre-rebuild map over `appended`: resolved keep their attribution; patches are fabricated GapFill;
-            // retained are left for geometric backfill (they are real dropped walls, attributed to a source).
+            // retained (Phase 5c) are recorded DroppedRetained against the exact dropped source(s) RetainDroppedV2
+            // detected, so the retained wall keeps its source Guid through reconstruction (P4) rather than being
+            // re-attributed geometrically.
             SourceMap preMap = CloneSourceMap(resolvedSourceMap);
             for (int i = 0; i < patchFace3Ds.Count; i++)
             {
                 preMap.RecordFabricated(new FaceKey(patchStart + i), Provenance.GapFill);
             }
+
+            RecordRetainedProvenance(preMap, retainedStart, retainedFace3Ds.Count, retainedSourceIndices);
 
             List<Face3D> finalFaces = appended;
             List<double> cellVolumes = new List<double>();
@@ -616,7 +627,7 @@ namespace SAM.Geometry.OCCT.Solver
                         finalFaces = rebuiltFaces;
                         cellCount = rebuiltCells;
                         cellVolumes = rebuiltVolumes;
-                        finalMap = ComposeRebuildMap(preMap, rebuildHistory, patchStart, patchFace3Ds.Count, rebuiltFaces);
+                        finalMap = ComposeRebuildMap(preMap, rebuildHistory, patchStart, patchFace3Ds.Count, retainedStart, retainedFace3Ds.Count, retainedSourceIndices, rebuiltFaces);
                         adoptedRebuild = true;
                         Diagnostics.Add(SolverStage.Heal, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info,
                             string.Format("Consolidation rebuild adopted: {0} cell(s), {1} naked edge(s) (appended alternative had {2}).", rebuiltCells, rebuiltNaked, appendedNaked));
@@ -634,12 +645,15 @@ namespace SAM.Geometry.OCCT.Solver
             if (!adoptedRebuild)
             {
                 // Keep the appended set. Attribute it geometrically, then re-assert the explicit GapFill mark
-                // on the patch faces so they still surface as air (not solids) downstream.
+                // on the patch faces (so they still surface as air, not solids) and the DroppedRetained mark on
+                // the retained faces (so they stay identifiable as recovered dropped geometry) downstream.
                 finalMap = BuildResolvedSourceMap(appended, face3Ds);
                 for (int i = 0; i < patchFace3Ds.Count; i++)
                 {
                     finalMap.RecordFabricated(new FaceKey(patchStart + i), Provenance.GapFill);
                 }
+
+                RecordRetainedProvenance(finalMap, retainedStart, retainedFace3Ds.Count, retainedSourceIndices);
 
                 cellVolumes = DecodeCellVolumes(appended, occtOptions, out cellCount);
             }
@@ -681,7 +695,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// rebuilt faces still unmapped (retained-derived, or a history gap), never overwriting a mapped entry.
         /// When history is unavailable, falls back to a full geometric attribution over the rebuilt faces.
         /// </summary>
-        private SourceMap ComposeRebuildMap(SourceMap preMap, OcctHistory rebuildHistory, int patchStart, int patchCount, List<Face3D> rebuiltFaces)
+        private SourceMap ComposeRebuildMap(SourceMap preMap, OcctHistory rebuildHistory, int patchStart, int patchCount, int retainedStart, int retainedCount, List<List<int>> retainedSourceIndices, List<Face3D> rebuiltFaces)
         {
             if (rebuildHistory == null)
             {
@@ -707,7 +721,52 @@ namespace SAM.Geometry.OCCT.Solver
                 }
             }
 
+            // Re-assert DroppedRetained on the retained-derived rebuilt faces (Phase 5c) against the exact
+            // dropped source(s), for the same reason - Compose would otherwise relabel them Resolved. The real
+            // source is preserved so reconstruction keeps its Guid (P4); history-precise, no geometry.
+            for (int r = 0; r < retainedCount; r++)
+            {
+                int input = retainedStart + r;
+                List<int> sources = retainedSourceIndices != null && r < retainedSourceIndices.Count ? retainedSourceIndices[r] : null;
+                foreach (int ordinal in rebuildHistory.ModifiedOrdinals(input).Concat(rebuildHistory.GeneratedOrdinals(input)))
+                {
+                    RecordDroppedRetainedAt(composed, new FaceKey(ordinal), sources);
+                }
+            }
+
             return BackfillGeometric(composed, rebuiltFaces, face3Ds);
+        }
+
+        /// <summary>
+        /// Records <see cref="Provenance.DroppedRetained"/> for the retained faces at their appended-set ordinals
+        /// (Phase 5c). Each retained face is keyed against the exact dropped source(s)
+        /// <see cref="HealStage.RetainDroppedV2"/> recovered - so panel reconstruction keeps the source Guid (P4) -
+        /// or, if none is known, as a fabricated retained face.
+        /// </summary>
+        private static void RecordRetainedProvenance(SourceMap sourceMap, int retainedStart, int retainedCount, List<List<int>> retainedSourceIndices)
+        {
+            for (int i = 0; i < retainedCount; i++)
+            {
+                List<int> sources = retainedSourceIndices != null && i < retainedSourceIndices.Count ? retainedSourceIndices[i] : null;
+                RecordDroppedRetainedAt(sourceMap, new FaceKey(retainedStart + i), sources);
+            }
+        }
+
+        /// <summary>Records <see cref="Provenance.DroppedRetained"/> for output <paramref name="key"/> against
+        /// each source in <paramref name="sources"/> (or as fabricated when none is known).</summary>
+        private static void RecordDroppedRetainedAt(SourceMap sourceMap, FaceKey key, List<int> sources)
+        {
+            if (sources != null && sources.Count != 0)
+            {
+                foreach (int source in sources)
+                {
+                    sourceMap.Record(source, key, Provenance.DroppedRetained);
+                }
+            }
+            else
+            {
+                sourceMap.RecordFabricated(key, Provenance.DroppedRetained);
+            }
         }
 
         /// <summary>Decodes <paramref name="face3Ds"/> into a cell complex once to read its cell count/volumes
@@ -1937,6 +1996,7 @@ namespace SAM.Geometry.OCCT.Solver
             int nakedEdgeCount = ResolveStage.NakedEdgeCount(resolved, rawOptions);
             int sliverCellCount = 0;
             List<Face3D> droppedFace3Ds = new List<Face3D>();
+            List<int> droppedSourceIndices = new List<int>();
             double droppedRatio = 0;
 
             if (nakedEdgeCount == 0)
@@ -1963,11 +2023,13 @@ namespace SAM.Geometry.OCCT.Solver
                 // otherwise be silently dropped, and the rooms it should have separated silently merge into one
                 // cell even though the outer envelope stays watertight - the "watertight-but-wrong" gap a
                 // naked-edge check alone cannot see.
-                foreach (Face3D rawFace3D in rawFace3Ds)
+                for (int idx = 0; idx < rawFace3Ds.Count; idx++)
                 {
+                    Face3D rawFace3D = rawFace3Ds[idx];
                     if (rawFace3D != null && rawFace3D.IsValid() && !IsRepresented(rawFace3D, resolved))
                     {
                         droppedFace3Ds.Add(rawFace3D);
+                        droppedSourceIndices.Add(idx); // the exact input source this dropped face is (Phase 5c provenance)
                     }
                 }
 
@@ -2000,7 +2062,10 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             // Re-add the dropped faces (RetainDropped contract) - same faces the gate above already measured,
-            // so this does not re-run IsRepresented.
+            // so this does not re-run IsRepresented. On the raw path the candidates ARE the clean raw input
+            // faces, so this is filter-only (docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §H): the face
+            // SET is unchanged from before Phase 5c, keeping the raw closure signature byte-identical.
+            int retainedStart = resolved.Count; // the index the first re-added face lands at (0 retained => no-op below)
             if (RetainDropped && droppedFace3Ds.Count != 0)
             {
                 resolved = resolved.Concat(droppedFace3Ds).ToList();
@@ -2015,6 +2080,20 @@ namespace SAM.Geometry.OCCT.Solver
             // history composed in Phase 3): every output face is attributed to the raw input face(s) it derives
             // from, so no output face is source-orphaned.
             SourceMap = BuildResolvedSourceMap(resolved, rawFace3Ds);
+
+            // Phase 5c: mark each re-added face DroppedRetained against its EXACT input source and emit a
+            // DroppedFace Info diagnostic, so a retained face is identifiable downstream (and keeps its source
+            // Guid through reconstruction, P4). Provenance/diagnostics only - the face set, geometry, cell and
+            // naked counts are untouched, so the raw golden-master signature stays byte-identical.
+            if (RetainDropped && droppedFace3Ds.Count != 0)
+            {
+                for (int i = 0; i < droppedFace3Ds.Count; i++)
+                {
+                    SourceMap.Record(droppedSourceIndices[i], new FaceKey(retainedStart + i), Provenance.DroppedRetained);
+                    Diagnostics.Add(SolverStage.Heal, DiagnosticCode.DroppedFace, OcctDiagnosticSeverity.Info,
+                        string.Format("RetainDropped (raw): re-added clean input geometry for dropped source {0}.", droppedSourceIndices[i]));
+                }
+            }
 
             RawAttemptSignature = new ClosureSignature3D(cells, cellVolumes, nakedEdgeCount: 0, faceCount: resolved.Count, droppedCount: droppedFace3Ds.Count);
             Signature = RawAttemptSignature;
