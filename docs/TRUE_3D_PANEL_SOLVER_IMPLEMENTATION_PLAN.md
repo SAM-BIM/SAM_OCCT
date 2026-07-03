@@ -492,6 +492,10 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
   documented per the local merge-gate protocol.
 
 ### Phase 5 — Diagnosis-driven closure: AutoTune3D, per-loop sew acceptance, RetainDropped v2
+- **Design review (authority):** `docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md` (GO WITH
+  CHANGES) — where it and this plan differ, **the review wins**. It carries the binding owner
+  cautions, the consolidation-rebuild redesign (no surgical imprint / no ABI v5), the per-loop-sew
+  bookkeeping+veto model, the sub-phase (5a–5f) sequencing, and the Opus 4.8 implementation prompt.
 - **Objective:** replace blind margins with bounded, diagnosed, locally-escalated closure — the
   hardest algorithmic phase.
 - **Model:** Opus 4.8 · **Effort:** XL · 3–4 sessions · risk High.
