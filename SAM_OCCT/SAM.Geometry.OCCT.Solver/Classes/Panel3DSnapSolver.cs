@@ -197,8 +197,18 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>Upper bound (metres) on the post-resolve sew tolerance - how wide a residual floor/wall slot
         /// the sew may bridge. Larger than the pre-build <c>SewingTolerance</c> (which only closes sub-cm gaps),
-        /// but clamped (≤ 0.3 m) so unrelated near edges are not over-merged. Default 0.1 m.</summary>
+        /// but clamped (≤ 0.3 m) so unrelated near edges are not over-merged. Additionally capped below half the
+        /// closest near-parallel gap by <see cref="SewSafetyFactor"/> (Phase 5d). Default 0.1 m.</summary>
         public double SewExpandTolerance { get; set; } = 0.1;
+
+        /// <summary>
+        /// Phase 5d: the fraction of the closest near-parallel gap the adaptive sew tolerance is capped at
+        /// (<c>HealStage.SewV2</c>). The measured <see cref="MinPairSeparation"/> × this factor bounds the sew,
+        /// so a global sew can never bridge more than half a genuine double-wall / cavity gap and fuse it. At the
+        /// default 0.5 an 0.08 m double wall caps the sew at 0.04 m - it stays unsewable while an unrelated wider
+        /// gap is closed (docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §F). Default 0.5.
+        /// </summary>
+        public double SewSafetyFactor { get; set; } = HealStage.DEFAULT_SewSafetyFactor;
 
         /// <summary>Step 2: after the resolve (and the sew pass), build a Face3D over each residual naked-boundary
         /// loop (air-panel candidate) so every space is fully enclosed. Default true. (Step 1 strips input holes
@@ -458,7 +468,7 @@ namespace SAM.Geometry.OCCT.Solver
             // it into FinalizeAndValidate so the FINAL naked count is measured AFTER patches/retains, not
             // before (the "pre-patch naked-count lie" §B/§H). The wires/naked points the resolve reports are
             // INTERMEDIATE diagnostics only - the outward truth is produced by FinalizeAndValidate.
-            ResolveStage.Result resolveResult = ResolveStage.Resolve(snappedFace3Ds, options, ToleranceAngle, SewResidualGaps, SewExpandTolerance, false, Diagnostics);
+            ResolveStage.Result resolveResult = ResolveStage.Resolve(snappedFace3Ds, options, ToleranceAngle, SewResidualGaps, SewExpandTolerance, SewSafetyFactor, false, Diagnostics);
             BucketMergedFace3Ds = resolveResult.BucketMergedFace3Ds;
             NativeResolved = resolveResult.NativeResolved;
 

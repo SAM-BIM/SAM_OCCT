@@ -143,5 +143,44 @@ namespace SAM.OCCT.UnitTests
             // Act & Assert
             Assert.Null(MinPairSeparation.Compute(new List<Face3D> { a, b }));
         }
+
+        [Fact]
+        public void Pairs_TwoParallelSkins_ReturnsTheSinglePairWithItsSeparation()
+        {
+            // Arrange - one near-parallel overlapping pair 0.08 m apart.
+            List<Face3D> face3Ds = new List<Face3D> { HorizontalQuad(0.0), HorizontalQuad(0.08) };
+
+            // Act
+            List<MinPairSeparation.Pair> pairs = MinPairSeparation.Pairs(face3Ds);
+
+            // Assert - exactly one pair (indices 0,1) at 0.08 m; Compute is its min.
+            Assert.Single(pairs);
+            Assert.Equal(0.08, pairs[0].Separation, 6);
+            Assert.Equal(MinPairSeparation.Compute(face3Ds), pairs[0].Separation);
+        }
+
+        [Fact]
+        public void Pairs_MaxSeparationWindow_ExcludesPairsBeyondIt()
+        {
+            // Arrange - two 0.08 m pairs (0.0<->0.08 and 0.30<->0.38); every cross gap (>= 0.22 m) is wider.
+            List<Face3D> face3Ds = new List<Face3D> { HorizontalQuad(0.0), HorizontalQuad(0.08), HorizontalQuad(0.30), HorizontalQuad(0.38) };
+
+            // Act - restrict the window to 0.10 m (the fusion veto uses 2 x the sew tolerance here).
+            List<MinPairSeparation.Pair> pairs = MinPairSeparation.Pairs(face3Ds, maxSeparation: 0.10);
+
+            // Assert - only the two 0.08 m pairs qualify; the 0.22-0.38 m cross gaps do not.
+            Assert.Equal(2, pairs.Count);
+            Assert.All(pairs, p => Assert.Equal(0.08, p.Separation, 6));
+        }
+
+        [Fact]
+        public void Pairs_NoNearParallelPair_ReturnsEmpty()
+        {
+            // Arrange - perpendicular faces.
+            List<Face3D> face3Ds = new List<Face3D> { HorizontalQuad(0.0), VerticalQuad(0.08) };
+
+            // Act & Assert
+            Assert.Empty(MinPairSeparation.Pairs(face3Ds));
+        }
     }
 }

@@ -33,6 +33,26 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Default |n·n| floor for two faces to count as parallel (anti-parallel included).</summary>
         public const double DEFAULT_ParallelDot = 0.99;
 
+        /// <summary>One near-parallel, bbox-overlapping face pair and the plane-to-plane gap between them.</summary>
+        public readonly struct Pair
+        {
+            /// <summary>Index of the first face in the scanned list.</summary>
+            public int IndexA { get; }
+
+            /// <summary>Index of the second face in the scanned list.</summary>
+            public int IndexB { get; }
+
+            /// <summary>Plane-to-plane separation (metres) - the gap the sew tolerance must stay under.</summary>
+            public double Separation { get; }
+
+            public Pair(int indexA, int indexB, double separation)
+            {
+                IndexA = indexA;
+                IndexB = indexB;
+                Separation = separation;
+            }
+        }
+
         /// <summary>
         /// The smallest plane-to-plane separation over all near-parallel, bbox-overlapping face pairs whose
         /// separation lies in [<paramref name="minSeparation"/>, <paramref name="maxSeparation"/>], or null
@@ -44,9 +64,34 @@ namespace SAM.Geometry.OCCT.Solver
             double maxSeparation = DEFAULT_MaxSeparation,
             double parallelDot = DEFAULT_ParallelDot)
         {
+            double? best = null;
+            foreach (Pair pair in Pairs(face3Ds, minSeparation, maxSeparation, parallelDot))
+            {
+                if (best == null || pair.Separation < best.Value)
+                {
+                    best = pair.Separation;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>
+        /// Every near-parallel, bbox-overlapping face pair whose plane-to-plane separation lies in
+        /// [<paramref name="minSeparation"/>, <paramref name="maxSeparation"/>] (Phase 5d): the near-parallel
+        /// pairs the sew's fusion veto must confirm survived the sew. Same O(n²) bbox-prefiltered scan that
+        /// backs <see cref="Compute"/> (which is its min); <see cref="Compute"/> delegates here.
+        /// </summary>
+        public static List<Pair> Pairs(
+            IReadOnlyList<Face3D> face3Ds,
+            double minSeparation = DEFAULT_MinSeparation,
+            double maxSeparation = DEFAULT_MaxSeparation,
+            double parallelDot = DEFAULT_ParallelDot)
+        {
+            List<Pair> pairs = new List<Pair>();
             if (face3Ds == null || face3Ds.Count < 2)
             {
-                return null;
+                return pairs;
             }
 
             // Snapshot planes and boxes once (O(n)); a null plane/box drops the face from consideration.
@@ -69,7 +114,6 @@ namespace SAM.Geometry.OCCT.Solver
                 normals[i] = plane.Normal.Unit;
             }
 
-            double? best = null;
             for (int i = 0; i < count; i++)
             {
                 if (planes[i] == null)
@@ -105,14 +149,11 @@ namespace SAM.Geometry.OCCT.Solver
                         continue;
                     }
 
-                    if (best == null || separation < best.Value)
-                    {
-                        best = separation;
-                    }
+                    pairs.Add(new Pair(i, j, separation));
                 }
             }
 
-            return best;
+            return pairs;
         }
 
         /// <summary>True when the two boxes overlap on every axis after being grown by

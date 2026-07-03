@@ -66,6 +66,7 @@ namespace SAM.Geometry.OCCT.Solver
             double toleranceAngle,
             bool sewResidualGaps,
             double sewExpandTolerance,
+            double sewSafetyFactor,
             bool fillHoles,
             SolverDiagnostics diagnostics = null)
         {
@@ -191,40 +192,25 @@ namespace SAM.Geometry.OCCT.Solver
                 }
             }
 
-            // ---- Adaptive native sew pass ----
-            // The pre-build sew (SewingTolerance ~1 cm) only bridges sub-cm gaps; the floor/wall slot gaps
-            // that survive into the resolved faces are wider. Re-sew the resolved faces at an expanded
-            // tolerance to stitch the two free edges of each slot directly - no fabricated air face - and keep
-            // the sewn result only when it strictly reduces the naked-edge count, so over-merging unrelated
-            // near edges is rejected. GapFill below then handles only what sewing could not close.
+            // ---- Adaptive residual sew (Phase 5d: HealStage.SewV2) ----
+            // The pre-build sew (SewingTolerance ~1 cm) only bridges sub-cm gaps; the floor/wall slot gaps that
+            // survive into the resolved faces are wider. SewV2 re-sews at an expanded tolerance CAPPED below half
+            // the closest near-parallel gap (MinPairSeparation × SewSafetyFactor) - so a global sew cannot fuse a
+            // genuine double wall while it stitches an unrelated slot - with per-loop bookkeeping and a fusion
+            // veto, adopting the sewn faces only when the naked-edge count strictly drops with no fusion
+            // (docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §F). GapFill then handles only what sewing could
+            // not close. Replaces the pre-5d inline sew (uncapped, no veto); the native sew itself stays global.
             if (sewResidualGaps)
             {
-                int nakedBefore = NakedEdgeCount(resolved, options);
-                if (nakedBefore > 0)
+                HealStage.SewResult sew = HealStage.SewV2(resolved, options, sewExpandTolerance, sewSafetyFactor, diagnostics);
+                if (sew.Adopted)
                 {
-                    double sewTolerance = System.Math.Min(System.Math.Max(sewExpandTolerance, options.SewingTolerance), 0.3);
-                    OcctBuildOptions sewOptions = new OcctBuildOptions(options)
-                    {
-                        SewBeforeBuild = true,
-                        SewingTolerance = sewTolerance
-                    };
+                    resolved = sew.ResolvedFace3Ds;
 
-                    List<Shell> sewnShells = GeometryQuery.Sew(resolved, out OcctCellComplexResult sewResult, sewOptions, false);
-                    sewResult?.Dispose();
-
-                    List<Face3D> sewn = sewnShells == null
-                        ? null
-                        : sewnShells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null && x.IsValid()).ToList();
-
-                    if (sewn != null && sewn.Count != 0 && NakedEdgeCount(sewn, options) < nakedBefore)
-                    {
-                        resolved = sewn;
-
-                        // §7.1 scope cut: the standalone sew->decode hop captures no history, so once
-                        // it is adopted the composed ordinals no longer address the output faces.
-                        // Disable the composition; those faces fall back to NearestSourceIndex.
-                        historyUsable = false;
-                    }
+                    // §7.1 scope cut: the standalone sew->decode hop captures no history, so once it is
+                    // adopted the composed ordinals no longer address the output faces. Disable the
+                    // composition; those faces fall back to NearestSourceIndex.
+                    historyUsable = false;
                 }
             }
 
