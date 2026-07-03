@@ -411,6 +411,20 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
 - **Fallback:** if OCCT 8.0 history for UnifySameDomain proves unreliable, run merge-coplanar
   *before* history-critical ops and map merges managed-side (geometric same-plane grouping) —
   MakerVolume+sew history alone still covers the splitting/deletion cases that matter most.
+- **Spike results (2026-07-03, OCCT 8.0.0 vc14, throwaway `cl.exe` scratch exe — all 7 GO, no
+  fallback needed):** S1 MakerVolume history — box+mid-face → 2 solids, a side face `Modified`→2
+  (split), a stray face `IsRemoved` (delete). S2 Sewing — `ModifiedSubShape` returns a face per
+  input; a hand-built `BRepTools_History` (AddModified) round-trips. S3 `BRepTools_ReShape::
+  History()` maps a replaced face 1→1 (ShapeFix chain is trackable; no sew-hop degrade needed).
+  **S4 `ShapeUpgrade_UnifySameDomain::History()` — 2 coplanar faces → 1, both inputs `Modified`→
+  the SAME output face (the key unknown: GO — the managed same-plane fallback is NOT needed).**
+  S5 `BRepTools_History::Merge` composes A→B then B→C into A→C. S6 `ShapeAnalysis_FreeBounds` on
+  an open box → 1 closed wire, 4 ordered edges, every free edge's owner face resolved via
+  `TopExp::MapShapesAndAncestors(EDGE→FACE)`. S7 `ShapeAnalysis_ShapeTolerance` on a 0.05-sew
+  shape → max 0.0315 / avg 0.0121 / min 0 (finite, sane; confirms the two-part tolerance test —
+  a healing sew legitimately exceeds 10× a 1e-6 input). Consequence: implement the full ABI v4
+  (history on MakerVolume + merge-coplanar + sew, all merged via `BRepTools_History::Merge`) as
+  designed in `docs/P3_ABI_V4_NATIVE_HISTORY_DESIGN_REVIEW.md`; no scope cuts.
 
 ### Phase 4 — Panel reconstruction fidelity: Guid, parameters, apertures, provenance
 - **Objective:** restore 2D output parity — solved panels are the *same* panels with new geometry.
