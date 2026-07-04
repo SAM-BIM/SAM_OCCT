@@ -128,8 +128,25 @@ namespace SAM.Geometry.OCCT.Solver
             //    step jog, repeated until nothing changes (see SnapToFixedPoint).
             result.SnapIterationCount = SnapToFixedPoint(panels, tol, alignColinearOffset, diagnostics);
 
-            // 2b. Normalize a level's caps onto one plane.
-            Panel3DSnapSolver.NormalizeCaps(panels, tol.Angle, normalizeCapOffset, tol.Distance, tol.VerticalAngle);
+            // 2b. Normalize each level's caps onto that level's own datum plane (Phase 6c). Cluster the current
+            //     cap faces into level frames and normalize per-frame, so a split-level landing (its own frame,
+            //     ~0.25 m above the floor) is never merged onto the main floor the way the flat 0.3 m
+            //     NormalizeCapOffset band would. Falls back to the legacy world-frame band when no cap forms a
+            //     frame (e.g. a wall-only bucket), preserving the pre-6c behaviour there.
+            List<LevelFrame> capFrames = LevelFrame.Cluster(
+                panels.Where(x => x?.Face3D != null && x.Face3D.IsValid() && x.Plane != null && !x.IsVertical(tol.VerticalAngle))
+                    .Select(x => x.Face3D)
+                    .ToList(),
+                LevelFrame.DEFAULT_NormalConeTolerance,
+                LevelFrame.DEFAULT_ElevationBand);
+            if (capFrames.Count != 0)
+            {
+                Panel3DSnapSolver.NormalizeCaps(panels, capFrames, tol.Angle, tol.Distance, tol.VerticalAngle);
+            }
+            else
+            {
+                Panel3DSnapSolver.NormalizeCaps(panels, tol.Angle, normalizeCapOffset, tol.Distance, tol.VerticalAngle);
+            }
 
             // The post-snap panels still carry their source identity (SourceIndices) and MaxExtension - the merge
             // below is the only step that collapses several into one face, so attribution is measured against them.

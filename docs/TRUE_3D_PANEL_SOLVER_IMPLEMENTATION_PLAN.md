@@ -604,6 +604,28 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
   frame count reported.
 - **Depends:** Phase 5. **Out of scope:** non-planar (curved) panels; atria spanning >2 levels
   treated specially (they resolve as ordinary tall cells).
+- **Phase 6 PARTIAL (2026-07-04).** Landed as sub-phases, each its own commit with both suites green and
+  golden masters re-run:
+  - **6a** (`b1b643b`) — `LevelFrame` clustering foundation (native-free; golden masters byte-identical).
+  - **6b** (`df054ac`) — frame-aware wall/cap/vertical classification layer (pipeline not re-routed; golden
+    masters byte-identical).
+  - **6c** (`feat(solver): normalize caps per level frame`) — **frame-aware `NormalizeCaps` only**. Caps are
+    normalized onto their own `LevelFrame` datum (0.15 m band) instead of the flat 0.30 m `NormalizeCapOffset`,
+    so a ~0.18–0.25 m split-level landing is preserved, not flattened onto the floor. RAW golden masters
+    **byte-identical** (5/5); managed golden masters unchanged for 3/5, **re-baselined** for the two
+    multi-level fixtures that genuinely carry sub-0.30 m caps — `two-level-tilted` 13→**29** cells (14→29
+    naked), `whole-level-towers` 24→**22** cells (14→12 naked) — the intended, documented consequence of
+    preserving frame separation (see TESTING.md "Per-level frames" for the exact before/after and rationale).
+    Unit: `NormalizeCapsFrameAwareTests` (+6).
+  - **DEFERRED: per-frame extend/fill conditioning.** The §E "Stage C extend/fill run per-frame" clause was
+    prototyped (cluster clean caps → group by orientation → condition each group in its own frame) and
+    **regressed the `whole-level-tilted` RAW golden master 22→8 cells**: that fixture is a single analytical
+    level whose caps span two very different tilts (~34°/~56°), and splitting the conditioning across those
+    orientations severs the walls/caps that must meet between them (raw falls through to the managed pipeline,
+    so it surfaces on the raw path). Per the plan's stop rules (raw signature change; "would require changing
+    major solver architecture") this is deferred to a later focused sub-phase with a safer design: condition in
+    a dominant frame, and split only across proven-separate storeys, never within a single multi-orientation
+    level. A `TODO` in `Panel3DSnapSolver.Execute` records the follow-up. Sub-phases 6d/6e are not started.
 
 ### Phase 7 — Cell classification, Spaces handoff, air semantics
 - **Objective:** make the cell complex analytically meaningful.

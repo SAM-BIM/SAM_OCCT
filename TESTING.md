@@ -502,3 +502,66 @@ construction, so the outcome is an exact count, not a range). Measured: ~3.5 s, 
   (see the `MaxDroppedRatio` finding, Phase 1 above) - not a defect introduced in Phase 5f - and is
   recorded here as a known scale limitation rather than something this phase's benchmark fixture needs to
   route around.
+
+## Per-level frames (true-3D panel solver plan, Phase 6)
+
+Phase 6 removes the single-global-`Up` / 20° world-frame limitations by clustering caps into per-level
+frames. It lands as sub-phases:
+
+- **6a** - `LevelFrame` (`SAM.Geometry.OCCT.Solver`): the level-datum clustering foundation
+  (`LevelFrame.Cluster` groups caps by normal cone ~5° + a 0.15 m elevation band; `AssignCapToFrame`/
+  `AssignWallToFrames` assignment with ambiguous-membership diagnostics). Pure, native-free; nothing in the
+  solver consumed it, so all golden masters were byte-identical. Unit: `LevelFrameTests`.
+- **6b** - frame-aware wall/cap/vertical classification (`SnappedPanel.IsVertical(double, Vector3D)`,
+  `LevelFrame.IsWall`/`IsCap`/`IsVertical`/`ClassifyFace`, `FaceRole`). The classification *layer* was made
+  frame-parametric; the pipeline was not re-routed, so golden masters stayed byte-identical. Unit:
+  `FrameAwareClassificationTests`.
+- **6c** - **frame-aware cap normalization only** (see below). Per-frame extend/fill conditioning is
+  **deferred** (see the deviation note).
+
+### 6c - frame-aware `NormalizeCaps` (split-level landing preservation)
+
+`Panel3DSnapSolver.NormalizeCaps(panels, IReadOnlyList<LevelFrame>, ...)` (new overload, consumed by
+`SnapStage.Clean`) normalizes each level's caps onto that level's own datum plane, grouped by `LevelFrame`
+membership (a ~0.15 m band) instead of the legacy flat 0.30 m `NormalizeCapOffset`. A cap ~0.18-0.25 m above
+a floor is therefore its **own** frame and keeps its own elevation instead of being flattened onto the floor -
+the split-level landing the plan (§E Phase 6, Risk 5) requires be preserved ("do not normalize away split
+levels"). The legacy world-frame overload is retained and used as the fallback when no cap forms a frame. Cap
+membership is decided frame-aware (`LevelFrame.ClassifyFace`), so a wall on a tilted level is never mistaken
+for a cap. Unit: `NormalizeCapsFrameAwareTests` (landing preserved; legacy-merges-it contrast lock;
+same-level tiles still snap to the datum; deterministic under input order; stacked levels never merge;
+no-frames no-op).
+
+**Golden-master re-baseline (managed path only; documented and intentional).** Raw-path signatures are
+**byte-identical** to Phase 5 for all five fixtures (the raw path is untouched - `NormalizeCaps` runs only in
+the managed clean/extend pipeline). Managed-path signatures: three of five byte-identical
+(`whole-level-flat` 22c, `tilted-two-spaces` 2c, `whole-level-tilted` 22c/0 naked); the two multi-level
+fixtures shift because they genuinely contain caps in the 0.15-0.30 m band that the legacy flat band was
+flattening away:
+
+| fixture (managed, forced) | before (Phase 5) | after (Phase 6c) |
+| --- | --- | --- |
+| `two-level-tilted.sam`  | 13 cells / 1848.092 m³ / 14 naked / 362 faces | **29 cells / 2213.303 m³ / 29 naked / 416 faces** |
+| `whole-level-towers.sam`| 24 cells / 7614.729 m³ / 14 naked / 285 faces | **22 cells / 8777.056 m³ / 12 naked / 231 faces** |
+
+These deltas are the **intended** managed-conditioning consequence of preserving frame separation: e.g.
+`two-level-tilted` has caps at 0.186 m and 0.253 m above its main slabs (a real split-level/step structure)
+that the 0.30 m band merged and the 0.15 m frame band now keeps distinct - so more of its rooms survive as
+their own cells (closer to the raw path's 43). The `Solve3D_ManagedPath` golden test asserts only `cells >= 1`
+(it records, not pins, the managed number), so no assertion re-baselining was needed; this table is the record
+of the numbers. The managed naked-edge rise on `two-level-tilted` (14 -> 29) is expected while the paired
+per-frame extend/fill is deferred (below): preserving a landing exposes the floor/wall gaps around it that the
+per-frame conditioning is meant to close.
+
+**Deviation - per-frame extend/fill conditioning is deferred (owner decision, 2026-07-04).** The plan's §E
+Phase 6 also calls for running extend/fill *per level frame*. A prototype that clustered the clean caps into
+level frames, grouped them by orientation, and conditioned each orientation group in its own frame **regressed
+the `whole-level-tilted` RAW golden master (22 -> 8 cells)** - a hard stop. Root cause: `whole-level-tilted` is
+**one** analytical level whose caps span two very different tilts (~34° floors and ~56° roof faces, across 15
+elevation frames); splitting the conditioning across those orientations severs the walls/caps that must meet
+between them, and because that fixture's raw solve falls through to the managed pipeline, the regression
+surfaces on the raw path. The pre-6c single-global-`Up` (average floor normal) conditions everything in one
+frame and gets 22. Per-frame extend/fill therefore needs a safer design - **condition in a dominant frame, and
+split only across proven-separate storeys, never within a single multi-orientation level** - and is deferred to
+a later focused sub-phase. 6c lands the frame-aware cap normalization only; the conditioning path is unchanged
+(a `TODO` in `Panel3DSnapSolver.Execute` records the follow-up). Raw golden masters remain byte-identical.

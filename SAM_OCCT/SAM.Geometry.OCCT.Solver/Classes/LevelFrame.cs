@@ -17,7 +17,7 @@ namespace SAM.Geometry.OCCT.Solver
     /// <remarks>
     /// <para>
     /// A <see cref="LevelFrame"/> is produced by <see cref="Cluster"/>, which groups near-coplanar,
-    /// co-elevation caps the way <see cref="Panel3DSnapSolver.NormalizeCaps"/> already groups a level's
+    /// co-elevation caps the way <see cref="Panel3DSnapSolver.NormalizeCaps(System.Collections.Generic.List{SnappedPanel}, double, double, double, double)"/> already groups a level's
     /// tiles - dominant-area-first, by normal cone plus a perpendicular elevation band - but formalises the
     /// grouping into a data structure with its own frame instead of snapping planes. Because the datum plane
     /// carries an up-axis, later sub-phases evaluate verticality / cap classification (6b) and run cap
@@ -267,7 +267,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// cap more than the band from every existing datum seeds its own frame. Deterministic: the seed order
         /// (area ↓, elevation ↑, centroid, index) is independent of input order, so the same caps form the
         /// same frames, and the returned list is sorted by <see cref="Elevation"/> ascending. Mirrors
-        /// <see cref="Panel3DSnapSolver.NormalizeCaps"/>'s grouping without moving any geometry.
+        /// <see cref="Panel3DSnapSolver.NormalizeCaps(System.Collections.Generic.List{SnappedPanel}, double, double, double, double)"/>'s grouping without moving any geometry.
         /// </summary>
         /// <param name="caps">Candidate cap (floor/roof, non-vertical) faces; the caller filters walls out.</param>
         /// <param name="coneTolerance">Half-angle of the same-orientation normal cone (radians).</param>

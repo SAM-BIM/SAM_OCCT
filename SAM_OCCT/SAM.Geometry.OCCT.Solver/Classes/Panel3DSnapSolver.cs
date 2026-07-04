@@ -387,6 +387,17 @@ namespace SAM.Geometry.OCCT.Solver
             // in Z, plan = XY). When the whole level is tilted, rotate the clean faces into a canonical
             // Z-up frame (mapping the level Up axis onto world Z), run the conditioning there, then rotate the
             // result back. For the ordinary upright case (Up null or already Z) no rotation happens.
+            //
+            // TODO (Phase 6c deferral): the plan calls for running extend/fill PER LEVEL FRAME rather than in
+            // this single global-Up frame. A prototype that clustered the caps into level frames and conditioned
+            // each orientation group in its own frame was measured to regress the whole-level-tilted RAW golden
+            // master (22 -> 8 cells): that fixture is ONE analytical level whose caps span two very different
+            // tilts (~34° floors and ~56° roof faces), and splitting the conditioning across those orientations
+            // severs the walls/caps that must meet between them. Per-frame extend/fill therefore needs a safer
+            // design (condition in a dominant frame, and split ONLY across proven-separate storeys, never within
+            // a single multi-orientation level) and is deferred to a later focused sub-phase. 6c lands the
+            // frame-aware cap normalization (NormalizeCaps per LevelFrame) only, which preserves split-level
+            // landings without touching this conditioning path. Raw golden masters stay byte-identical.
             Vector3D up = (Up == null || Up.Length <= ToleranceDistance) ? new Vector3D(0, 0, 1) : Up.Unit;
             if (up.Z < 0)
             {
@@ -1950,6 +1961,79 @@ namespace SAM.Geometry.OCCT.Solver
                     if (candidate.SnapToBacker(backer.Plane))
                     {
                         grouped[j] = true;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Frame-aware cap normalization (Phase 6c): snaps each level's caps onto that level's own datum plane,
+        /// grouped by <see cref="LevelFrame"/> membership instead of the flat <see cref="NormalizeCapOffset"/>
+        /// band. This is the same per-group backer snap as the legacy
+        /// <see cref="NormalizeCaps(List{SnappedPanel}, double, double, double, double)"/> - within a frame the
+        /// largest-area cap is the backer and the rest are projected onto its plane - but the group is the level
+        /// frame (a ~0.15 m elevation band, <see cref="LevelFrame.DEFAULT_ElevationBand"/>), never the 0.3 m
+        /// <see cref="NormalizeCapOffset"/> that would swallow a split-level landing. Because caps never cross a
+        /// frame, a landing ~0.25 m above the floor is its OWN frame and keeps its own elevation - the split-level
+        /// landing the plan (§E Phase 6, Risk 5) requires be preserved. Cap membership is decided frame-aware
+        /// (<see cref="LevelFrame.ClassifyFace"/>), so a wall on a tilted level is never mistaken for a cap.
+        /// A frame with a single cap is a no-op. When <paramref name="frames"/> is null/empty the caller falls
+        /// back to the legacy world-frame overload.
+        /// </summary>
+        public static void NormalizeCaps(List<SnappedPanel> panels, IReadOnlyList<LevelFrame> frames, double toleranceAngle, double toleranceDistance, double verticalAngleTolerance = 20 * (System.Math.PI / 180))
+        {
+            if (panels == null || panels.Count < 2 || frames == null || frames.Count == 0)
+            {
+                return;
+            }
+
+            // Bucket the cap panels by the level frame they belong to. ClassifyFace is frame-aware, so a wall on a
+            // >20°-tilted level classifies as a wall (not a cap) and is skipped - the world-frame ceiling the
+            // legacy overload's IsVertical carries. Diagnostics are suppressed here (the per-face spam is not
+            // useful; the clustering summary already reports the frame count).
+            Dictionary<int, List<SnappedPanel>> capsByFrame = new Dictionary<int, List<SnappedPanel>>();
+            foreach (SnappedPanel panel in panels)
+            {
+                if (panel?.Plane == null || panel.Face3D == null || !panel.Face3D.IsValid())
+                {
+                    continue;
+                }
+
+                FaceRole role = LevelFrame.ClassifyFace(panel.Face3D, frames, out int frameIndex, verticalAngleTolerance);
+                if (role != FaceRole.Cap || frameIndex < 0)
+                {
+                    continue;
+                }
+
+                if (!capsByFrame.TryGetValue(frameIndex, out List<SnappedPanel> bucket))
+                {
+                    bucket = new List<SnappedPanel>();
+                    capsByFrame[frameIndex] = bucket;
+                }
+
+                bucket.Add(panel);
+            }
+
+            // Within each frame, snap every member cap onto the largest-area member's plane (the backer/datum).
+            // Identical to the legacy per-group backer snap - only the grouping is by frame, not the flat band.
+            foreach (List<SnappedPanel> bucket in capsByFrame.Values)
+            {
+                if (bucket.Count < 2)
+                {
+                    continue;
+                }
+
+                SnappedPanel backer = bucket.OrderByDescending(x => x.GetArea()).First();
+                foreach (SnappedPanel candidate in bucket)
+                {
+                    if (ReferenceEquals(candidate, backer))
+                    {
+                        continue;
+                    }
+
+                    if (backer.IsParallelWith(candidate, toleranceAngle))
+                    {
+                        candidate.SnapToBacker(backer.Plane);
                     }
                 }
             }
