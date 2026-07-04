@@ -677,6 +677,52 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
 - **Failure modes/diagnostics:** `SliverCell` diagnostics; unclassifiable cell → warning.
 - **Depends:** Phases 1–5 (signature, mapping). **Out of scope:** thermal-zone semantics, space
   naming/numbering, IC assignment.
+- **Phase 7 COMPLETE (2026-07-04).** Preceded by a 7-pre cleanup pass (`93f6420`, the two Phase 6
+  architecture review pre-flight items — see `docs/P6_ARCHITECTURE_REVIEW.md` §O.O1/O2). Landed as three
+  sub-steps, each its own commit with both suites green and golden masters re-run first (all raw
+  signatures byte-identical throughout; all managed signatures matching the 7-pre pinned baseline
+  throughout): **7a** (`0956ced`) `SolverCell` + `Panel3DSnapSolver.Cells` (index/volume/centre/shell,
+  captured at the exact point `Signature` is produced on both paths — no new native ABI, reuses
+  `OcctCell.Volume/Center/Shell` the decode already exposes); **7b** (`5db337d`) `CellRole` +
+  `CellClassifier` (pure `Classify(volume, minCellVolume, insideEnvelope)` truth table plus
+  `ClassifyCells`, which builds one extra `AvoidInternalShapes=true` + `RetainTopology=true` envelope
+  decode of the same resolved faces and tests each cell centre via the existing `Query.IsPointInside` —
+  purely additive/opt-in, never called by `Panel3DSnapSolver.Execute`); **7c** (`7bdc355`) `Create.Spaces`
+  (solves via `Modify.Solve3D`, classifies via `CellClassifier`, builds the full cluster via the EXISTING
+  `SAM.Analytical.OCCT.Create.AdjacencyCluster` panels entry point — not reimplemented — and removes the
+  Space for every non-Interior cell). See TESTING.md "Cell classification and spaces handoff (Phase 7)"
+  for the full sub-phase breakdown, exact test names, and how-to-run commands.
+
+  **Deviations from this section's literal wording (both scope-clarifications, not scope-cuts):**
+  (1) "outer envelope = faces adjacent to exactly one cell" is realised as a SOLID test, not a face-count
+  test: `CellClassifier` builds one extra `AvoidInternalShapes=true` decode of the resolved faces (the
+  model's own outer envelope, with internal partitions collapsed) and tests each cell centre against it
+  via `Query.IsPointInside`, rather than deriving envelope-ness from `OcctCellComplexResult.
+  FaceAdjacencies` counts — investigated and rejected because a face-adjacency count alone cannot
+  distinguish a genuine perimeter room (which legitimately has envelope-touching faces) from an actual
+  exterior/complement cell; the solid-containment test is the principled discriminator the plan's own
+  "already derivable from cell metadata + `IsPointInside`" phrasing pointed at. (2) `Create.Spaces` takes
+  the RAW (unsolved) panels and calls `Modify.Solve3D` internally, rather than a
+  `Create.Spaces(solverResult)` shape taking an already-produced solver result object — `Modify.Solve3D`
+  does not currently expose such a result type (only `List<Panel>` + out-params), and introducing one
+  was judged out of scope for Phase 7 (no `Modify.Solve3D` signature change was needed or made).
+  (3) `RetainTopology` is honoured only by the native sew-then-MakerVolume path
+  (`OcctCellComplexBuilder.TrySewThenMakeVolume`), not the plain direct-MakerVolume build — a pre-existing
+  native-layer asymmetry discovered during 7b, not a Phase 7 change; `CellClassifier`'s envelope build
+  forces `SewBeforeBuild=true` to reach it, documented in TESTING.md and in code.
+
+  **Test counts after Phase 7:** unit **412/412** (400 pre-Phase-7 + 9 `CellClassifierTests` + 3
+  `CreateSpacesTests`); integration **137 pass / 1 skip** (127 pre-Phase-7 + 4 `SolverCellIntegrationTests`
+  + 3 `CellClassificationIntegrationTests` + 4 `CreateSpacesIntegrationTests` — 7a added no unit tests,
+  only integration, since `SolverCell` is a plain data snapshot with nothing to unit-test in isolation).
+  All 10 golden-master signatures unchanged throughout every sub-step; Phase 5f `Benchmark1500` unaffected.
+
+  **Prerequisites for Phase 8 carried forward** (docs/P6_ARCHITECTURE_REVIEW.md §M): `LevelFrame` info is
+  still not surfaced on the solver (computed internally, discarded); `CellRole` classification results are
+  computed on demand by `CellClassifier.ClassifyCells` callers, not cached on `Panel3DSnapSolver` itself;
+  no consolidated closure-report string yet (adopted-level/rounds/cell-classification counts exist
+  separately across `Signature`, `Diagnostics`, and `AutoTune3DSolver`'s own result). None require new
+  native ABI or block Phase 8 from starting.
 
 ### Phase 8 — Grasshopper staged exposure
 - **Objective:** expose every stage + diagnostics for MEP-engineer inspection, preserving existing

@@ -765,3 +765,112 @@ signatures confirmed (raw byte-identical 5/5; managed now exact-match 5/5 agains
 5f `Benchmark1500` unaffected (~5 s, well inside the 90 s ceiling). `docs/P6_ARCHITECTURE_REVIEW.md` records
 the full checkpoint review these two items come from; `docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md`
 points to it.
+
+## Cell classification and spaces handoff (Phase 7)
+
+Phase 7 (docs/P6_ARCHITECTURE_REVIEW.md §P) makes the resolved cell complex analytically meaningful:
+surface per-cell metadata, classify each cell, and hand the closed, classified cells off to
+`SAM.Analytical` as `Space`s - reusing the existing adjacency/panel construction path rather than
+reimplementing it. Landed as three sub-steps, each its own commit with both suites green and golden
+masters re-run first (all raw signatures byte-identical throughout; all managed signatures matching the
+7-pre pinned baseline throughout - Phase 7 never touches solver geometry, only reads its output):
+
+- **7a** (`0956ced`) - `SolverCell` (`SAM.Geometry.OCCT.Solver`): an additive per-cell snapshot (index,
+  volume, centre, boundary shell) copied from the native decode's already-exposed `OcctCell` metadata -
+  no new native ABI. `Panel3DSnapSolver.Cells` is populated at the exact point `Signature` is produced on
+  both paths (raw: `TryRawResolve`; managed: `FinalizeAndValidate`, both the consolidation-rebuild-adopted
+  and `DecodeCellVolumes` fallback legs), so `Cells.Count`/`Cells[i].Volume` always agree with
+  `Signature.CellCount`/`CellVolumes[i]`. Unit/integration: `SolverCellIntegrationTests` (raw + managed
+  populate/match-signature tests, plus same-input-twice determinism on both paths).
+- **7b** (`5db337d`) - `CellRole` (Interior/Exterior/Sliver/Unknown) and `CellClassifier`
+  (`SAM.Geometry.OCCT.Solver`). `CellClassifier.Classify(volume, minCellVolume, insideEnvelope)` is the
+  pure, unit-tested decision (a truth table, no native kernel): volume below `MinCellVolume` is always
+  Sliver regardless of location; otherwise Interior/Exterior/Unknown by an inside/outside flag, never
+  defaulted to Interior when unevaluated. `CellClassifier.ClassifyCells(cells, resolvedFace3Ds,
+  minCellVolume, options, diagnostics)` supplies that flag by building ONE extra `Create.Shells` decode of
+  the SAME resolved faces with `AvoidInternalShapes = true` (collapsing internal partitions to the
+  model's own outer envelope) and `RetainTopology = true`, then testing each cell's centre against that
+  single outer solid via the existing `Query.IsPointInside` - reusing native metadata the kernel already
+  exposes, no new entry point. **`RetainTopology` is only honoured by the native sew-then-MakerVolume
+  path** (`OcctCellComplexBuilder.TrySewThenMakeVolume`) - the plain direct MakerVolume build discards its
+  topology handle before returning - so the envelope build forces `SewBeforeBuild = true` regardless of
+  the caller's own options; a caller that reuses the default direct-build options here would silently get
+  `Unknown` for every cell. Purely additive and opt-in: `Panel3DSnapSolver.Execute` never calls it, so
+  every existing solve is unaffected. Unit: `CellClassifierTests` (the truth table). Integration:
+  `CellClassificationIntegrationTests` (a hand-built hairline sliver alongside its real-room sibling -
+  the sliver classifies Sliver and is diagnosed, the room classifies Interior; a genuine two-room box
+  classifies both Interior; all 22 real rooms in `whole-level-flat.sam` classify Interior).
+- **7c** (`7bdc355`) - `Create.Spaces` (`SAM.Analytical.OCCT.Solver`). Solves via the existing
+  `Modify.Solve3D`, classifies via `CellClassifier`, then builds the FULL adjacency cluster via the
+  existing `SAM.Analytical.OCCT.Create.AdjacencyCluster(panels, ...)` entry point (the Tower prior art) -
+  not reimplemented - and removes the `Space` for every non-Interior cell (matched back to its cell by
+  centre location, since `RelationCluster`'s object storage order is not a documented guarantee;
+  `RemoveObject` cleans up its panel relations automatically). `SAM.Analytical.OCCT.Solver` gained a
+  project reference to `SAM.Analytical.OCCT` for this (no cycle: that project does not reference back).
+
+  **Closure gate.** `Create.ShouldRefuseSpaces(nakedEdgeCount)` - a one-line pure predicate, unit-tested
+  as its own truth table - refuses to create ANY space when the resolved geometry has one or more naked
+  (free) boundary edges; the method then returns null with a `DiagnosticCode.SpacesRefused` diagnostic
+  instead of building spaces on an incomplete cell complex. This is why `Create.Spaces` on
+  `two-level-tilted.sam` behaves differently by path: the raw solve (43 cells / 0 naked, the pinned golden
+  master) produces 43 spaces, while forcing the managed pipeline (29 cells / 29 naked, the pinned 7-pre
+  baseline) is refused outright - a degraded managed result never silently becomes 29 spaces.
+
+  **Cell exclusion.** A `Sliver`/`Exterior`/`Unknown` cell does not become a Space; each exclusion emits a
+  `DiagnosticCode.CellExcludedFromSpaces` Info diagnostic (in addition to the classifier's own
+  `SliverCell` diagnostic for the Sliver case) - never silent.
+
+  **Air policy.** `Modify.Solve3D` already excludes input air panels from solving and does not re-add
+  them to its own output; `Create.Spaces` collects the caller's original air panels before solving and
+  rejoins them - together with every solver-fabricated `PanelType.Air`/`Provenance=GapFill` panel already
+  in the solved output - into the returned cluster unchanged. Neither kind of air panel ever gains or
+  splits a Space.
+
+  Unit: `CreateSpacesTests` (the closure-gate truth table). Integration: `CreateSpacesIntegrationTests` -
+  `whole-level-flat.sam` yields exactly 22 spaces whose count/panel-count match a reference
+  `AdjacencyCluster` built directly on the same solved panels (no cells excluded on this fixture);
+  `two-level-tilted.sam` raw yields 43 spaces (all interior); the SAME fixture's managed path (29 naked)
+  is refused with a `SpacesRefused` diagnostic; a synthetic single-room box with one extra `PanelType.Air`
+  panel yields exactly 1 space and the air panel surfaces unchanged in the output panels.
+
+**Verification run (local, native present), cumulative across 7a-7c.**
+
+```
+dotnet build SAM_OCCT.sln -c Debug                                              # 0 errors
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj                # 412 passed, 0 failed
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj  # 137 passed, 1 skipped
+```
+
+All 10 golden-master signatures unchanged (raw byte-identical 5/5; managed matching the 7-pre pinned
+baseline 5/5); Phase 5f `Benchmark1500` unaffected. No native ABI changes; no Grasshopper changes -
+`SolverCell`/`CellClassifier`/`Create.Spaces` are new managed-only surfaces over metadata the kernel
+already exposes.
+
+### Running Phase 7 tests
+
+```powershell
+# Cell metadata surfacing (integration, native-gated)
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~SolverCellIntegrationTests"
+
+# Cell classification (unit truth table + integration, native-gated)
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~CellClassifierTests"
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~CellClassificationIntegrationTests"
+
+# Spaces handoff / closure gate (unit truth table + integration, native-gated)
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~CreateSpacesTests"
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~CreateSpacesIntegrationTests"
+
+# Golden masters (raw + managed, all 5 fixtures) and the Phase 5f performance guard
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~GoldenMasterIntegrationTests|FullyQualifiedName~PerformanceGuardIntegrationTests"
+```
+
+### Prerequisites for Phase 8 (Grasshopper staged exposure)
+
+Per `docs/P6_ARCHITECTURE_REVIEW.md` §M, most §J staged outputs already exist on `Panel3DSnapSolver`
+(`CleanFace3Ds`, `ResolvedFace3Ds`, `NakedWires`, `SourceMap`, `Diagnostics`, `Signature`, and now `Cells`
+from Phase 7a). Still to expose before/during Phase 8: `LevelFrame` info (frame count, per-frame
+elevation/tilt) is computed but never surfaced on the solver; `CellRole` classification results
+(currently computed on demand by callers of `CellClassifier.ClassifyCells`, not cached on
+`Panel3DSnapSolver` itself); and a closure-report string combining adopted level/rounds/cell-classification
+counts. None of these require new native ABI or block Phase 8 from starting - they are additive surface
+area, consistent with every other Phase 7/7-pre change.
