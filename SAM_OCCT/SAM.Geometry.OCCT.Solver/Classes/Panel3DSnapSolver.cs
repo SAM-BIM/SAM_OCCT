@@ -376,6 +376,8 @@ namespace SAM.Geometry.OCCT.Solver
             Signature = null;
             RawAttemptSignature = null;
             StackedSlabInterfaces = new List<StackedSlabInterface>();
+            NakedWires = new List<OcctNakedWire>();
+            ResolveHistorySourceMap = null;
 
             if (face3Ds == null || face3Ds.Count == 0)
             {

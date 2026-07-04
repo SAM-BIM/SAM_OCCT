@@ -122,7 +122,14 @@ namespace SAM.Analytical.OCCT.Solver
                 Panel dominantSource = sources[dominant];
 
                 bool isMerge = sourceIndices.Count > 1;
-                bool isSplitPiece = !isMerge && sourceMap.FacesOf(dominant).Count > 1;
+
+                // The dominant source needs a fresh Guid whenever IT ALSO maps to more than one output face -
+                // regardless of whether THIS face is additionally a merge with other sources. Without the
+                // isMerge exclusion, a dominant source contributing to several distinct merged output faces
+                // (e.g. a long wall split into pieces, each piece separately merging with a different
+                // neighbour) would stamp the SAME dominantSource.Guid onto multiple Panels - a Guid collision
+                // that breaks any Guid-keyed downstream lookup.
+                bool isSplitPiece = sourceMap.FacesOf(dominant).Count > 1;
 
                 // A merge keeps the dominant source's own Guid ("wins Guid" - the plan's merge policy);
                 // only a split piece needs a fresh Guid, since the source's original Guid can address at

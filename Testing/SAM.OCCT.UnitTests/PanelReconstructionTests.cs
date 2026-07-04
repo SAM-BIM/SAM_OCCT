@@ -155,6 +155,46 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void Build_DominantSourceSplitAcrossTwoSeparateMerges_AssignsDistinctFreshGuids()
+        {
+            // A long wall (the dominant source on both pieces) split into two pieces, each piece separately
+            // merging with a different smaller neighbour - the split+merge combination isMerge alone cannot
+            // distinguish. Without treating "the dominant source itself maps to >1 output face" as its own
+            // split signal, both pieces would incorrectly keep the SAME dominantSource.Guid (a collision).
+            Face3D wholeFace3D = Rect(0, 8); // the source's own geometry, unused as an output face here
+            Panel dominant = MakePanel(wholeFace3D);
+            Panel smallA = MakePanel(Rect(0, 1));
+            Panel smallB = MakePanel(Rect(4, 5));
+
+            Face3D pieceA = Rect(0, 4);
+            Face3D pieceB = Rect(4, 8);
+
+            SourceMap sourceMap = new SourceMap();
+            sourceMap.RecordMerge(new[] { 0, 1 }, new FaceKey(0), Provenance.Resolved);
+            sourceMap.RecordMerge(new[] { 0, 2 }, new FaceKey(1), Provenance.Resolved);
+
+            List<Panel> result = PanelReconstruction.Build(
+                new List<Face3D> { pieceA, pieceB }, new List<Panel> { dominant, smallA, smallB }, sourceMap,
+                null, null, null, Tolerance.Distance, out List<OrphanedAperture> orphaned);
+
+            Assert.Equal(2, result.Count);
+            Assert.NotEqual(result[0].Guid, result[1].Guid);
+            Assert.All(result, panel => Assert.NotEqual(dominant.Guid, panel.Guid));
+
+            foreach (Panel panel in result)
+            {
+                Assert.True(panel.TryGetValue(PanelProvenanceParameter.SourceGuid, out string sourceGuid));
+                Assert.Equal(dominant.Guid.ToString(), sourceGuid);
+            }
+
+            Assert.True(result[0].TryGetValue(PanelProvenanceParameter.MergedSourceGuids, out string mergedA));
+            Assert.Equal(smallA.Guid.ToString(), mergedA);
+            Assert.True(result[1].TryGetValue(PanelProvenanceParameter.MergedSourceGuids, out string mergedB));
+            Assert.Equal(smallB.Guid.ToString(), mergedB);
+            Assert.Empty(orphaned);
+        }
+
+        [Fact]
         public void Build_ApertureInGapBetweenSplitPieces_IsOrphaned()
         {
             // The window sits at x in [1.8, 2.2] - the sliver the two produced pieces do not cover between
