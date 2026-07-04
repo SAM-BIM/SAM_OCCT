@@ -617,6 +617,17 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
     naked), `whole-level-towers` 24→**22** cells (14→12 naked) — the intended, documented consequence of
     preserving frame separation (see TESTING.md "Per-level frames" for the exact before/after and rationale).
     Unit: `NormalizeCapsFrameAwareTests` (+6).
+  - **6d** (`feat(solver): handle stacked slab interfaces across level frames`) — **observational** stacked-slab
+    / inter-storey interface handling. `StackedSlabInterfaceDetector` identifies near-congruent, opposite-facing
+    floor/ceiling skin pairs across level frames, verifies both analytical source panels survive into the
+    `SourceMap`, and rejects the unsafe cases (wide cavity/shaft, low-overlap partial step, co-parallel
+    double-skin/split-level, ambiguous frame) with diagnostics. It changes **no geometry and no source mapping** —
+    the geometric merge of two skins into one interface is already done by the native sew (raw) and
+    `SnapOpposedPartitions` (managed, ≤ 0.3 m band), and provenance is already preserved by the merge policy; a
+    new collapse would be redundant within that band and unsafe beyond it (it would collapse the cavities the plan
+    protects and risk the raw goldens). RAW and managed golden masters **all unchanged** (byte-identical raw;
+    managed identical to the documented 6c baselines). Unit `StackedSlabInterfaceDetectorTests` (+9), integration
+    `StackedSlabInterfaceIntegrationTests` (+3). See TESTING.md "Per-level frames" §6d.
   - **DEFERRED: per-frame extend/fill conditioning.** The §E "Stage C extend/fill run per-frame" clause was
     prototyped (cluster clean caps → group by orientation → condition each group in its own frame) and
     **regressed the `whole-level-tilted` RAW golden master 22→8 cells**: that fixture is a single analytical
@@ -625,7 +636,7 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
     so it surfaces on the raw path). Per the plan's stop rules (raw signature change; "would require changing
     major solver architecture") this is deferred to a later focused sub-phase with a safer design: condition in
     a dominant frame, and split only across proven-separate storeys, never within a single multi-orientation
-    level. A `TODO` in `Panel3DSnapSolver.Execute` records the follow-up. Sub-phases 6d/6e are not started.
+    level. A `TODO` in `Panel3DSnapSolver.Execute` records the follow-up. Sub-phase 6e is not started.
 
 ### Phase 7 — Cell classification, Spaces handoff, air semantics
 - **Objective:** make the cell complex analytically meaningful.

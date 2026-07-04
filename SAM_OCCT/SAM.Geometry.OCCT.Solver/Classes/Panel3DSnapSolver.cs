@@ -190,6 +190,16 @@ namespace SAM.Geometry.OCCT.Solver
         /// whether or not it was adopted - lets a rejected raw attempt still be inspected/diagnosed.</summary>
         public ClosureSignature3D RawAttemptSignature { get; private set; }
 
+        /// <summary>
+        /// The inter-storey stacked-slab interfaces detected in the input (Phase 6d,
+        /// <see cref="StackedSlabInterfaceDetector"/>): near-congruent, opposite-facing floor/ceiling skin pairs
+        /// that represent one physical inter-storey boundary. Purely observational - detecting them does NOT
+        /// change the resolved geometry or the <see cref="SourceMap"/>; the geometric "one interface for the cell
+        /// build" is done by the existing sew / opposed-partition collapse, and this records/verifies/diagnoses it
+        /// (both source panels preserved, unsafe cavities/landings rejected). Reset each <see cref="Execute"/>.
+        /// </summary>
+        public List<StackedSlabInterface> StackedSlabInterfaces { get; private set; } = new List<StackedSlabInterface>();
+
         /// <summary>Step 2: after the resolve, re-sew the resolved faces at an expanded tolerance to stitch the
         /// floor/wall slot gaps that survive the volume build, instead of patching them with fabricated faces.
         /// The sewn result is kept only when it strictly reduces the naked-edge count. Default true.</summary>
@@ -334,6 +344,7 @@ namespace SAM.Geometry.OCCT.Solver
             Diagnostics = new SolverDiagnostics();
             Signature = null;
             RawAttemptSignature = null;
+            StackedSlabInterfaces = new List<StackedSlabInterface>();
 
             if (face3Ds == null || face3Ds.Count == 0)
             {
@@ -349,6 +360,7 @@ namespace SAM.Geometry.OCCT.Solver
             // exist to inspect the managed clean/extend geometry itself.
             if (!ForceManagedPipeline && !StopAfterClean && !StopAfterExtend && TryRawResolve(options))
             {
+                DetectStackedSlabInterfaces(); // Phase 6d: observational - detect/verify/diagnose, no geometry change
                 return;
             }
 
@@ -534,6 +546,31 @@ namespace SAM.Geometry.OCCT.Solver
             // consolidation rebuild, compose provenance, and produce the FINAL naked count / wires / cells /
             // signature (docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §H).
             FinalizeAndValidate(resolvedFace3Ds, patchFace3Ds, retainedFace3Ds, retainResult.RetainedSourceIndices, resolvedSourceMap, resolveResult.ResolvedCellCount, options);
+
+            DetectStackedSlabInterfaces(); // Phase 6d: observational - detect/verify/diagnose, no geometry change
+        }
+
+        /// <summary>
+        /// Phase 6d: detects the inter-storey stacked-slab interfaces in the input and verifies that both
+        /// analytical source panels of each survive into the <see cref="SourceMap"/>. Purely observational -
+        /// it records <see cref="StackedSlabInterfaces"/> and emits diagnostics (accepted interface / rejected
+        /// cavity-or-landing / incomplete provenance) but changes NO geometry and NO source mapping, so every
+        /// golden-master signature (raw and managed) is byte-identical to before it ran. The geometric merge of
+        /// two congruent skins into one interface is already performed by the native sew (raw path) and
+        /// <see cref="SnapOpposedPartitions"/> (managed path); this makes that handling explicit, frame-aware,
+        /// and provenance-checked.
+        /// </summary>
+        private void DetectStackedSlabInterfaces()
+        {
+            StackedSlabInterfaces = StackedSlabInterfaceDetector.DetectStackedInterfaces(
+                face3Ds,
+                ToleranceAngle,
+                StackedSlabInterfaceDetector.DEFAULT_MaxSlabSeparation,
+                StackedSlabInterfaceDetector.DEFAULT_MinOverlapRatio,
+                VerticalAngleTolerance,
+                Diagnostics);
+
+            StackedSlabInterfaceDetector.VerifyRepresented(StackedSlabInterfaces, SourceMap, Diagnostics);
         }
 
         /// <summary>

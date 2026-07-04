@@ -565,3 +565,45 @@ frame and gets 22. Per-frame extend/fill therefore needs a safer design - **cond
 split only across proven-separate storeys, never within a single multi-orientation level** - and is deferred to
 a later focused sub-phase. 6c lands the frame-aware cap normalization only; the conditioning path is unchanged
 (a `TODO` in `Panel3DSnapSolver.Execute` records the follow-up). Raw golden masters remain byte-identical.
+
+### 6d - stacked-slab / inter-storey interface handling (observational)
+
+`StackedSlabInterfaceDetector.DetectStackedInterfaces` (`SAM.Geometry.OCCT.Solver`) identifies inter-storey
+stacked-slab interfaces - pairs of near-congruent, **opposite-facing** cap faces (the floor of level N and the
+ceiling of level N-1) that represent one physical inter-storey boundary - and `VerifyRepresented` checks that
+both analytical source panels survive into the `SourceMap`. `Panel3DSnapSolver.Execute` runs both on the raw and
+managed paths and exposes the result on `StackedSlabInterfaces`.
+
+**It is purely observational - it changes NO geometry and NO source mapping.** The geometric "treat two skins as
+one interface for the cell build" is already done by the proven, golden-locked mechanisms the solver runs today:
+the native **sew** stitches coincident/near-coincident skins on the raw path, and
+`Panel3DSnapSolver.SnapOpposedPartitions` collapses an opposed, congruent, within-a-wall-thickness (<= 0.3 m)
+pair on the managed path; and provenance is already preserved (the geometric attribution maps both
+coplanar-overlapping sources to the shared face, and `PanelReconstruction`'s merge policy keeps the dominant
+source's Guid and stamps the other as a merged source). A NEW collapse here would be redundant within that band
+and unsafe beyond it (a wider opposed pair bounds a genuine cavity/shaft the plan requires be kept) - and would
+risk the raw golden masters this sub-phase must hold byte-identical. So 6d formalises the **detection** across
+level frames, **verifies** the both-sources provenance, and **rejects** the unsafe cases with diagnostics,
+rather than introducing a geometry change.
+
+- **Gates (conservative).** A pair is an interface only when: both are caps (non-vertical); their normals are
+  anti-parallel within ~5° (opposite-facing = two different rooms' skins - this is what distinguishes a
+  stacked slab from a co-parallel split-level whole floor / double-skin, winding-independently, because
+  opposite-facing skins are anti-parallel under either winding convention); their footprints overlap >= 80% of
+  the larger (congruent - which rejects a small-over-large split-level landing / partial step); their
+  perpendicular separation is <= 0.3 m (the `OPPOSED_PARTITION_MAX_SEPARATION` slab band - wider is a
+  cavity/shaft, kept); and both skins assign to a level frame unambiguously. Every rejection (wide cavity, low
+  overlap, co-parallel double-skin/split-level, ambiguous frame) emits a diagnostic (`RejectedCollapse` /
+  `AmbiguousLevelFrame`); an accepted interface emits `DuplicateFace` (Info); the provenance check emits
+  `AdoptedLevel` (both represented) or `DroppedFace` (one missing) - never silent.
+- **Golden masters: unchanged.** Raw signatures **byte-identical** to 6c (5/5); managed signatures identical to
+  the documented 6c baselines (5/5, including the re-baselined `two-level-tilted` 29c/29n and
+  `whole-level-towers` 22c/12n) - because the detector is observational. The perf guard (Benchmark1500) is
+  unaffected (a plan-bbox pre-filter keeps the pairwise cap scan cheap).
+- **Tests.** Unit `StackedSlabInterfaceDetectorTests` (+9): opposed congruent skins detected (coincident and
+  slab-separated); co-parallel split-level rejected (diagnosed); partial-step landing rejected (low overlap);
+  wide cavity rejected; side-by-side caps ignored (plan pre-filter); deterministic order; `VerifyRepresented`
+  both-mapped / one-missing. Integration `StackedSlabInterfaceIntegrationTests` (+3, native-gated): a two-storey
+  stacked fixture resolves to 2 cells / 0 naked with both mid-slab sources represented and the interface
+  detected; a 0.4 m cavity is rejected and survives (>= 2 cells, both sources kept); a split-level landing is
+  not detected as a stacked interface.
