@@ -39,6 +39,13 @@ namespace SAM.Geometry.OCCT.Solver
             /// <summary>How many <see cref="Panel3DSnapSolver.Snap"/> passes <see cref="SnapToFixedPoint"/> ran
             /// before no panel changed further (1 when a single pass already converged).</summary>
             public int SnapIterationCount { get; set; }
+
+            /// <summary>
+            /// The level datums (Phase 6a) clustered from this clean pass's caps before cap normalization
+            /// (Phase 8 reporting capture) - empty when no cap formed a frame (the legacy world-frame
+            /// normalization fallback ran instead). Read-only; does not affect the returned geometry.
+            /// </summary>
+            public List<LevelFrame> LevelFrames { get; set; } = new List<LevelFrame>();
         }
 
         /// <summary>
@@ -139,6 +146,7 @@ namespace SAM.Geometry.OCCT.Solver
                     .ToList(),
                 LevelFrame.DEFAULT_NormalConeTolerance,
                 LevelFrame.DEFAULT_ElevationBand);
+            result.LevelFrames = capFrames;
             if (capFrames.Count != 0)
             {
                 Panel3DSnapSolver.NormalizeCaps(panels, capFrames, tol.Angle, tol.Distance, tol.VerticalAngle, diagnostics);

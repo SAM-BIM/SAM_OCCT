@@ -274,6 +274,15 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>True when the native OCCT kernel ran the resolve stage; false for a managed-only result.</summary>
         public bool NativeResolved { get; private set; }
 
+        /// <summary>
+        /// True when the raw-first (L0) attempt was adopted (<see cref="TryRawResolve"/> returned true) -
+        /// i.e. the managed clean/extend/resolve pipeline below never ran. False when the managed pipeline
+        /// produced the adopted result (raw rejected, or <see cref="ForceManagedPipeline"/>/<see cref="StopAfterClean"/>/
+        /// <see cref="StopAfterExtend"/> skipped the raw attempt). Additive (Phase 8): lets a caller report
+        /// which path was adopted without re-deriving it from diagnostic message text.
+        /// </summary>
+        public bool RawAdopted { get; private set; }
+
         /// <summary>Number of closed cells (rooms/levels) the native MakerVolume formed. 1 = single space; 0 = none.</summary>
         public int ResolvedCellCount { get; private set; }
 
@@ -290,6 +299,15 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Step 1 output: clean single panels - external shape only, within-bucket parallels snapped
         /// onto one backer, contained/overlapping coplanar faces merged. The input to Step 2 (fill/extend).</summary>
         public List<Face3D> CleanFace3Ds { get; private set; } = new List<Face3D>();
+
+        /// <summary>
+        /// The level datums (Phase 6a <see cref="LevelFrame"/>) clustered from the managed clean bucket's caps
+        /// (<see cref="SnapStage.Clean"/>), captured for reporting (Phase 8). Empty when <see cref="RawAdopted"/>
+        /// is true (the raw path never clusters caps into frames - see <see cref="RawAttemptSignature"/>) or
+        /// when no cap formed a frame (the legacy world-frame fallback ran instead). Read-only capture of data
+        /// the managed pipeline already computes; does not change any solver geometry or algorithm.
+        /// </summary>
+        public IReadOnlyList<LevelFrame> LevelFrames { get; private set; } = new List<LevelFrame>();
 
         /// <summary>The face set fed to the native MakerVolume - after the clean bucket, fill, extend and the
         /// coplanar pre-merge ("after bucket merge"). Exposed for visual debugging of the pre-resolve state.</summary>
@@ -350,8 +368,10 @@ namespace SAM.Geometry.OCCT.Solver
             OpenWallEndPoint3Ds = new List<Point3D>();
             OpenWallFace3Ds = new List<Face3D>();
             NativeResolved = false;
+            RawAdopted = false;
             ResolvedCellCount = 0;
             Cells = new List<SolverCell>();
+            LevelFrames = new List<LevelFrame>();
             Diagnostics = new SolverDiagnostics();
             Signature = null;
             RawAttemptSignature = null;
@@ -371,6 +391,7 @@ namespace SAM.Geometry.OCCT.Solver
             // exist to inspect the managed clean/extend geometry itself.
             if (!ForceManagedPipeline && !StopAfterClean && !StopAfterExtend && TryRawResolve(options))
             {
+                RawAdopted = true;
                 DetectStackedSlabInterfaces(); // Phase 6d: observational - detect/verify/diagnose, no geometry change
                 return;
             }
@@ -397,6 +418,7 @@ namespace SAM.Geometry.OCCT.Solver
             SourceMap snapSourceMap = new SourceMap();
             SnapStage.Result snapResult = SnapStage.Clean(SnappedPanels, tolerances, AlignColinearOffset, NormalizeCapOffset, Diagnostics, snapSourceMap);
             CleanFace3Ds = snapResult.CleanFace3Ds;
+            LevelFrames = snapResult.LevelFrames;
 
             if (StopAfterClean)
             {
