@@ -538,6 +538,35 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
   (loop pair, reason), residual `NakedLoop`s with wire polylines for GH display; best-effort result
   always returned with `AdoptedLevel`+rounds recorded.
 - **Depends:** Phases 2–4. **Out of scope:** per-level frames (Phase 6), spaces handoff (Phase 7).
+- **Phase 5 COMPLETE (2026-07-04).** Delivered as sub-phases 5a–5f exactly per
+  `docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md` §K, each its own commit with both suites green and
+  golden masters re-run first (all 10 signatures byte-identical throughout — every 5a–5f change is
+  additive or gated so it never touches the raw/managed paths' existing outputs): 5a foundations
+  (`SliverCellCount`, `MinPairSeparation`, `LoopAttribution`); 5b `GapFill.FromNakedWires` +
+  `FinalizeAndValidate` (the single final-truth naked-count/signature producer); 5c `RetainDroppedV2`
+  (re-adds original clean geometry, map-driven drop detection); 5d `HealStage.SewV2` (capped global sew +
+  per-loop bookkeeping + fusion veto); 5e `AutoTune3DSolver` + `Modify.AutoTune3D` (bounded,
+  diagnosis-driven escalation — see TESTING.md's Phase 5 section for the full engagement/acceptance
+  contract); 5f `BenchmarkFixture`/`PerformanceGuardIntegrationTests` (~1,500-face performance guard,
+  <90 s soft ceiling, measured ~3.5 s) plus this documentation.
+  **One binding owner refinement mid-phase (5e, 2026-07-03):** AutoTune3D's engagement gate was widened
+  from the review's literal "naked edges only" wording to "naked edges OR fabricated GapFill/HoleFill
+  patches present" — 5b's own GapFill pre-closes many synthetic gaps to `naked == 0` before AutoTune ever
+  sees them, so the literal gate would never fire on exactly the fixtures Phase 5e most needed to prove;
+  engaging on fabrication too lets AutoTune try real measured extension before falling back to a
+  fabricated patch. `IsAcceptableRound` gained a matching second (fabrication-driven) acceptance mode;
+  the naked-driven mode is untouched. **One scope adjustment (5f, 2026-07-04):** the ~1,500-face
+  benchmark fixture is a performance/scaling guard only and does not force AutoTune escalation rounds —
+  measured directly, a *connected* shared-wall lattice at a comparable cell count blows the 90 s ceiling
+  (MakerVolume's cost tracks connected-component size, not total face count, confirming §M's caution),
+  and separately, perturbing one room in a *multi-room* model is silently absorbed by the existing
+  (Phase 1/5c) `RetainDropped` recovery path regardless of defect size, sew settings, or connectivity
+  style — a documented property of the calibrated low-drop-ratio design, not a Phase 5f defect. Round
+  budget / GapFill-replacement / residual-diagnostics behaviour remains proven at small scale by
+  `AutoTune3DIntegrationTests` (Phase 5e), which does not need re-proving at 1,500-face scale. Full
+  suite after Phase 5: unit **356/356**, integration **123 pass / 1 skip** (native-gated; the
+  performance guard adds one more native-gated test, skippable independently via
+  `SAM_OCCT_SKIP_PERF`).
 
 ### Phase 6 — Per-level frames + inter-storey gappy closure
 - **Objective:** remove the single-global-`Up` limitation and the 20° world-frame tilt ceiling;

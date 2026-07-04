@@ -407,3 +407,98 @@ should be bumped (or parameterized) in a follow-up hygiene change - out of
 scope here because CI native build is separately owner-deferred (CI stays
 managed-only; see the native-native gap below) and this plan's phases are
 gated by the *local* integration run, not CI.
+
+## Diagnosis-driven closure: AutoTune3D, per-loop sew, benchmark guard (true-3D panel solver plan, Phase 5)
+
+Phase 5 (design authority: `docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md`) replaces blind extension
+margins with bounded, diagnosed, locally-escalated closure. Six sub-phases (5a-5f), each its own commit,
+both suites green and golden masters re-run before the next:
+
+- **5a** - foundations: `ClosureSignature3D.SliverCellCount` (additive; `IsRegressionOf` semantics
+  unchanged), managed-path `Signature` population, `MinPairSeparation`, `LoopAttribution.AttributeLoopsToSources`,
+  a determinism lock. Unit: `ClosureSignature3DTests`, `MinPairSeparationTests`, `LoopAttributionTests`,
+  `DeterminismTests`.
+- **5b** - `GapFill.FromNakedWires` (native-wire-driven patching; planar patch / tagged fan fallback /
+  residual warnings, never silent) + `Panel3DSnapSolver.FinalizeAndValidate` (the single final-truth step:
+  assembles resolved + patches + retained, runs the signature-gated consolidation rebuild via
+  `Create.Shells`, composes provenance, and is the ONLY producer of the outward naked count/wires/`Signature`
+  - every earlier validate in the pipeline is an intermediate diagnostic only). Unit: `GapFillV2Tests`.
+  Integration: `GapFillIntegrationTests`.
+- **5c** - `HealStage.RetainDroppedV2` (re-adds the ORIGINAL CLEAN geometry - the `SnapStage` output, not
+  the extended/overshooting candidate - for every input source the resolve genuinely dropped, detected
+  map-side via `SourceMap.FacesOf(source).Count == 0`, behind `IsRepresented`/area/validity filters,
+  tagged `Provenance.DroppedRetained`). Unit: `RetainDroppedV2Tests`. Integration:
+  `DroppedRetainIntegrationTests`.
+- **5d** - `HealStage.SewV2` replaces `ResolveStage`'s inline adaptive sew: the native sew stays GLOBAL
+  (there is no per-loop native sew) but is capped below `MinPairSeparation x SewSafetyFactor` (default 0.5,
+  hard clamp 0.3 m) so a global sew cannot fuse a genuine double wall, with before/after per-loop
+  bookkeeping (Closed/Persisting/New) as acceptance EVIDENCE and a fusion veto (any pre-sew near-parallel
+  pair that does not survive the sew rejects the whole result). Unit: `SewV2Tests`. Integration:
+  `SewV2IntegrationTests` (ParallelPairWeld: a 0.08 m double wall caps the sew `<= 0.04` m and both skins
+  survive; ShaftProtection: a 0.35 m cavity is far wider than the sew tolerance and survives).
+- **5e** - `AutoTune3DSolver` (`SAM.Geometry.OCCT.Solver`) and its analytical wrapper `Modify.AutoTune3D`
+  (`SAM.Analytical.OCCT.Solver`): a bounded (`AutoTune3DOptions.MaxRounds`, default 3), diagnosis-driven
+  escalation loop wrapping `Panel3DSnapSolver`. See "AutoTune3D engagement and acceptance" below.
+- **5f** - the ~1,500-face `BenchmarkFixture`/`PerformanceGuardIntegrationTests` performance guard and this
+  documentation. See "Benchmark1500 performance guard" below.
+
+**AutoTune3D engagement and acceptance rules.** `AutoTune3DSolver.Execute` runs a raw-first
+`Panel3DSnapSolver` baseline, then engages the escalation loop when the baseline leaves naked (free)
+boundary edges **or** closed only by fabricating GapFill/HoleFill patches (owner refinement, 2026-07-03: a
+strict "naked edges only" gate never fires on synthetic fixtures, because 5b's GapFill pre-closes many
+simple gaps to `naked == 0` before AutoTune ever sees them - engaging on fabrication too lets AutoTune try
+measured wall extension first, replacing last-resort fabricated geometry where it safely can). Each round
+attributes the residual naked loops (`LoopAttribution`) and the walls adjacent to each fabricated patch to
+their source panels, raises ONLY those culprits' `MaxExtend` one ladder rung
+(`[0.5, 0.75, 1.0, 1.5]`; a culprit already at the top rung is exhausted and drops out;
+`EscalateBucket` stays OFF by default - a partition-collapse hazard), and re-solves through the managed
+pipeline (`ForceManagedPipeline`, so the raw path is not repeatedly re-tried). `IsAcceptableRound` has two
+modes sharing the same guards (no `ClosureSignature3D` regression, no sliver-cell rise, every new cell
+positively proven adjacent to a loop that closed this round via `CellIncreaseAdjacent` - unprovable
+adjacency rejects conservatively, never benefit-of-the-doubt): naked-driven rounds require the naked count
+to strictly drop; fabrication-driven rounds require naked to stay at 0 while the fabricated patch count
+strictly drops. A rejected round is atomic (discarded, loop stops) with an `EscalatedPanel` Warning naming
+the reason; accepted escalations get an `EscalatedPanel` Info; residual naked loops and residual
+fabrication get diagnosed (never silently returned). Best-effort always: `AutoTune3DSolver` never throws
+for an unresolved loop. Unit: `AutoTune3DTests` (ladder progression, culprit-only/exhausted escalation, the
+acceptance truth table for both modes, the conservative adjacency reject, bucket-off). Integration
+(native-gated): `AutoTune3DIntegrationTests` (a fabricated-patch bake-off replaced by measured extension; an
+unclosably-wide gap rejected and stopped boundedly with residual diagnostics and no throw; a 0.35 m
+shaft/partition survives; a watertight baseline never engages) and
+`AutoTune3DAnalyticalIntegrationTests` (the `Modify.AutoTune3D` wrapper closes end-to-end while preserving
+Guid/construction via `PanelReconstruction`). `Modify.AutoTune3D` is a SEPARATE, opt-in entry point -
+normal `Modify.Solve3D` does not invoke AutoTune and its behaviour (including all ten golden-master
+signatures) is unchanged.
+
+**Benchmark1500 performance guard.** `BenchmarkFixture.Benchmark1500()` (`Testing/SAM.OCCT.IntegrationTests`)
+generates a deterministic, parametric ~1,500-face fixture (10 x 5 x 5 = 250 independent, disjoint,
+watertight 6-face room boxes, each separated from its neighbours by a 1 m gap on every axis - nothing is
+randomised, so there is nothing to seed). `PerformanceGuardIntegrationTests` runs it through
+`AutoTune3DSolver` and asserts: wall-clock under a 90 s soft ceiling (docs §J fixture 8 / §M), and exact
+closure sanity (`naked == 0`, `cells == 250`, `rounds == 0` - every room is independently watertight by
+construction, so the outcome is an exact count, not a range). Measured: ~3.5 s, comfortably inside budget.
+
+- *Skip seam:* set `SAM_OCCT_SKIP_PERF` (any non-empty value) to opt out of this one test - useful on a
+  resource-constrained or shared CI agent where even a fast 90 s-budgeted test is undesirable. The skip
+  reason names the variable explicitly, and the test writes the variable's state to test output before
+  checking it, so a report gathered from a run where native is unavailable still shows whether the
+  opt-out was set. This is independent of, and checked before, the ordinary native-missing skip every
+  other integration test in this suite already uses - neither skip reason fails the lightweight/CI
+  (managed-only, native-less) run.
+- *Why the fixture is watertight, not gappy:* owner decision (2026-07-04) - Benchmark1500 is a
+  performance/scaling guard only; it does not need to force AutoTune escalation rounds, because
+  AutoTune's correctness does not depend on overall model size and is already proven at small scale by
+  `AutoTune3DIntegrationTests` above. Measured separately: a single continuous shared-wall lattice at a
+  comparable cell count (~700 cells) took over 130 s for just the first native resolve - MakerVolume's
+  cost is driven by CONNECTED COMPONENT size, not total face/cell count (the review's own non-linear-
+  scaling caution, §M) - so Benchmark1500 uses many small independent components instead of one large
+  connected one. Separately, introducing a gappy perturbation into a *multi-room* model proved unreliable
+  with the current pipeline: a single broken room's faces get silently absorbed by the raw-adoption
+  gate's `RetainDropped` recovery path (the room never forms a cell, but the drop also never surfaces a
+  naked-edge or fabricated-patch signal) whenever OTHER valid rooms coexist in the same solve - confirmed
+  across defect size (a partial wall cut vs. an entire missing face), sew settings
+  (`SewBeforeBuild` true/false), and room connectivity/clustering style. This is the existing (Phase
+  1/5c) raw-first + `RetainDropped` design working exactly as calibrated for a low tolerated drop ratio
+  (see the `MaxDroppedRatio` finding, Phase 1 above) - not a defect introduced in Phase 5f - and is
+  recorded here as a known scale limitation rather than something this phase's benchmark fixture needs to
+  route around.
