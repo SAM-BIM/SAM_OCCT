@@ -4,6 +4,7 @@
 using SAM.Analytical.Solver;
 using SAM.Core;
 using SAM.Core.OCCT;
+using SAM.Geometry.OCCT;
 using SAM.Geometry.OCCT.Solver;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
@@ -80,13 +81,50 @@ namespace SAM.Analytical.OCCT.Solver
             double minApertureArea = Tolerance.MacroDistance,
             double maxApertureDistance = Tolerance.MacroDistance)
         {
+            return Solve3D(panels, out nakedPoint3Ds, out diagnostics, out orphanedApertures, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, forceManagedPipeline, minApertureArea, maxApertureDistance);
+        }
+
+        /// <summary>
+        /// Phase 8 overload: as <see cref="Solve3D(IEnumerable{Panel}, out List{Point3D}, out List{string}, out List{OrphanedAperture}, IEnumerable{double}, IEnumerable{double}, double, double, double, double, OcctBuildOptions, bool, double, double)"/>,
+        /// additionally returning a <see cref="Solve3DReport"/> bundling every staged/diagnostic field the
+        /// solver already produces (closure signatures, diagnostics, source map, cells, naked wires, Stage A
+        /// clean faces, level frames) for Grasshopper inspection
+        /// (docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md Phase 8). Solves geometry identically to the
+        /// other overloads; this only adds reporting.
+        /// </summary>
+        /// <param name="report">The staged solve snapshot; never null, even when the solve produced no result.</param>
+        /// <param name="classifyCells">When true, runs the additive Phase 7b cell classification
+        /// (<see cref="CellClassifier.ClassifyCells"/>) - one extra native envelope decode - and populates
+        /// <see cref="Solve3DReport.CellRoles"/>. Default false (no extra native cost unless requested).</param>
+        /// <param name="minCellVolume">Minimum cell volume (m3) below which a cell classifies <see cref="CellRole.Sliver"/>; only used when <paramref name="classifyCells"/> is true.</param>
+        public static List<Panel> Solve3D(
+            this IEnumerable<Panel> panels,
+            out List<Point3D> nakedPoint3Ds,
+            out List<string> diagnostics,
+            out List<OrphanedAperture> orphanedApertures,
+            out Solve3DReport report,
+            IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
+            double minBucketSize = 0.4,
+            double thicknessFactor = 0.6,
+            double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3,
+            OcctBuildOptions options = null,
+            bool forceManagedPipeline = false,
+            double minApertureArea = Tolerance.MacroDistance,
+            double maxApertureDistance = Tolerance.MacroDistance,
+            bool classifyCells = false,
+            double minCellVolume = 0.05)
+        {
             nakedPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
             orphanedApertures = new List<OrphanedAperture>();
+            report = null;
 
             if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
             {
                 diagnostics.Add("SAM_OCCT_SOLVE3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.");
+                report = new Solve3DReport(false, null, null, null, null, sources, null, null, null, null, null, false, 0);
                 return null;
             }
 
@@ -108,6 +146,7 @@ namespace SAM.Analytical.OCCT.Solver
             if (resolved == null || resolved.Count == 0)
             {
                 diagnostics.Add("SAM_OCCT_SOLVE3D_NO_RESULT: The solver produced no resolved faces.");
+                report = BuildReport(solver, sources, options, classifyCells, minCellVolume);
                 return new List<Panel>();
             }
 
@@ -167,12 +206,37 @@ namespace SAM.Analytical.OCCT.Solver
             // Surface the structured solver diagnostics (gate rejections, adopted level, ...) alongside the
             // existing SAM_OCCT_* summary lines, so every rejection's reason is visible without changing this
             // method's List<string> diagnostics contract.
-            foreach (SAM.Geometry.OCCT.Solver.SolverDiagnostic solverDiagnostic in solver.Diagnostics?.All ?? new List<SAM.Geometry.OCCT.Solver.SolverDiagnostic>())
-            {
-                diagnostics.Add(string.Format("SAM_OCCT_SOLVE3D_DIAGNOSTIC: {0}", solverDiagnostic));
-            }
+            diagnostics.AddRange(SolverReportFormat.FormatDiagnostics(solver.Diagnostics, "SAM_OCCT_SOLVE3D"));
+
+            report = BuildReport(solver, sources, options, classifyCells, minCellVolume);
 
             return result;
+        }
+
+        /// <summary>Assembles a <see cref="Solve3DReport"/> from a solver that has already run <c>Execute</c>,
+        /// optionally running the additive Phase 7b cell classification.</summary>
+        private static Solve3DReport BuildReport(Panel3DSnapSolver solver, List<Panel> sources, OcctBuildOptions options, bool classifyCells, double minCellVolume)
+        {
+            IReadOnlyList<CellRole> cellRoles = null;
+            if (classifyCells && solver.Cells != null && solver.Cells.Count != 0)
+            {
+                cellRoles = CellClassifier.ClassifyCells(solver.Cells, solver.ResolvedFace3Ds, minCellVolume, options, solver.Diagnostics);
+            }
+
+            return new Solve3DReport(
+                solver.RawAdopted,
+                solver.Signature,
+                solver.RawAttemptSignature,
+                solver.Diagnostics,
+                solver.SourceMap,
+                sources,
+                solver.Cells,
+                cellRoles,
+                solver.NakedWires,
+                solver.CleanFace3Ds,
+                solver.LevelFrames,
+                solver.NativeResolved,
+                solver.ResolvedCellCount);
         }
 
         /// <summary>
