@@ -263,11 +263,35 @@ namespace SAM.Analytical.OCCT.Solver
             double alignColinearOffset = 0.3,
             double normalizeCapOffset = 0.3)
         {
+            return Clean3D(panels, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset);
+        }
+
+        /// <summary>
+        /// Phase 8 overload: as <see cref="Clean3D(IEnumerable{Panel}, out List{string}, IEnumerable{double}, IEnumerable{double}, double, double, double, double)"/>,
+        /// additionally returning a <see cref="Solve3DReport"/> for Grasshopper inspection of Stage A
+        /// (diagnostics, source map, level frames). No native resolve happens on this path, so
+        /// <see cref="Solve3DReport.Signature"/>/<see cref="Solve3DReport.Cells"/>/<see cref="Solve3DReport.NakedWires"/>
+        /// stay null/empty - honestly reported, not fabricated.
+        /// </summary>
+        /// <param name="report">The staged Stage A snapshot; never null, even when the clean pass produced no result.</param>
+        public static List<Panel> Clean3D(
+            this IEnumerable<Panel> panels,
+            out List<string> diagnostics,
+            out Solve3DReport report,
+            IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
+            double minBucketSize = 0.4,
+            double thicknessFactor = 0.6,
+            double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3)
+        {
             diagnostics = new List<string>();
+            report = null;
 
             if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
             {
                 diagnostics.Add("SAM_OCCT_CLEAN3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.");
+                report = new Solve3DReport(false, null, null, null, null, sources, null, null, null, null, null, false, 0);
                 return null;
             }
 
@@ -281,6 +305,7 @@ namespace SAM.Analytical.OCCT.Solver
             if (clean == null || clean.Count == 0)
             {
                 diagnostics.Add("SAM_OCCT_CLEAN3D_NO_RESULT: The clean bucket produced no panels.");
+                report = BuildStageReport(solver, sources);
                 return new List<Panel>();
             }
 
@@ -290,6 +315,10 @@ namespace SAM.Analytical.OCCT.Solver
                 "SAM_OCCT_CLEAN3D_RESULT: Cleaned {0} panel(s) into {1} clean panel(s).",
                 face3Ds.Count,
                 result.Count));
+
+            diagnostics.AddRange(SolverReportFormat.FormatDiagnostics(solver.Diagnostics, "SAM_OCCT_CLEAN3D"));
+
+            report = BuildStageReport(solver, sources);
 
             return result;
         }
@@ -323,11 +352,36 @@ namespace SAM.Analytical.OCCT.Solver
             double alignColinearOffset = 0.3,
             double normalizeCapOffset = 0.3)
         {
+            return Extend3D(panels, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, fillMargin, alignColinearOffset, normalizeCapOffset);
+        }
+
+        /// <summary>
+        /// Phase 8 overload: as <see cref="Extend3D(IEnumerable{Panel}, out List{string}, IEnumerable{double}, IEnumerable{double}, double, double, double, double, double)"/>,
+        /// additionally returning a <see cref="Solve3DReport"/> for Grasshopper inspection of the pre-resolve
+        /// conditioned state (diagnostics, source map, level frames). No native resolve happens on this path,
+        /// so <see cref="Solve3DReport.Signature"/>/<see cref="Solve3DReport.Cells"/>/<see cref="Solve3DReport.NakedWires"/>
+        /// stay null/empty - honestly reported, not fabricated.
+        /// </summary>
+        /// <param name="report">The staged pre-resolve snapshot; never null, even when the pass produced no result.</param>
+        public static List<Panel> Extend3D(
+            this IEnumerable<Panel> panels,
+            out List<string> diagnostics,
+            out Solve3DReport report,
+            IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
+            double minBucketSize = 0.4,
+            double thicknessFactor = 0.6,
+            double fillMargin = 0.5,
+            double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3)
+        {
             diagnostics = new List<string>();
+            report = null;
 
             if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
             {
                 diagnostics.Add("SAM_OCCT_EXTEND3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.");
+                report = new Solve3DReport(false, null, null, null, null, sources, null, null, null, null, null, false, 0);
                 return null;
             }
 
@@ -351,6 +405,7 @@ namespace SAM.Analytical.OCCT.Solver
             if (extended == null || extended.Count == 0)
             {
                 diagnostics.Add("SAM_OCCT_EXTEND3D_NO_RESULT: The fill/extend pass produced no panels.");
+                report = BuildStageReport(solver, sources);
                 return new List<Panel>();
             }
 
@@ -370,7 +425,33 @@ namespace SAM.Analytical.OCCT.Solver
                 openWallEndCount,
                 solver.OpenWallFace3Ds?.Count ?? 0));
 
+            diagnostics.AddRange(SolverReportFormat.FormatDiagnostics(solver.Diagnostics, "SAM_OCCT_EXTEND3D"));
+
+            report = BuildStageReport(solver, sources);
+
             return result;
+        }
+
+        /// <summary>Assembles a <see cref="Solve3DReport"/> from a solver run through a pre-resolve stage
+        /// (<c>StopAfterClean</c>/<c>StopAfterExtend</c>) - no native resolve happens, so
+        /// <see cref="Panel3DSnapSolver.Signature"/>/<see cref="Panel3DSnapSolver.Cells"/>/<see cref="Panel3DSnapSolver.NakedWires"/>
+        /// stay null/empty on the solver itself; this reports that state honestly rather than fabricating it.</summary>
+        private static Solve3DReport BuildStageReport(Panel3DSnapSolver solver, List<Panel> sources)
+        {
+            return new Solve3DReport(
+                solver.RawAdopted,
+                solver.Signature,
+                solver.RawAttemptSignature,
+                solver.Diagnostics,
+                solver.SourceMap,
+                sources,
+                solver.Cells,
+                null,
+                solver.NakedWires,
+                solver.CleanFace3Ds,
+                solver.LevelFrames,
+                solver.NativeResolved,
+                solver.ResolvedCellCount);
         }
 
         /// <summary>

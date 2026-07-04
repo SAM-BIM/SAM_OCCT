@@ -89,6 +89,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 result.Add(new GH_SAMParam(new GooPanelParam() { Name = "SlitPanels", NickName = "SlitPanels", Description = "Clean panels whose section axes touch a remaining slit. Use these to spot double-wall/problem panels and target bucket-size overrides.", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "Diagnostics", NickName = "Diagnostics", Description = "Diagnostics", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "Successful", NickName = "Successful", Description = "Run successfully?", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
+
+                // Phase 8: Stage A reporting, append-only and Voluntary - existing saved definitions keep working.
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "SourceMap", NickName = "SourceMap", Description = "One line per input source: which clean output face(s) it contributed to.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelFrames", NickName = "LevelFrames", Description = "One line per clustered level datum (elevation, tilt, cap count) cap normalization conditioned onto. Empty when the model formed no frames.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+
                 return result.ToArray();
             }
         }
@@ -167,7 +172,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref slitMaxOverlap);
             }
 
-            List<Panel> cleanPanels = panels.Clean3D(out List<string> diagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset);
+            List<Panel> cleanPanels = panels.Clean3D(out List<string> diagnostics, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset);
 
             index = Params.IndexOfOutputParam("Panels");
             if (index != -1)
@@ -203,6 +208,18 @@ namespace SAM.Analytical.Grasshopper.OCCT
             if (index_Successful != -1)
             {
                 dataAccess.SetData(index_Successful, cleanPanels != null && cleanPanels.Count != 0);
+            }
+
+            index = Params.IndexOfOutputParam("SourceMap");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, report?.FormatSourceMap());
+            }
+
+            index = Params.IndexOfOutputParam("LevelFrames");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, report == null ? null : SolverReportFormat.FormatLevelFrames(report.LevelFrames));
             }
         }
 

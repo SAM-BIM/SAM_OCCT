@@ -73,15 +73,48 @@ namespace SAM.Analytical.OCCT.Solver
             double minApertureArea = Tolerance.MacroDistance,
             double maxApertureDistance = Tolerance.MacroDistance)
         {
+            return AutoTune3D(panels, out nakedPoint3Ds, out diagnostics, out orphanedApertures, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, tune, minApertureArea, maxApertureDistance);
+        }
+
+        /// <summary>
+        /// Phase 8 overload: as <see cref="AutoTune3D(IEnumerable{Panel}, out List{Point3D}, out List{string}, out List{OrphanedAperture}, IEnumerable{double}, IEnumerable{double}, double, double, double, double, OcctBuildOptions, AutoTune3DOptions, double, double)"/>,
+        /// additionally returning a <see cref="Solve3DReport"/> for Grasshopper inspection (closure signature,
+        /// diagnostics, source map, naked wires, escalation round counts). <see cref="AutoTune3DSolver"/>'s
+        /// public surface does not track per-cell metadata, level frames, or whether its internal baseline
+        /// attempt was raw-adopted (Phase 5e scope), so <see cref="Solve3DReport.Cells"/>/<see cref="Solve3DReport.LevelFrames"/>/
+        /// <see cref="Solve3DReport.CleanFace3Ds"/> stay empty and <see cref="Solve3DReport.RawAdopted"/> stays
+        /// false here - honestly reported, not fabricated, and not a reason to extend AutoTune3DSolver's own
+        /// core surface for this UI-only phase.
+        /// </summary>
+        /// <param name="report">The staged solve snapshot; never null, even when the solve produced no result.</param>
+        public static List<Panel> AutoTune3D(
+            this IEnumerable<Panel> panels,
+            out List<Point3D> nakedPoint3Ds,
+            out List<string> diagnostics,
+            out List<OrphanedAperture> orphanedApertures,
+            out Solve3DReport report,
+            IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
+            double minBucketSize = 0.4,
+            double thicknessFactor = 0.6,
+            double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3,
+            OcctBuildOptions options = null,
+            AutoTune3DOptions tune = null,
+            double minApertureArea = Tolerance.MacroDistance,
+            double maxApertureDistance = Tolerance.MacroDistance)
+        {
             nakedPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
             orphanedApertures = new List<OrphanedAperture>();
+            report = null;
 
             // Air panels are excluded from solving and passed through unchanged - the SAME PrepareInput
             // Solve3D uses, so AutoTune3D handles air panels identically.
             if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
             {
                 diagnostics.Add("SAM_OCCT_AUTOTUNE3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.");
+                report = new Solve3DReport(false, null, null, null, null, sources, null, null, null, null, null, false, 0);
                 return null;
             }
 
@@ -102,6 +135,7 @@ namespace SAM.Analytical.OCCT.Solver
             if (resolved == null || resolved.Count == 0)
             {
                 diagnostics.Add("SAM_OCCT_AUTOTUNE3D_NO_RESULT: The solver produced no resolved faces.");
+                report = BuildReport(solver, sources);
                 return new List<Panel>();
             }
 
@@ -162,12 +196,35 @@ namespace SAM.Analytical.OCCT.Solver
 
             // Surface the structured solver diagnostics (escalation log, rejections, residual naked loops, and
             // the adopted solve's own events) alongside the SAM_OCCT_* summary lines.
-            foreach (SAM.Geometry.OCCT.Solver.SolverDiagnostic solverDiagnostic in solver.Diagnostics?.All ?? new List<SAM.Geometry.OCCT.Solver.SolverDiagnostic>())
-            {
-                diagnostics.Add(string.Format("SAM_OCCT_AUTOTUNE3D_DIAGNOSTIC: {0}", solverDiagnostic));
-            }
+            diagnostics.AddRange(SolverReportFormat.FormatDiagnostics(solver.Diagnostics, "SAM_OCCT_AUTOTUNE3D"));
+
+            report = BuildReport(solver, sources);
 
             return result;
+        }
+
+        /// <summary>Assembles a <see cref="Solve3DReport"/> from an <see cref="AutoTune3DSolver"/> that has
+        /// already run <c>Execute</c>. <see cref="AutoTune3DSolver"/> does not track per-cell metadata, level
+        /// frames, Stage A clean faces, or its internal baseline's raw-adopted state (Phase 5e scope), so
+        /// those fields stay empty/false rather than being fabricated.</summary>
+        private static Solve3DReport BuildReport(AutoTune3DSolver solver, List<Panel> sources)
+        {
+            return new Solve3DReport(
+                false,
+                solver.Signature,
+                null,
+                solver.Diagnostics,
+                solver.SourceMap,
+                sources,
+                null,
+                null,
+                solver.NakedWires,
+                null,
+                null,
+                solver.NativeResolved,
+                solver.ResolvedCellCount,
+                solver.Rounds,
+                solver.RoundsAccepted);
         }
     }
 }
