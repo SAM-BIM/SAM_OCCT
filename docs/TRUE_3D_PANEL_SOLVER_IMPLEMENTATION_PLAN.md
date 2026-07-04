@@ -748,6 +748,43 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
 - **Failure modes/diagnostics:** kernel-absent → managed-degrade banner (existing pattern).
 - **Depends:** Phases 1–7 (surfaces them). **Out of scope:** new UI paradigms, preview shading,
   Rhino 7 back-compat work beyond what the project already targets.
+- **Phase 8 COMPLETE (2026-07-04).** Landed as three sub-steps, each its own commit with both suites green
+  and golden masters re-run first (all raw signatures byte-identical throughout; all managed signatures
+  matching the 7-pre pinned baseline throughout — Phase 8 is UI/API exposure only, no solver geometry,
+  algorithm, or native ABI change anywhere): **8a** (`336d848`) foundation — additive `Panel3DSnapSolver.
+  RawAdopted`/`LevelFrames` captures of already-computed data (no new branches, no behaviour change), the
+  pure `ClosureReport` formatter, and the `Solve3DReport`/`SolverReportFormat` DTO+helpers shared by every
+  component below; **8b** (`3120a40`) `SAMOCCTSolve3D` — a new most-detailed `Modify.Solve3D` overload
+  (`out Solve3DReport`, built the same additive-overload way as the Phase 4 aperture-orphan overload, so
+  every existing overload/call site is an unchanged thin wrapper) and ten new `Voluntary` outputs
+  (`CleanFaces`, `GapFillPanels`, `Cells`, `CellCentres`, `CellVolumes`, `CellClassification`, `NakedWires`,
+  `SourceMap`, `LevelFrames`, `ClosureReport`) plus two `Voluntary` inputs (`classifyCells_`,
+  `minCellVolume_`), all appended after the six existing outputs/eight existing inputs, which are
+  untouched; **8c** (`7555e9f`) `SAMOCCTClean3D`/`SAMOCCTExtend3D` gain the same additive
+  `Solve3DReport`-returning overload plus `Voluntary` `SourceMap`/`LevelFrames` outputs, and the new
+  `SAMOCCTAutoTune3D` component gives the Phase 5e `AutoTune3D` analytical entry point its first
+  Grasshopper surface (panels/bucket/align/normalize inputs + `maxRounds_`/`maxExtendLadder_`/
+  `escalateBucket_` tuning + tuned-panels/naked-wires/diagnostics/source-map/closure-report/round-count
+  outputs) without touching `AutoTune3DSolver`'s own core. See `TESTING.md` "Grasshopper staged solver
+  outputs (Phase 8)" for the full sub-step breakdown, the nine documented deviations from this section's
+  literal wording (all scope-clarifications, not scope-cuts — e.g. clean/conditioned panels stay as raw
+  geometry / the existing Extend3D component rather than duplicating Panel construction inside Solve3D;
+  diagnostics/source-map are flat formatted string lists, matching this project's existing convention,
+  not `GH_Structure` trees; `AutoTune3DSolver`'s report fields stay honestly empty where its Phase 5e
+  surface does not track them), the backwards-compatibility mechanism (`ParamVisibility.Voluntary`), and
+  the manual Grasshopper verification checklist.
+
+  **Test counts after Phase 8:** unit **432/432** (412 pre-Phase-8 + 20 new: `ClosureReportTests`,
+  `SolverReportFormatTests`, `Solve3DReportTests`); integration **144 pass / 1 skip** (137 pre-Phase-8 + 7
+  new: `Solve3DReportIntegrationTests` ×4, `StageReportIntegrationTests` ×3). All 10 golden-master
+  signatures unchanged throughout every sub-step; Phase 5f `Benchmark1500` unaffected. No native ABI
+  changes; no Grasshopper output/input reordering or removal anywhere.
+
+  **Remaining Phase 9 work** (carried forward, none blocked by Phase 8): the timing harness over the
+  Phase 5f benchmark fixture (per-stage ms in diagnostics — the reason Phase 8's `ClosureReport` still
+  reads "Timings: not tracked"), the Stage-A spatial index, `GlueMode=Shift` on escalation re-runs, and
+  the `docs/P6_ARCHITECTURE_REVIEW.md` §O `O3`/`O4`/`O7` hygiene items. The deferred per-level-frame
+  extend/fill work (§6c/§6e stop rules) remains untouched, as required.
 
 ### Phase 9 — Performance & hardening at 500–2,000 panels
 - **Objective:** hit < 60 s whole-model solves; tune parallelism/glue; finalize docs.

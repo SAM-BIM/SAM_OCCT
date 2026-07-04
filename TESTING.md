@@ -874,3 +874,171 @@ elevation/tilt) is computed but never surfaced on the solver; `CellRole` classif
 `Panel3DSnapSolver` itself); and a closure-report string combining adopted level/rounds/cell-classification
 counts. None of these require new native ABI or block Phase 8 from starting - they are additive surface
 area, consistent with every other Phase 7/7-pre change.
+
+## Grasshopper staged solver outputs (Phase 8)
+
+Phase 8 (docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md §E Phase 8) exposes the true-3D solver's
+staged/diagnostic output in Grasshopper for MEP-engineer inspection - **UI/API exposure only**: no
+solver geometry, algorithm, or native ABI changed anywhere in this phase. Landed as three sub-steps,
+each its own commit with both suites green and golden masters re-run first (all raw signatures
+byte-identical throughout; all managed signatures matching the 7-pre pinned baseline throughout - Phase
+8 never touches solver geometry, only reads and formats its output):
+
+- **8a** (`336d848`) - foundation. `Panel3DSnapSolver` gained two additive, read-only captures of data
+  it already computes: `RawAdopted` (true when the raw-first attempt was adopted, set at the existing
+  early-return branch - no new branch, no behaviour change) and `LevelFrames` (the `LevelFrame` list
+  `SnapStage.Clean` already clusters for frame-aware cap normalization, now also stored on the solver
+  instead of being discarded after use). `SAM.Geometry.OCCT.Solver.ClosureReport.Format(...)` is a pure
+  formatter (adopted path, raw/final signatures, AutoTune round counts, diagnostics counts by severity,
+  level frame summary, "Timings: not tracked") over data the solver already produces. `SAM.Analytical.OCCT.Solver.
+  Solve3DReport` bundles every staged field (signatures, diagnostics, source map, cells, cell roles, naked
+  wires, Stage A clean faces, level frames, native-resolved/cell-count, AutoTune round counts, and the
+  formatted closure report text) into one DTO, with `SolverReportFormat` supplying the shared
+  `FormatDiagnostics`/`FormatSourceMap`/`FormatLevelFrames`/`FormatCells` string formatters reused by every
+  component below. Unit: `ClosureReportTests`, `SolverReportFormatTests`, `Solve3DReportTests`.
+- **8b** (`3120a40`) - `SAMOCCTSolve3D`. `Modify.Solve3D` gained a new most-detailed overload
+  (`out Solve3DReport report`, plus opt-in `classifyCells`/`minCellVolume` parameters) built the same way
+  as the Phase 4 aperture-orphan overload: the existing 2-out and 3-out overloads become thin wrappers
+  delegating to it with `out _`, so their signatures, behaviour and compiled call sites are completely
+  unchanged. The component appends ten `Voluntary` outputs (`CleanFaces`, `GapFillPanels`, `Cells`,
+  `CellCentres`, `CellVolumes`, `CellClassification`, `NakedWires`, `SourceMap`, `LevelFrames`,
+  `ClosureReport`) and two `Voluntary` inputs (`classifyCells_` default false, `minCellVolume_` default
+  0.05) after the existing six outputs/eight inputs, which are untouched in name, type and order. Unit:
+  none new (GH component bodies are not unit-testable without Rhino). Integration:
+  `Solve3DReportIntegrationTests` (raw-adopted vs forced-managed report shape, `classifyCells` populating
+  index-aligned `CellRoles`, empty-input report never null).
+- **8c** (`7555e9f`) - `SAMOCCTClean3D`/`SAMOCCTExtend3D`/`SAMOCCTAutoTune3D`. `Modify.Clean3D`/`Extend3D`
+  each gained the same additive `out Solve3DReport report` overload pattern (existing overloads become
+  thin wrappers); since neither pass runs a native resolve, `Signature`/`Cells`/`NakedWires` stay
+  null/empty on their reports - an honest reflection of the pipeline stage, not a gap. Both components
+  append `Voluntary` `SourceMap`/`LevelFrames` outputs. `SAMOCCTAutoTune3D` is a **new** component - the
+  Phase 5e `AutoTune3D` diagnosis-driven closure solver had an analytical entry point
+  (`Modify.AutoTune3D`) but no Grasshopper component before this phase. `Modify.AutoTune3D` gained the
+  same detailed-overload pattern; the component takes the usual panels/bucket/align/normalize inputs plus
+  `maxRounds_`/`maxExtendLadder_`/`escalateBucket_` (mapping to `AutoTune3DOptions`) and outputs tuned
+  panels, naked points/wires, diagnostics, source map, closure report, and round-attempted/accepted
+  counts. Unit: none new. Integration: `StageReportIntegrationTests` (Clean3D/Extend3D report shape;
+  AutoTune3D's report on a watertight baseline matches the "0 rounds, matches Solve3D" contract).
+
+**Verification run (local, native present), cumulative across 8a-8c.**
+
+```
+dotnet build SAM_OCCT.sln -c Debug                                                          # 0 errors
+dotnet build Grasshopper/SAM.Analytical.Grasshopper.OCCT/SAM.Analytical.Grasshopper.OCCT.csproj -c Debug  # 0 errors
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj                             # 432 passed, 0 failed
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj               # 144 passed, 1 skipped
+```
+
+All 10 golden-master signatures unchanged (raw byte-identical 5/5; managed matching the 7-pre pinned
+baseline 5/5); Phase 5f `Benchmark1500` unaffected. No native ABI changes; no solver geometry/algorithm
+changes - every Phase 8 change is either a pure read-only capture of already-computed data (`RawAdopted`,
+`LevelFrames`), a pure formatter, an additive method overload, or an append-only Grasshopper parameter.
+
+### Deviations from the plan's literal Phase 8 wording (scope-clarifications, not scope-cuts)
+
+1. **"Clean/snapped panels"** are exposed as raw `Face3D` geometry (`CleanFaces`, via `GooSAMGeometryParam`
+   on `SAMOCCTSolve3D`) rather than fully-reconstructed `Panel`s with Guid/construction/parameters. Building
+   full Panels from Stage A output would duplicate `SAMOCCT.Clean3D`'s own `BuildPanels` call inside
+   `SAMOCCT.Solve3D` for no added information the dedicated Clean3D component doesn't already give a user
+   who wants clean Panels specifically.
+2. **"Conditioned/pre-resolve panels"** are not duplicated inside `SAMOCCTSolve3D`. They are already
+   exposed by the existing `SAMOCCT.Extend3D` component (itself enhanced in 8c with `SourceMap`/
+   `LevelFrames`), and adding a second internal solve pass inside Solve3D to recompute them would be
+   exactly the "second expensive solve" the plan's own wording says to avoid.
+3. **"Retained dropped panels"** are not surfaced as their own dedicated output. `PanelReconstruction`
+   stamps no Panel-level provenance tag distinguishing a retained-dropped face after reconstruction (only
+   `SourceGuid`/`MergedSourceGuids`/`Provenance=GapFill` are stamped), so isolating them cheaply from the
+   returned `Panels` list alone is not possible without new plumbing into `PanelReconstruction`. The
+   `SourceMap` output already shows every source's `DroppedRetained` provenance line - the same "derivable
+   via provenance, acceptable" resolution TESTING.md's Phase 7 section already used for the equivalent
+   question there.
+4. **Cells** are exposed as boundary `Shell`s (via `GooSAMGeometryParam`, matching how `Slits` already wraps
+   arbitrary SAM geometry) rather than "cell panels" - a per-cell `Shell` is exactly what the native decode
+   produces; a per-cell `Panel`/`Space` concept only exists after `Create.Spaces` (Phase 7c) runs, which is
+   a separate, heavier operation intentionally not invoked from inside `Solve3D`.
+5. **Cell classification is opt-in** (`classifyCells_` input, default false) because it costs one extra
+   native envelope decode (`CellClassifier.ClassifyCells`, Phase 7b) per solve - not run unconditionally so
+   a definition that never wires up `CellClassification` pays no extra native cost.
+6. **`LevelFrames` is empty whenever the raw-first attempt is adopted** (`RawAdopted = true`): the raw path
+   never clusters caps into frames - only the managed pipeline's `SnapStage.Clean` does, for frame-aware cap
+   normalization. This is an honest reflection of the current architecture (`docs/P6_ARCHITECTURE_REVIEW.md`
+   §D.1/§M), not a Phase 8 gap; a well-modelled model that raw-adopts will simply report zero frames.
+7. **`SAMOCCTAutoTune3D`'s report has empty `Cells`/`LevelFrames`/`CleanFace3Ds` and `RawAdopted = false`
+   always.** `AutoTune3DSolver`'s own public surface (Phase 5e) does not track per-cell metadata, level
+   frames, or whether its internal baseline attempt was raw-adopted - extending that surface for this
+   UI-only phase would touch the highest-risk algorithm class in the codebase (per the Phase 5/6 design
+   reviews' own risk framing) for a reporting-only benefit, so it was deliberately not done. The fields are
+   honestly empty/false, never fabricated.
+8. **Diagnostics/source-map/level-frame outputs are flat, formatted `Param_String` lists**, not native
+   Grasshopper data trees (`GH_Structure` branches per source/stage). No component in this Grasshopper
+   project uses `GH_Structure` trees anywhere; every existing structured-output component (including
+   `SAMOCCTCreateAdjacencyClusterByShells`'s own diagnostics) already uses flat formatted string lists.
+   Matching that convention avoids introducing a new UI paradigm the hard scope boundaries prohibit ("No
+   broad UI redesign").
+9. **"Timings" in the closure report always reads "not tracked".** `SolverDiagnostic.ElapsedMs` exists on
+   the diagnostic model but no current diagnostic emission call in the solver ever populates it (every call
+   site passes the 0 default) - reported honestly rather than fabricating a number.
+
+### Backwards compatibility
+
+Every new output on `SAMOCCTSolve3D`/`SAMOCCTClean3D`/`SAMOCCTExtend3D` is `ParamVisibility.Voluntary`.
+`GH_SAMVariableOutputParameterComponent.RegisterOutputParams` only auto-registers `ParamVisibility.Default`-
+flagged (i.e. `Binding`) parameters (`SAM.Core.Grasshopper.ParamVisibility`: `Binding = Mandatory | Default`,
+`Voluntary = 0`) - the same mechanism every existing optional input (`thicknessFactor_`,
+`alignColinearOffset_`, ...) already relies on. A Grasshopper document saved before Phase 8 deserializes its
+components with exactly the parameter sockets it was saved with; Phase 8's new Voluntary outputs are not
+added to an old document automatically, so old wiring keeps solving identically. A user opts into the new
+outputs by right-clicking the component and adding the parameter from the menu (`CanInsertParameter`/
+`CreateParameter`), the same gesture already used for every pre-Phase-8 optional input on these components.
+No existing input/output name, type, or order changed anywhere in Phase 8.
+
+### Manual Grasshopper verification checklist
+
+Native-dependent; run in Rhino/Grasshopper with `build-native.ps1` already run once (see "Running locally"
+above) so `SAM.Occt.Native.dll` is on the search path the GH plugin loads from.
+
+**Build the Grasshopper project:**
+
+```powershell
+dotnet build Grasshopper/SAM.Analytical.Grasshopper.OCCT/SAM.Analytical.Grasshopper.OCCT.csproj -c Debug
+```
+
+Copy/symlink the built `SAM.Analytical.Grasshopper.OCCT.gha` (and its SAM_OCCT dependencies) into Rhino's
+Grasshopper `Libraries` folder, or point Grasshopper's plugin search path at the build output, then start
+Rhino.
+
+1. Drop a `SAMOCCT.Solve3D` component - it should place with all 6 original outputs
+   (Panels/NakedPoints/Slits/SlitPanels/Diagnostics/Successful) and no parameter errors.
+2. Open (or rebuild from memory) a definition using only those 6 outputs wired to panels/points/text
+   readouts - it should still solve, with `Successful` = true on a well-modelled test model.
+3. Right-click the component -> Zoom (or the parameter list) -> add `CellCentres`/`CellVolumes`/
+   `CellClassification`/`Cells`; wire `classifyCells_` = true; on a closed multi-room model, confirm the
+   centre/volume/role lists are the same length and each `Cells` shell visibly matches its centre.
+4. On the same closed model, add `ClosureReport` - confirm it contains `Adopted path: Raw` (or `Managed`),
+   a `Final:` line with the cell/volume/naked-edge counts, and (if applicable) an `AutoTune rounds:` line.
+5. Build (or reuse) a deliberately gappy model (a wall pulled short of its neighbour); confirm `Diagnostics`
+   lists `SAM_OCCT_SOLVE3D_DIAGNOSTIC:` lines describing the gap/rejection, `NakedPoints` is non-empty, and
+   the new `NakedWires` output shows the open loop as a polyline.
+6. Add `CleanFaces` on the same gappy model (which should fall through to the managed pipeline) - confirm
+   it is non-empty and represents the Stage A geometry; on the closed model from step 3 (which raw-adopts),
+   confirm `CleanFaces` is empty (see deviation 6 above) and `LevelFrames` is also empty.
+7. Add `SourceMap` - confirm one line per input panel naming its resolved output face(s).
+8. Rename/remove `SAM.Occt.Native.dll` from the search path (or run on a machine without it) and re-run:
+   confirm the component reports `Successful = false` with a native-missing diagnostic rather than
+   crashing Rhino - the existing graceful-degrade contract, unchanged by Phase 8.
+9. Repeat steps 1-2 for `SAMOCCT.Clean3D` and `SAMOCCT.Extend3D` (their pre-Phase-8 outputs unchanged), then
+   add their new `SourceMap`/`LevelFrames` outputs and confirm they populate.
+10. Drop a new `SAMOCCT.AutoTune3D` component on the gappy model from step 5: confirm `Panels`/`Successful`
+    behave like `Solve3D`, `Rounds`/`RoundsAccepted` are populated, and `ClosureReport` names the escalation
+    round counts. On the closed model from step 3, confirm `Rounds` = 0 (AutoTune never engages on an
+    already-watertight baseline).
+
+### Remaining work (Phase 9)
+
+Phase 8 is UI/API exposure only and made no performance change. Carried forward to Phase 9 (per
+`docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md` §E Phase 9): the timing harness over the Phase 5f
+benchmark fixture (per-stage ms in diagnostics - the reason this phase's `ClosureReport` still reads
+"Timings: not tracked"), the Stage-A spatial index, `GlueMode=Shift` on escalation re-runs, and the
+`O3`/`O4`/`O7` hygiene items from `docs/P6_ARCHITECTURE_REVIEW.md` §O ("Should/Can fix"). The deferred
+per-level-frame extend/fill work (§6c/§6e stop rules) remains untouched and out of scope for Phase 8, as
+required.
