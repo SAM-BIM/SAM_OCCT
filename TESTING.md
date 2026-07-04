@@ -518,6 +518,11 @@ frames. It lands as sub-phases:
   `FrameAwareClassificationTests`.
 - **6c** - **frame-aware cap normalization only** (see below). Per-frame extend/fill conditioning is
   **deferred** (see the deviation note).
+- **6d** - observational stacked-slab / inter-storey interface detection (see below). Changes no geometry
+  and no source mapping.
+- **6e** - Phase 6 wrap-up: this section - fixture/coverage audit, full-suite verification (unit + native
+  integration + golden masters + Phase 5 benchmark), and documentation. No new production code; see
+  "6e - completion" below.
 
 ### 6c - frame-aware `NormalizeCaps` (split-level landing preservation)
 
@@ -607,3 +612,100 @@ rather than introducing a geometry change.
   stacked fixture resolves to 2 cells / 0 naked with both mid-slab sources represented and the interface
   detected; a 0.4 m cavity is rejected and survives (>= 2 cells, both sources kept); a split-level landing is
   not detected as a stacked interface.
+
+### 6e - completion: fixture/coverage audit, full-suite verification, documentation
+
+6e is the Phase 6 wrap-up called for by the plan: no new solver architecture, only a coverage audit against
+the plan's acceptance list, a full local-integration verification pass, and this documentation. Audited
+against 6a-6d's existing tests, every item on the acceptance list already has coverage - no gaps were found,
+so no new tests were added:
+
+| Coverage item | Where it is covered |
+| --- | --- |
+| Flat single-level model | `LevelFrameTests.Cluster_FlatSingleTile_ProducesOneFrameAtItsElevation`; `FrameAwareClassificationTests` flat-frame cases; `whole-level-flat.sam` golden master |
+| Tilted single-level model | `LevelFrameTests.Cluster_TiltedSingleLevel_ProducesOneTiltedFrame`; `whole-level-tilted.sam` / `tilted-two-spaces.sam` golden masters |
+| >20° tilted level | `LevelFrameTests`/`FrameAwareClassificationTests` use a 25° tilt explicitly past the legacy 20° world-frame ceiling (`IsWall_TiltedLevelBeyond20Degrees_FixesWorldFrameMisclassification`) |
+| Two stacked levels | `LevelFrameTests.Cluster_TwoStackedLevels_ProducesTwoFramesSortedByElevation`; `NormalizeCapsFrameAwareTests.NormalizeCaps_FrameAware_TwoStackedLevelsDoNotMerge`; `StackedSlabInterfaceIntegrationTests.TwoStoreyStacked_...` (native) |
+| Split-level landing preserved | `LevelFrameTests.Cluster_SplitLevelLanding_IsNotMergedIntoMainFloor`; `NormalizeCapsFrameAwareTests.NormalizeCaps_FrameAware_PreservesSplitLevelLanding` (+ legacy-merges-it contrast lock); `StackedSlabInterfaceIntegrationTests.SplitLevelLanding_NotDetectedAsStackedInterface` (native) |
+| Shaft/cavity preserved | `StackedSlabInterfaceDetectorTests.DetectStackedInterfaces_WideCavity_RejectedNotDetected`; `StackedSlabInterfaceIntegrationTests.WideCavity_RejectedAsUnsafeMerge_CavitySurvives` (native); `SewV2IntegrationTests` ShaftProtection (Phase 5d, still green) |
+| Wall spanning multiple frames | `LevelFrameTests.AssignWallToFrames_StoreyHeightWall_SpansBothFloorAndCeilingFrames` (full-storey wall belongs to both its floor and ceiling frame) vs. `AssignWallToFrames_ShortWall_SpansOnlyItsLevel` |
+| Stacked-slab duplicate-skin handling | `StackedSlabInterfaceDetectorTests.DetectStackedInterfaces_CoincidentOpposedSkins_DetectsOneInterface` (zero-thickness convention) and `_OpposedCongruentSkins_...` (slab-thickness-separated); `StackedSlabInterfaceIntegrationTests.TwoStoreyStacked_...` end-to-end (native) |
+| SourceMap/provenance after frame operations | `StackedSlabInterfaceDetectorTests.VerifyRepresented_BothSourcesMapped_EmitsPreservedInfo` / `_OneSourceMissing_EmitsIncompleteWarning`; `StackedSlabInterfaceIntegrationTests` asserts `SourceMap.FacesOf(...)` non-empty for both interface sources (native) |
+| Phase 5 golden masters + benchmark still valid | Re-run in full below - unchanged |
+
+**Verification run (2026-07-04, local, native present).**
+
+```
+dotnet build SAM_OCCT.sln -c Debug                                              # 0 errors
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj                # 400 passed, 0 failed, 0 skipped
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj  # 126 passed, 1 skipped (native-missing
+                                                                                 # inverse-gate; expected since native
+                                                                                 # IS present), 0 failed
+```
+
+Golden masters (`GoldenMasterIntegrationTests`), re-captured this run:
+
+| fixture | raw cells / naked | managed cells / naked |
+| --- | --- | --- |
+| `whole-level-flat.sam` | 22 / 0 | 22 / 0 |
+| `tilted-two-spaces.sam` | 2 / 0 | 2 / 0 |
+| `whole-level-tilted.sam` | 22 / 0 | 22 / 0 |
+| `two-level-tilted.sam` | 43 / 0 | **29 / 29** |
+| `whole-level-towers.sam` | 32 / 0 | **22 / 12** |
+
+Raw signatures match the plan's Phase 0 targets exactly (all 5 fixtures, 0 naked edges) - **byte-identical**
+through every 6a-6e sub-phase. Managed signatures match the documented 6c re-baseline exactly for the two
+multi-level fixtures (bold above); the other three are unchanged from Phase 5. No golden-master value changed
+in 6e - this run is a confirmation, not a re-baseline.
+
+`PerformanceGuardIntegrationTests.AutoTune3D_Benchmark1500_CompletesWithinNinetySecondsWithExactClosure`
+passed: ~6.4 s elapsed (90 s soft ceiling), 250/250 cells, 0 naked, 0 AutoTune rounds (every room independently
+watertight by construction, as designed) - the Phase 5f benchmark guard is unaffected by Phase 6.
+
+**No changes required.** The verification run above surfaced no regression, no missing coverage, and no
+documentation drift, so 6e makes no production-code change - only this documentation and the coverage table.
+
+### Running Phase 6 tests
+
+```powershell
+# LevelFrame clustering / assignment (unit, no native library required)
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~LevelFrameTests"
+
+# Frame-aware wall/cap/vertical classification (unit)
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~FrameAwareClassificationTests"
+
+# Frame-aware NormalizeCaps / split-level landing (unit)
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~NormalizeCapsFrameAwareTests"
+
+# Stacked-slab interface detector (unit, no native library required)
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~StackedSlabInterfaceDetectorTests"
+
+# Stacked-slab interface end-to-end (integration, native-gated - build-native.ps1 first)
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~StackedSlabInterfaceIntegrationTests"
+
+# Golden masters (raw + managed, all 5 fixtures) and the Phase 5f performance guard
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~GoldenMasterIntegrationTests|FullyQualifiedName~PerformanceGuardIntegrationTests"
+```
+
+### Stop rules for future Phase 6 follow-up work (per-frame extend/fill, or anything else touching this area)
+
+Anyone picking up the deferred per-frame extend/fill conditioning (or any further per-level-frame work) must
+stop and reassess, not push through, if:
+
+- **Any raw golden-master signature changes** for any of the 5 reference fixtures (cell count, naked-edge
+  count, or volume beyond `ClosureSignature3D`'s tolerance) - the prototype that regressed
+  `whole-level-tilted` 22->8 cells is the exact failure mode this guards against.
+- **A managed golden-master value changes** from the documented 6c/6d baseline (`two-level-tilted` 29c/29n,
+  `whole-level-towers` 22c/12n; the other three fixtures unchanged from Phase 5) without an explicit,
+  reasoned delta recorded in TESTING.md and the plan (same contract as every other phase).
+- **The Phase 5f benchmark regresses materially** (approaches or exceeds the 90 s soft ceiling, or its exact
+  closure sanity - `naked == 0`, `cells == 250`, `rounds == 0` - stops holding).
+- **The fix requires conditioning across orientation groups within a single analytical level** (the root
+  cause of the reverted prototype) rather than "a dominant frame" or "proven-separate storeys" as the
+  deferral note requires - that is a sign the safer design constraint has been violated, not satisfied.
+- **Any change would touch native ABI, Grasshopper components, or Phase 7 cell-classification scope** -
+  those are out of bounds for a Phase 6 follow-up by the plan's own phase boundaries.
+
+When none of the above trip, the safe design space per the 6c deviation note is: condition in a dominant
+frame, and split extend/fill only across proven-separate storeys - never within a single multi-orientation
+level.

@@ -604,12 +604,12 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
   frame count reported.
 - **Depends:** Phase 5. **Out of scope:** non-planar (curved) panels; atria spanning >2 levels
   treated specially (they resolve as ordinary tall cells).
-- **Phase 6 PARTIAL (2026-07-04).** Landed as sub-phases, each its own commit with both suites green and
+- **Phase 6 COMPLETE (2026-07-04).** Landed as sub-phases, each its own commit with both suites green and
   golden masters re-run:
   - **6a** (`b1b643b`) — `LevelFrame` clustering foundation (native-free; golden masters byte-identical).
   - **6b** (`df054ac`) — frame-aware wall/cap/vertical classification layer (pipeline not re-routed; golden
     masters byte-identical).
-  - **6c** (`feat(solver): normalize caps per level frame`) — **frame-aware `NormalizeCaps` only**. Caps are
+  - **6c** (`0cac0b9`) — **frame-aware `NormalizeCaps` only**. Caps are
     normalized onto their own `LevelFrame` datum (0.15 m band) instead of the flat 0.30 m `NormalizeCapOffset`,
     so a ~0.18–0.25 m split-level landing is preserved, not flattened onto the floor. RAW golden masters
     **byte-identical** (5/5); managed golden masters unchanged for 3/5, **re-baselined** for the two
@@ -617,7 +617,7 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
     naked), `whole-level-towers` 24→**22** cells (14→12 naked) — the intended, documented consequence of
     preserving frame separation (see TESTING.md "Per-level frames" for the exact before/after and rationale).
     Unit: `NormalizeCapsFrameAwareTests` (+6).
-  - **6d** (`feat(solver): handle stacked slab interfaces across level frames`) — **observational** stacked-slab
+  - **6d** (`a24545c`) — **observational** stacked-slab
     / inter-storey interface handling. `StackedSlabInterfaceDetector` identifies near-congruent, opposite-facing
     floor/ceiling skin pairs across level frames, verifies both analytical source panels survive into the
     `SourceMap`, and rejects the unsafe cases (wide cavity/shaft, low-overlap partial step, co-parallel
@@ -636,7 +636,21 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
     so it surfaces on the raw path). Per the plan's stop rules (raw signature change; "would require changing
     major solver architecture") this is deferred to a later focused sub-phase with a safer design: condition in
     a dominant frame, and split only across proven-separate storeys, never within a single multi-orientation
-    level. A `TODO` in `Panel3DSnapSolver.Execute` records the follow-up. Sub-phase 6e is not started.
+    level. A `TODO` in `Panel3DSnapSolver.Execute` records the follow-up. This deferral is intentionally
+    **left open past Phase 6's completion** (see 6e) — it was never in 6e's scope to fix, only to document
+    the stop rules for whoever picks it up.
+  - **6e** (`docs(testing): complete phase 6 level-frame validation`) — Phase 6 wrap-up: no new solver
+    architecture. Audited the sub-phase 6a–6d test suites against the plan's Phase 6 acceptance list (flat/
+    tilted/>20°/two-stacked-level fixtures, split-level landing, shaft/cavity, a wall spanning multiple
+    frames, stacked-slab duplicate-skin handling, `SourceMap` provenance after frame operations) — full
+    coverage already existed, so **no new tests were added**. Re-ran and confirmed, unchanged from the 6c/6d
+    baselines: build (0 errors), unit suite (400/400 passed), native integration suite (126 passed, 1
+    skipped — the inverse-gated native-missing test, expected since native is present), all 10 golden-master
+    signatures (raw byte-identical 5/5, managed matching the documented 6c/6d re-baselines 5/5), and the
+    Phase 5f `Benchmark1500` performance guard (~6.4 s, 250/250 cells, 0 naked, 0 rounds, well inside the 90 s
+    ceiling). Documented the coverage audit, the verification run, "how to run Phase 6 tests," and stop rules
+    for whoever eventually picks up the deferred per-frame extend/fill work in TESTING.md ("Per-level frames"
+    §6e). See TESTING.md "Per-level frames" §6e.
 
 ### Phase 7 — Cell classification, Spaces handoff, air semantics
 - **Objective:** make the cell complex analytically meaningful.
