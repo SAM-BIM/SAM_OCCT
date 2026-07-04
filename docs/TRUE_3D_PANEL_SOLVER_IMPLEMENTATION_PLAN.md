@@ -838,6 +838,88 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
      "can defer").
   5. The original §E Phase 9 performance work itself (timing harness, Stage-A spatial index,
      `GlueMode=Shift`, `O3`/`O4` hygiene) — genuinely deferred, not done in this audit-only pass.
+  6. Deferred codex review findings on PR #48 — see the dedicated subsection below.
+
+### Deferred codex review findings (PR #48, assessed 2026-07-04)
+
+The `chatgpt-codex-connector` bot raised 11 inline findings on PR #48. Two were fixed in commit
+`b1eca3a` (per-run reset of `NakedWires`/`ResolveHistorySourceMap` in `Execute`; the split+merge Guid
+collision in `PanelReconstruction`), and one was already fixed earlier in `6622eee` (dropped input faces
+on raw adoption). The remaining seven are recorded here rather than fixed under PR-closeout pressure —
+each was **verified against the current code** (line numbers and mechanism below, not just the bot's
+paraphrase) and each is **latent**: none fires on the five golden-master fixtures (which is why all ten
+signatures are unchanged and why these were not caught by the existing suite). Fixing them properly needs
+a dedicated pass with a **targeted fixture that reproduces each** (fail-before / pass-after, as the two
+fixed findings got) — several will become naturally reproducible once the real gappy multi-storey
+fixtures (follow-up 2 above) land. **None is a merge blocker for the staged/exposure work this PR
+delivers; all are pre-existing latent defects in the Phase 5 heal/reconstruct paths, not regressions
+introduced by Phases 8–9.**
+
+Confidence is marked per item: **[traced]** = mechanism confirmed by reading the current code path;
+**[out of scope]** = real but excluded by this plan's hard constraints.
+
+1. **[traced] Patch double-emitted as solid + air — rejected/no-rebuild path.** In
+   `Panel3DSnapSolver.FinalizeAndValidate` when the consolidation rebuild is rejected (or not run),
+   `finalMap = BuildResolvedSourceMap(appended, …)` geometrically attributes every face — including a
+   fabricated gap-fill patch — to a nearest *real* source, then `RecordFabricated(…, GapFill)` layers the
+   GapFill mark on top (`Panel3DSnapSolver.cs:748–752`). `PanelReconstruction.Build`'s skip guard
+   (`PanelReconstruction.cs:96–100`) only skips a patch when it has GapFill provenance **and**
+   `!HasSource`; because the geometric backfill gave it a real source, `HasSource` is true, so the patch
+   is built as a **solid panel** and *also* emitted as a `PanelType.Air` panel from `HoleFillFace3Ds` —
+   a duplicate. Trigger: a managed solve that fabricates a patch **and** whose consolidation rebuild is
+   rejected (or `ConsolidateRebuild` is off).
+2. **[traced] Patch double-emitted as solid + air — adopted-rebuild / null-history path.** Same duplicate
+   outcome via a different sub-path: `ComposeRebuildMap` returns a purely geometric
+   `BuildResolvedSourceMap(rebuiltFaces, …)` when `rebuildHistory == null`
+   (`Panel3DSnapSolver.cs:799–801`, e.g. a pre-v4 / stale native DLL, or any adopted rebuild whose
+   `OcctHistory.Capture` returned null) and does **not** re-assert the `GapFill`/`DroppedRetained` marks
+   that the history-available branch re-asserts at `:809–834`. The patch-derived rebuilt face ends up
+   with a real source and no GapFill mark, so `PanelReconstruction` builds it as a solid while
+   `HoleFillFace3Ds` still emits it as air. Trigger: an adopted consolidation rebuild on a build where
+   native history is unavailable.
+3. **[traced] Rebuild adoption gate uses the pre-append cell count.** The consolidation-rebuild
+   acceptance test is `rebuiltCells >= resolveCellCount && rebuiltNaked <= appendedNaked`
+   (`Panel3DSnapSolver.cs:722`), but `resolveCellCount` is measured on the resolved faces **before**
+   patches/retained faces were appended (`:689`). A retained/patch face that recovered an extra cell in
+   the appended-unimprinted set is not reflected in `resolveCellCount`, so a rebuild that drops that
+   separator while staying watertight at the original count is still adopted — silently re-merging the
+   rooms the retain/patch had recovered. Fix direction: decode the appended set's own cell count and
+   require the rebuild to preserve **that**, not the pre-append count.
+4. **[traced] Input air panels dropped by `Solve3D`/`AutoTune3D`.** `Modify.PrepareInput` filters out
+   `PanelType.Air` (`Solve.cs:585`) and neither `Solve3D` nor `AutoTune3D` re-adds the caller's original
+   air panels to the returned list (they only append *new* GapFill air panels), contradicting the
+   documented "air passes through unchanged" contract. `Create.Spaces` already re-adds them
+   (`inputAirPanels.Concat(solvedAirPanels)`), so the fix must live in `Solve3D`/`AutoTune3D` **without**
+   double-adding when `Create.Spaces` later runs. Trigger: calling `Solve3D`/`AutoTune3D` directly on a
+   mixed panel set containing air panels.
+5. **[traced] Fan-patch area floor is below the air-panel emission floor.** `GapFill.FanTriangles`
+   admits a triangle when `GetArea() > max(tolerance, 1e-9)` (`GapFill.cs:256`, `tolerance` ≈ 1e-6),
+   but `Solve3D`/`AutoTune3D` only emit an air panel for a hole face above `1e-4` m². A non-planar loop
+   fan-triangulated into sub-1e-4 pieces can be used by the native consolidation to close the cell (and
+   marked GapFill) while every corresponding air panel is suppressed — losing the virtual boundary for a
+   real gap. Fix direction: align the fan floor with the `1e-4` air-panel floor, or emit air for the
+   aggregate loop rather than per-triangle.
+6. **[traced] Air boundaries excluded from the space cell build.** `Create.Spaces` builds the
+   `AdjacencyCluster` from `nonAirSolved` only (`Spaces.cs:131`) and re-adds air panels **after** OCCT
+   has decoded the cells, so an air boundary that a model relies on to split/close a space cannot
+   participate in the cell build — a model whose closure or room split depends on an air boundary can
+   pass the naked-edge gate and then have rooms merged. Trigger: a model where a `PanelType.Air` virtual
+   boundary is load-bearing for room separation. (Note: this is a genuine cell-build/geometry change, so
+   it is the most invasive of the seven and most golden-master-sensitive.)
+7. **[out of scope] Native history ordinals shift when `make_face` skips a face.** In
+   `native/SAM.Occt.Native/src/CellComplexBuilder.cpp` (~`:628`), when a flattened input face is
+   accepted by managed code but rejected natively, `make_faces_from_arrays` omits it from `arguments`
+   and `finalize_history` publishes history source indices shifted relative to the original
+   `face_count`, while managed `HistorySourceMap` composes them as original panel indices — so every
+   output after the skipped face can inherit the wrong Guid/construction/apertures. Excluded here only
+   because it needs a **native ABI/behaviour change**, which this plan's hard constraints forbid; it is
+   the one finding that should be scheduled alongside the next legitimate native-layer change rather
+   than as managed work.
+
+Common thread: findings 1, 2, 4, 5, 6 all concern **air-panel / gap-fill provenance and emission**
+consistency across the heal → reconstruct → spaces boundary; a single focused sub-phase (with a gappy
+fixture that fabricates patches and a mixed-air-panel fixture) could address 1, 2, 4, 5 together, with
+6 and 3 as separate, more geometry-sensitive changes and 7 folded into native work.
 
 ---
 

@@ -1096,6 +1096,17 @@ plan's §E Phase 9 originally sized (that remains a legitimate, larger follow-up
 4. **Optional `Panel3DSnapSolver` façade slimming** - `docs/P6_ARCHITECTURE_REVIEW.md` §O item `O7`
    (extract `FinalizeAndValidate` + legacy statics out of the ~2,300-line façade, behaviour-preserving);
    still "can defer," not required by any phase's acceptance criteria.
+5. **Deferred codex review findings (PR #48)** - seven inline findings from the `chatgpt-codex-connector`
+   bot were assessed against the current code and recorded (with line numbers, mechanism, trigger, and
+   fix direction) in `docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md` "Deferred codex review findings
+   (PR #48)". All are **latent** - none fires on the five golden-master fixtures - and all are
+   pre-existing defects in the Phase 5 heal/reconstruct paths (air-panel/gap-fill provenance and emission
+   consistency, the rebuild cell-count gate, plus one native history-ordinal issue), not regressions from
+   Phases 8-9. Each needs a targeted fail-before/pass-after fixture; five of them cluster into one
+   air/gap-fill sub-phase and several become reproducible once follow-up 2 (real gappy multi-storey
+   fixtures) lands. Two other findings from the same review were already fixed (`b1eca3a`: `Execute`
+   per-run reset of `NakedWires`/`ResolveHistorySourceMap`, and the split+merge Guid collision in
+   `PanelReconstruction`; `ExecuteResetIntegrationTests` + a new `PanelReconstructionTests` case cover them).
 
 The original §E Phase 9 performance work (timing harness, Stage-A spatial index, `GlueMode=Shift` on
 escalation re-runs, `O3`/`O4` hygiene) remains a separate, larger, legitimate follow-up beyond this
