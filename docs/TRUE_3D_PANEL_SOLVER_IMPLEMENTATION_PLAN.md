@@ -845,15 +845,15 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
 The `chatgpt-codex-connector` bot raised 11 inline findings on PR #48. Two were fixed in commit
 `b1eca3a` (per-run reset of `NakedWires`/`ResolveHistorySourceMap` in `Execute`; the split+merge Guid
 collision in `PanelReconstruction`), and one was already fixed earlier in `6622eee` (dropped input faces
-on raw adoption). The remaining seven are recorded here rather than fixed under PR-closeout pressure —
+on raw adoption). The remaining eight are recorded here rather than fixed under PR-closeout pressure —
 each was **verified against the current code** (line numbers and mechanism below, not just the bot's
 paraphrase) and each is **latent**: none fires on the five golden-master fixtures (which is why all ten
 signatures are unchanged and why these were not caught by the existing suite). Fixing them properly needs
 a dedicated pass with a **targeted fixture that reproduces each** (fail-before / pass-after, as the two
 fixed findings got) — several will become naturally reproducible once the real gappy multi-storey
 fixtures (follow-up 2 above) land. **None is a merge blocker for the staged/exposure work this PR
-delivers; all are pre-existing latent defects in the Phase 5 heal/reconstruct paths, not regressions
-introduced by Phases 8–9.**
+delivers; all are pre-existing latent defects in the Phase 5 heal/reconstruct and raw-adoption paths, not
+regressions introduced by Phases 8–9.**
 
 Confidence is marked per item: **[traced]** = mechanism confirmed by reading the current code path;
 **[out of scope]** = real but excluded by this plan's hard constraints.
@@ -905,8 +905,23 @@ Confidence is marked per item: **[traced]** = mechanism confirmed by reading the
    participate in the cell build — a model whose closure or room split depends on an air boundary can
    pass the naked-edge gate and then have rooms merged. Trigger: a model where a `PanelType.Air` virtual
    boundary is load-bearing for room separation. (Note: this is a genuine cell-build/geometry change, so
-   it is the most invasive of the seven and most golden-master-sensitive.)
-7. **[out of scope] Native history ordinals shift when `make_face` skips a face.** In
+   it is the most invasive of the managed findings and most golden-master-sensitive.)
+7. **[traced] Raw-adoption gate can adopt a merged-cells result that skips an internal separator.** When
+   the exterior shell is already watertight but an internal separator still needs the managed pass (a
+   partition with a door/opening that Stage A's clean bucket would strip, or a wall that
+   `ConditionStage` would grow to the caps), `TryRawResolve` can return a single merged closed cell whose
+   naked-edge count is zero, so `Execute` adopts it (`Panel3DSnapSolver.cs:392–397`) and returns before
+   the managed clean/extend could create the room split. The Phase 1 raw-adoption gate
+   (`EvaluateRawAdoption`, `MaxDroppedRatio` default 0.30 + sliver-cell check, `Panel3DSnapSolver.cs:2228`)
+   **partially** mitigates this — a watertight-but-merged result whose unrepresented separator faces
+   exceed the drop ratio is rejected and falls through to the managed pipeline — but a single door-cut
+   partition well under 30% of the model's faces is still adopted with its rooms merged and
+   `ResolvedCellCount` under-counted. The Phase 5c `RetainDroppedV2` re-adds the dropped separator face to
+   the output but does not re-open the already-merged cell. This is the oldest finding (2026-06-27) and is
+   **distinct from** the already-fixed "dropped input faces on raw adoption" (`6622eee`), which restored
+   the face but not the cell split. Fix direction: detect an under-split in the raw gate (e.g. compare the
+   raw cell count against a cheap managed-snapped expectation) rather than relying on the drop ratio alone.
+8. **[out of scope] Native history ordinals shift when `make_face` skips a face.** In
    `native/SAM.Occt.Native/src/CellComplexBuilder.cpp` (~`:628`), when a flattened input face is
    accepted by managed code but rejected natively, `make_faces_from_arrays` omits it from `arguments`
    and `finalize_history` publishes history source indices shifted relative to the original
@@ -919,7 +934,8 @@ Confidence is marked per item: **[traced]** = mechanism confirmed by reading the
 Common thread: findings 1, 2, 4, 5, 6 all concern **air-panel / gap-fill provenance and emission**
 consistency across the heal → reconstruct → spaces boundary; a single focused sub-phase (with a gappy
 fixture that fabricates patches and a mixed-air-panel fixture) could address 1, 2, 4, 5 together, with
-6 and 3 as separate, more geometry-sensitive changes and 7 folded into native work.
+6 and 3 as separate, more geometry-sensitive changes, 7 (raw-adoption gate depth) on its own track, and
+8 folded into native work.
 
 ---
 
