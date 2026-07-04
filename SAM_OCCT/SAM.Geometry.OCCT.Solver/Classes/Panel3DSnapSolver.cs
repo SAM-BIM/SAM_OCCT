@@ -277,6 +277,16 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Number of closed cells (rooms/levels) the native MakerVolume formed. 1 = single space; 0 = none.</summary>
         public int ResolvedCellCount { get; private set; }
 
+        /// <summary>
+        /// Per-cell metadata (index, volume, centre, boundary shell) for the ADOPTED resolve (Phase 7a).
+        /// Captured at the exact point <see cref="Signature"/> is produced on both paths (raw:
+        /// <see cref="TryRawResolve"/>; managed: <see cref="FinalizeAndValidate"/>), so
+        /// <see cref="ClosureSignature3D.CellCount"/>/<see cref="ClosureSignature3D.CellVolumes"/> and this
+        /// list always agree. Reuses cell metadata the native decode already exposes - no new native ABI.
+        /// Reset (empty) at the start of each <see cref="Execute"/> call.
+        /// </summary>
+        public IReadOnlyList<SolverCell> Cells { get; private set; } = new List<SolverCell>();
+
         /// <summary>Step 1 output: clean single panels - external shape only, within-bucket parallels snapped
         /// onto one backer, contained/overlapping coplanar faces merged. The input to Step 2 (fill/extend).</summary>
         public List<Face3D> CleanFace3Ds { get; private set; } = new List<Face3D>();
@@ -341,6 +351,7 @@ namespace SAM.Geometry.OCCT.Solver
             OpenWallFace3Ds = new List<Face3D>();
             NativeResolved = false;
             ResolvedCellCount = 0;
+            Cells = new List<SolverCell>();
             Diagnostics = new SolverDiagnostics();
             Signature = null;
             RawAttemptSignature = null;
@@ -650,6 +661,7 @@ namespace SAM.Geometry.OCCT.Solver
 
             List<Face3D> finalFaces = appended;
             List<double> cellVolumes = new List<double>();
+            List<SolverCell> solverCells = new List<SolverCell>();
             int cellCount = resolveCellCount;
             SourceMap finalMap = null;
             bool adoptedRebuild = false;
@@ -675,6 +687,9 @@ namespace SAM.Geometry.OCCT.Solver
                         : shells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null && x.IsValid()).ToList();
                     int rebuiltCells = rebuildResult.Cells?.Count ?? 0;
                     List<double> rebuiltVolumes = rebuildResult.Cells == null ? new List<double>() : rebuildResult.Cells.Select(x => x.Volume).ToList();
+                    // Phase 7a: the same per-cell snapshot, captured alongside rebuiltVolumes so it reflects
+                    // exactly the cells the acceptance rule below measures.
+                    List<SolverCell> rebuiltSolverCells = rebuildResult.Cells == null ? new List<SolverCell>() : rebuildResult.Cells.Select((x, idx) => new SolverCell(idx, x.Volume, x.Center, x.Shell)).ToList();
                     OcctHistory rebuildHistory = rebuildResult.History;
                     int rebuiltNaked = ResolveStage.NakedEdgeCount(rebuiltFaces, occtOptions);
 
@@ -685,6 +700,7 @@ namespace SAM.Geometry.OCCT.Solver
                         finalFaces = rebuiltFaces;
                         cellCount = rebuiltCells;
                         cellVolumes = rebuiltVolumes;
+                        solverCells = rebuiltSolverCells;
                         finalMap = ComposeRebuildMap(preMap, rebuildHistory, patchStart, patchFace3Ds.Count, retainedStart, retainedFace3Ds.Count, retainedSourceIndices, rebuiltFaces);
                         adoptedRebuild = true;
                         Diagnostics.Add(SolverStage.Heal, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info,
@@ -713,13 +729,14 @@ namespace SAM.Geometry.OCCT.Solver
 
                 RecordRetainedProvenance(finalMap, retainedStart, retainedFace3Ds.Count, retainedSourceIndices);
 
-                cellVolumes = DecodeCellVolumes(appended, occtOptions, out cellCount);
+                cellVolumes = DecodeCellVolumes(appended, occtOptions, out cellCount, out solverCells);
             }
 
             // Publish the adopted geometry + provenance. HoleFillFace3Ds stays the patch set (the air-panel
             // candidates) - empty when fill+sew closed everything, so the "no fabricated air face" contract holds.
             ResolvedFace3Ds = finalFaces;
             ResolvedCellCount = cellCount;
+            Cells = solverCells;
             HoleFillFace3Ds = patchFace3Ds ?? new List<Face3D>();
             SourceMap = finalMap ?? new SourceMap();
 
@@ -828,10 +845,13 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>Decodes <paramref name="face3Ds"/> into a cell complex once to read its cell count/volumes
-        /// (the appended-set signature metrics when the consolidation rebuild is off or rejected).</summary>
-        private static List<double> DecodeCellVolumes(List<Face3D> face3Ds, OcctBuildOptions options, out int cellCount)
+        /// (the appended-set signature metrics when the consolidation rebuild is off or rejected), plus the
+        /// Phase 7a per-cell <paramref name="cells"/> snapshot (index/volume/centre/shell) for the same build -
+        /// one decode, both outputs, so they always describe the same cell complex.</summary>
+        private static List<double> DecodeCellVolumes(List<Face3D> face3Ds, OcctBuildOptions options, out int cellCount, out List<SolverCell> cells)
         {
             cellCount = 0;
+            cells = new List<SolverCell>();
             if (face3Ds == null || face3Ds.Count == 0)
             {
                 return new List<double>();
@@ -841,6 +861,7 @@ namespace SAM.Geometry.OCCT.Solver
             try
             {
                 cellCount = result?.Cells?.Count ?? 0;
+                cells = result?.Cells == null ? new List<SolverCell>() : result.Cells.Select((x, idx) => new SolverCell(idx, x.Volume, x.Center, x.Shell)).ToList();
                 return result?.Cells == null ? new List<double>() : result.Cells.Select(x => x.Volume).ToList();
             }
             finally
@@ -2119,6 +2140,9 @@ namespace SAM.Geometry.OCCT.Solver
             // Captured before Dispose() (which only tears down a retained native topology handle, never used
             // here): Cells itself is plain managed data, but reading it after Dispose() would be fragile.
             List<double> cellVolumes = result.Cells == null ? new List<double>() : result.Cells.Select(x => x.Volume).ToList();
+            // Phase 7a: the same per-cell snapshot (index/volume/centre/shell), captured alongside cellVolumes
+            // so it reflects exactly the cells the adoption gate below measures.
+            List<SolverCell> solverCells = result.Cells == null ? new List<SolverCell>() : result.Cells.Select((x, idx) => new SolverCell(idx, x.Volume, x.Center, x.Shell)).ToList();
             List<Face3D> resolved = shells == null
                 ? new List<Face3D>()
                 : shells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null && x.IsValid()).ToList();
@@ -2215,6 +2239,7 @@ namespace SAM.Geometry.OCCT.Solver
             ResolvedFace3Ds = resolved;
             NativeResolved = true;
             ResolvedCellCount = cells;
+            Cells = solverCells;
             NakedEdgePoint3Ds = new List<Point3D>();
 
             // Coarse source mapping over the adopted raw output (Phase 2, managed-only stand-in for the native
