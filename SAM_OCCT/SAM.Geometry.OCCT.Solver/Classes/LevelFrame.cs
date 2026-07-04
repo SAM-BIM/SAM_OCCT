@@ -51,6 +51,12 @@ namespace SAM.Geometry.OCCT.Solver
         /// </summary>
         public const double DEFAULT_ElevationBand = 0.15;
 
+        /// <summary>Default half-angle (radians) within which a face normal counts as perpendicular to the
+        /// frame up-axis, so the face is a wall - ~20°, matching the solver's
+        /// <see cref="Panel3DSnapSolver.VerticalAngleTolerance"/>. A cap is anything not vertical (its normal
+        /// carries a significant up-component), matching the pipeline's binary wall/cap split.</summary>
+        public const double DEFAULT_VerticalAngleTolerance = 20.0 * (System.Math.PI / 180.0);
+
         private Transform3D toFrame;
         private Transform3D fromFrame;
         private bool transformsBuilt;
@@ -159,6 +165,48 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return System.Math.Abs(SignedElevation(centroid)) <= elevationBand;
+        }
+
+        /// <summary>
+        /// Frame-aware verticality: true when <paramref name="face"/>'s normal is (near) perpendicular to this
+        /// frame's up-axis - a wall <em>of this level</em>. Unlike the world-Z
+        /// <see cref="SnappedPanel.IsVertical(double)"/>, this measures against the level up-axis, so a wall on
+        /// a tilted level (whose normal is tilted away from horizontal in world Z) is still recognised as a
+        /// wall past the 20° world-frame ceiling. Reduces to the world-Z test for a flat frame.
+        /// </summary>
+        public bool IsVertical(Face3D face, double verticalAngleTolerance = DEFAULT_VerticalAngleTolerance)
+        {
+            Plane plane = face?.GetPlane();
+            if (plane == null)
+            {
+                return false;
+            }
+
+            return System.Math.Abs(plane.Normal.Unit.DotProduct(Normal)) <= System.Math.Sin(verticalAngleTolerance);
+        }
+
+        /// <summary>Frame-aware wall test - an alias of <see cref="IsVertical(Face3D, double)"/> (a wall is a
+        /// vertical panel), named for call sites that read in terms of walls.</summary>
+        public bool IsWall(Face3D face, double verticalAngleTolerance = DEFAULT_VerticalAngleTolerance)
+        {
+            return IsVertical(face, verticalAngleTolerance);
+        }
+
+        /// <summary>
+        /// Frame-aware cap test: true when <paramref name="face"/> is NOT vertical in this frame - its normal
+        /// carries a significant component along the level up-axis, so it is a floor/roof of this level. The
+        /// exact complement of <see cref="IsWall(Face3D, double)"/> for a valid face (a null/degenerate face is
+        /// neither), preserving the pipeline's binary wall/cap partition but measured in-frame.
+        /// </summary>
+        public bool IsCap(Face3D face, double verticalAngleTolerance = DEFAULT_VerticalAngleTolerance)
+        {
+            Plane plane = face?.GetPlane();
+            if (plane == null)
+            {
+                return false;
+            }
+
+            return System.Math.Abs(plane.Normal.Unit.DotProduct(Normal)) > System.Math.Sin(verticalAngleTolerance);
         }
 
         /// <summary>World→frame transform: maps <see cref="Normal"/> onto world Z and the datum plane onto the
@@ -522,6 +570,119 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Classifies <paramref name="face"/> as a <see cref="FaceRole.Wall"/> or <see cref="FaceRole.Cap"/>
+        /// against the most relevant level frame, and reports which frame via <paramref name="frameIndex"/>.
+        /// The relevant frame is the one the face geometrically belongs to: the datum a cap sits on
+        /// (<see cref="AssignCapToFrame"/>), else a datum a wall spans (<see cref="AssignWallToFrames"/>), else
+        /// the nearest datum by centroid; the binary wall/cap decision (<see cref="IsWall(Face3D, double)"/>)
+        /// is then made <em>in that frame</em>. When no frames exist the classification falls back to the
+        /// world-Z test (the pre-Phase-6 behaviour), so a single-frame / no-frame model is unchanged. A
+        /// diagnostic naming the frame is emitted only when the chosen frame is meaningfully tilted (where the
+        /// frame-aware answer can differ from world Z) - "diagnostics identify the frame used where useful".
+        /// </summary>
+        public static FaceRole ClassifyFace(
+            Face3D face,
+            IReadOnlyList<LevelFrame> frames,
+            out int frameIndex,
+            double verticalAngleTolerance = DEFAULT_VerticalAngleTolerance,
+            SolverDiagnostics diagnostics = null)
+        {
+            frameIndex = -1;
+            Plane plane = face?.GetPlane();
+            if (plane == null)
+            {
+                return FaceRole.Cap; // undefined input: default to the non-wall role (never extended as a wall)
+            }
+
+            if (frames == null || frames.Count == 0)
+            {
+                return WorldZClassification(plane, verticalAngleTolerance); // fallback: no frames -> world Z
+            }
+
+            // A cap sits on (and parallel to) a datum; AssignCapToFrame naturally rejects a wall (whose normal
+            // is perpendicular to every datum, failing the parallel cone).
+            int capFrame = AssignCapToFrame(face, frames);
+            if (capFrame >= 0)
+            {
+                frameIndex = capFrame;
+                return RoleInFrame(frames[capFrame], face, verticalAngleTolerance, diagnostics);
+            }
+
+            // Otherwise a wall spans one or more datums (its foot-to-top range straddles them).
+            IReadOnlyList<int> spanned = AssignWallToFrames(face, frames);
+            if (spanned.Count > 0)
+            {
+                frameIndex = spanned[0];
+                return RoleInFrame(frames[spanned[0]], face, verticalAngleTolerance, diagnostics);
+            }
+
+            // Neither cleanly a cap nor a spanning wall: use the nearest datum's up-axis.
+            int nearest = NearestFrameByCentroid(face, frames);
+            if (nearest >= 0)
+            {
+                frameIndex = nearest;
+                return RoleInFrame(frames[nearest], face, verticalAngleTolerance, diagnostics);
+            }
+
+            return WorldZClassification(plane, verticalAngleTolerance);
+        }
+
+        /// <summary>The binary wall/cap decision for <paramref name="face"/> in <paramref name="frame"/>, with
+        /// an Info diagnostic naming the frame when it is meaningfully tilted (so the frame-aware result can
+        /// differ from world Z) - flat frames stay quiet.</summary>
+        private static FaceRole RoleInFrame(LevelFrame frame, Face3D face, double verticalAngleTolerance, SolverDiagnostics diagnostics)
+        {
+            FaceRole role = frame.IsWall(face, verticalAngleTolerance) ? FaceRole.Wall : FaceRole.Cap;
+            if (diagnostics != null && frame.TiltAngle > Core.Tolerance.Angle)
+            {
+                diagnostics.Add(SolverStage.Snap, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info,
+                    string.Format("LevelFrame: classified face as {0} in a tilted level frame (tilt {1:0.#}°) - frame-aware, not world-Z.",
+                        role, frame.TiltAngle * (180.0 / System.Math.PI)),
+                    face3D: face);
+            }
+
+            return role;
+        }
+
+        /// <summary>Index of the frame whose datum is nearest <paramref name="face"/>'s centroid (perpendicular
+        /// offset), or -1 when the centroid or every frame is unusable - the last-resort frame pick.</summary>
+        private static int NearestFrameByCentroid(Face3D face, IReadOnlyList<LevelFrame> frames)
+        {
+            Point3D centroid = face?.GetBoundingBox()?.GetCentroid();
+            if (centroid == null)
+            {
+                return -1;
+            }
+
+            int best = -1;
+            double bestDistance = double.MaxValue;
+            for (int i = 0; i < frames.Count; i++)
+            {
+                LevelFrame frame = frames[i];
+                if (frame?.Normal == null)
+                {
+                    continue;
+                }
+
+                double distance = System.Math.Abs(frame.SignedElevation(centroid));
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = i;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>The pre-Phase-6 world-Z wall/cap decision - the fallback when no level frames exist.</summary>
+        private static FaceRole WorldZClassification(Plane plane, double verticalAngleTolerance)
+        {
+            bool wall = System.Math.Abs(plane.Normal.Unit.Z) <= System.Math.Sin(verticalAngleTolerance);
+            return wall ? FaceRole.Wall : FaceRole.Cap;
         }
 
         /// <summary>An input cap's geometry, snapshotted once for <see cref="Cluster"/> (normal collapsed to

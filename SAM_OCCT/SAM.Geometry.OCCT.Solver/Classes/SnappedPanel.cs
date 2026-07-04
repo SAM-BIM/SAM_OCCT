@@ -596,15 +596,36 @@ namespace SAM.Geometry.OCCT.Solver
         /// True when the supporting plane is (near) vertical - the normal lies (near) horizontal,
         /// i.e. |normal.Z| is within <paramref name="angleTolerance"/> of zero. Walls are vertical;
         /// floors and roofs are not. Used to decide which panels are extended up to a cap.
+        /// <para>
+        /// This is the world-Z special case of the frame-aware
+        /// <see cref="IsVertical(double, Vector3D)"/> (Phase 6): it delegates with the world up-axis, so
+        /// every existing caller is byte-identical. A caller with a <see cref="LevelFrame"/> passes the
+        /// level's up-axis instead, so a wall on a tilted level is still recognised as a wall past the 20°
+        /// world-frame ceiling.
+        /// </para>
         /// </summary>
         public bool IsVertical(double angleTolerance)
+        {
+            return IsVertical(angleTolerance, new Vector3D(0, 0, 1));
+        }
+
+        /// <summary>
+        /// Frame-aware verticality: true when the supporting plane's normal is (near) perpendicular to
+        /// <paramref name="upAxis"/> - i.e. within <paramref name="angleTolerance"/> of the plane through the
+        /// origin normal to <paramref name="upAxis"/> (the level's "horizontal"). Reduces exactly to the
+        /// world-Z <see cref="IsVertical(double)"/> when <paramref name="upAxis"/> is world Z: the dot product
+        /// with (0,0,1) is just the normal's Z. Phase 6 removes the hard world-Z assumption here without
+        /// changing any existing (world-Z) result. A null/degenerate up-axis falls back to world Z.
+        /// </summary>
+        public bool IsVertical(double angleTolerance, Vector3D upAxis)
         {
             if (plane == null)
             {
                 return false;
             }
 
-            return System.Math.Abs(plane.Normal.Unit.Z) <= System.Math.Sin(angleTolerance);
+            Vector3D up = upAxis == null || upAxis.Length <= Core.Tolerance.Distance ? new Vector3D(0, 0, 1) : upAxis.Unit;
+            return System.Math.Abs(plane.Normal.Unit.DotProduct(up)) <= System.Math.Sin(angleTolerance);
         }
 
         /// <summary>
