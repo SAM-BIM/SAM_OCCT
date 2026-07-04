@@ -78,6 +78,22 @@ namespace SAM.Geometry.OCCT.Solver
         /// the legacy world-frame <see cref="Panel3DSnapSolver.NormalizeCapOffset"/> band was used instead
         /// (Phase 7-pre diagnostics parity - geometry is unchanged by this diagnostic).
         /// </summary>
-        FrameNormalization
+        FrameNormalization,
+
+        /// <summary>
+        /// Phase 7c closure gate: spaces were NOT created because the resolved geometry is not fully
+        /// closed (naked edges remain) or the adjacency/space construction failed. A degraded solve (e.g.
+        /// a multi-level managed result that falls short of closure) returns this diagnostic and no
+        /// <c>AdjacencyCluster</c>, rather than building spaces on an incomplete cell complex.
+        /// </summary>
+        SpacesRefused,
+
+        /// <summary>
+        /// Phase 7c: a classified cell (<see cref="CellRole.Sliver"/>, <see cref="CellRole.Exterior"/>, or
+        /// <see cref="CellRole.Unknown"/>) did not become a <c>Space</c>. Complements the classifier's own
+        /// per-role diagnostic (e.g. <see cref="SliverCell"/>) with the space-layer consequence - never
+        /// silent, so a room that unexpectedly did not get a Space is traceable to its cause.
+        /// </summary>
+        CellExcludedFromSpaces
     }
 }
