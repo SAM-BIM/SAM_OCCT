@@ -62,6 +62,14 @@ namespace SAM.Geometry.OCCT.Solver
         EscalatedPanel,
 
         /// <summary>A configured cost/time/round budget was exceeded.</summary>
-        BudgetExceeded
+        BudgetExceeded,
+
+        /// <summary>
+        /// A cap or wall face could not be assigned to a single <see cref="LevelFrame"/> unambiguously -
+        /// it lies within the elevation band of more than one level frame, or (a wall) spans none of the
+        /// clustered datums (Phase 6). Never silent: the face is assigned to a deterministic fallback frame
+        /// (the nearest datum, or for a wall the nearest by centroid) and this diagnostic records the choice.
+        /// </summary>
+        AmbiguousLevelFrame
     }
 }
