@@ -70,6 +70,14 @@ namespace SAM.Geometry.OCCT.Solver
         /// clustered datums (Phase 6). Never silent: the face is assigned to a deterministic fallback frame
         /// (the nearest datum, or for a wall the nearest by centroid) and this diagnostic records the choice.
         /// </summary>
-        AmbiguousLevelFrame
+        AmbiguousLevelFrame,
+
+        /// <summary>
+        /// Reports how frame-aware cap normalization (Phase 6c) grouped a level's caps: the number of
+        /// level frames formed, the cap count normalized within each, or that no cap formed a frame and
+        /// the legacy world-frame <see cref="Panel3DSnapSolver.NormalizeCapOffset"/> band was used instead
+        /// (Phase 7-pre diagnostics parity - geometry is unchanged by this diagnostic).
+        /// </summary>
+        FrameNormalization
     }
 }

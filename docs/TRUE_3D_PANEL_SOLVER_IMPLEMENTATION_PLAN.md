@@ -5,6 +5,9 @@ Status: approved roadmap · Date: 2026-07-02 · Host branch: `fix/solver-raw-fir
 This document supersedes `docs/3D_PANEL_SOLVER_PLAN.md` as the active plan (the old plan is kept
 unchanged as the historical baseline; §C below is the critique that motivated this revision).
 
+**Post-Phase-6 checkpoint:** `docs/P6_ARCHITECTURE_REVIEW.md` records the architecture review performed
+after Phase 6 (per-level frames) and before Phase 7; where it differs from this plan, the review wins.
+
 ---
 
 ## A. Executive summary

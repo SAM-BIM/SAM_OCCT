@@ -2017,7 +2017,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// A frame with a single cap is a no-op. When <paramref name="frames"/> is null/empty the caller falls
         /// back to the legacy world-frame overload.
         /// </summary>
-        public static void NormalizeCaps(List<SnappedPanel> panels, IReadOnlyList<LevelFrame> frames, double toleranceAngle, double toleranceDistance, double verticalAngleTolerance = 20 * (System.Math.PI / 180))
+        public static void NormalizeCaps(List<SnappedPanel> panels, IReadOnlyList<LevelFrame> frames, double toleranceAngle, double toleranceDistance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), SolverDiagnostics diagnostics = null)
         {
             if (panels == null || panels.Count < 2 || frames == null || frames.Count == 0)
             {
@@ -2026,8 +2026,9 @@ namespace SAM.Geometry.OCCT.Solver
 
             // Bucket the cap panels by the level frame they belong to. ClassifyFace is frame-aware, so a wall on a
             // >20°-tilted level classifies as a wall (not a cap) and is skipped - the world-frame ceiling the
-            // legacy overload's IsVertical carries. Diagnostics are suppressed here (the per-face spam is not
-            // useful; the clustering summary already reports the frame count).
+            // legacy overload's IsVertical carries. `diagnostics` is threaded through to ClassifyFace so an
+            // ambiguous cap-to-frame assignment (AmbiguousLevelFrame) is reported rather than silently resolved;
+            // the per-frame grouping summary below (FrameNormalization) is the routine, non-spammy report.
             Dictionary<int, List<SnappedPanel>> capsByFrame = new Dictionary<int, List<SnappedPanel>>();
             foreach (SnappedPanel panel in panels)
             {
@@ -2036,7 +2037,7 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
-                FaceRole role = LevelFrame.ClassifyFace(panel.Face3D, frames, out int frameIndex, verticalAngleTolerance);
+                FaceRole role = LevelFrame.ClassifyFace(panel.Face3D, frames, out int frameIndex, verticalAngleTolerance, diagnostics);
                 if (role != FaceRole.Cap || frameIndex < 0)
                 {
                     continue;
@@ -2051,16 +2052,25 @@ namespace SAM.Geometry.OCCT.Solver
                 bucket.Add(panel);
             }
 
+            diagnostics?.Add(SolverStage.Snap, DiagnosticCode.FrameNormalization, OcctDiagnosticSeverity.Info,
+                string.Format("Frame-aware cap normalization: {0} level frame(s) formed from {1} level frame(s) supplied, {2} cap(s) classified onto a frame.", capsByFrame.Count, frames.Count, capsByFrame.Values.Sum(x => x.Count)));
+
             // Within each frame, snap every member cap onto the largest-area member's plane (the backer/datum).
             // Identical to the legacy per-group backer snap - only the grouping is by frame, not the flat band.
-            foreach (List<SnappedPanel> bucket in capsByFrame.Values)
+            foreach (KeyValuePair<int, List<SnappedPanel>> entry in capsByFrame.OrderBy(x => x.Key))
             {
+                List<SnappedPanel> bucket = entry.Value;
                 if (bucket.Count < 2)
                 {
+                    diagnostics?.Add(SolverStage.Snap, DiagnosticCode.FrameNormalization, OcctDiagnosticSeverity.Info,
+                        string.Format("Level frame {0}: 1 cap - nothing to normalize onto.", entry.Key));
                     continue;
                 }
 
                 SnappedPanel backer = bucket.OrderByDescending(x => x.GetArea()).First();
+                diagnostics?.Add(SolverStage.Snap, DiagnosticCode.FrameNormalization, OcctDiagnosticSeverity.Info,
+                    string.Format("Level frame {0}: {1} cap(s) normalized onto the largest-area cap's datum plane.", entry.Key, bucket.Count));
+
                 foreach (SnappedPanel candidate in bucket)
                 {
                     if (ReferenceEquals(candidate, backer))

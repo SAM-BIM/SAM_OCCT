@@ -164,15 +164,18 @@ any of the later phases touch it:
     these already had individual coverage in `FlatSolveIntegrationTests` /
     `TiltedSolveIntegrationTests`; this test additionally locks total volume
     via `ClosureSignature3D` output logged to the test console.
-  - **Managed path** (`Solve3D_ManagedPath_ClosureSignatureIsRecorded`) -
+  - **Managed path** (`Solve3D_ManagedPath_ClosureSignatureMatchesGoldenMaster`,
+    renamed from `Solve3D_ManagedPath_ClosureSignatureIsRecorded` in the Phase
+    7-pre cleanup below) -
     the pre-raw-first clean/extend/resolve pipeline, forced via
     `Panel3DSnapSolver.ForceManagedPipeline` (threaded through
     `Modify.Solve3D`'s `forceManagedPipeline` parameter). Both default to
     `false` and change no existing behaviour; setting either skips only the
     raw-first shortcut and always runs the managed pipeline, which is known
     (see plan §A) to under-close some of these exact fixtures relative to
-    the raw path. This test records today's number as the baseline - it does
-    not assert a specific value, since Phase 0 makes no pipeline changes.
+    the raw path. Phase 0 recorded today's number as a baseline without
+    asserting it; Phase 7-pre machine-pins it to the Phase 6c/6d documented
+    values (see "Phase 7-pre" below).
 
 **Local-integration merge gate.** Every phase in the plan (0-9) is merged
 under the same protocol already documented above: `dotnet test` on
@@ -709,3 +712,56 @@ stop and reassess, not push through, if:
 When none of the above trip, the safe design space per the 6c deviation note is: condition in a dominant
 frame, and split extend/fill only across proven-separate storeys - never within a single multi-orientation
 level.
+
+## Phase 7-pre: pinned managed golden masters + frame-normalization diagnostics
+
+Two bounded pre-flight cleanup items from `docs/P6_ARCHITECTURE_REVIEW.md` §O (O1, O2), landed before
+Phase 7 (cell classification / Spaces handoff) starts. No solver geometry changed; both suites green,
+golden masters re-run first (raw byte-identical, managed now exactly pinned instead of drifting).
+
+- **O1 - managed golden masters machine-pinned.** `GoldenMasterIntegrationTests.
+  Solve3D_ManagedPath_ClosureSignatureIsRecorded` (which asserted only `cells >= 1`) is renamed to
+  `Solve3D_ManagedPath_ClosureSignatureMatchesGoldenMaster` and now asserts the exact Phase 6c/6d
+  baseline for all five fixtures - cell count and naked-edge count exactly, total volume within
+  `ClosureSignature3D.IsRegressionOf`'s own tolerance (`Core.Tolerance.MacroDistance`, not string-formatted
+  equality, so harmless floating-point noise in the native volume sum cannot fail the test while real
+  drift still does):
+
+  | fixture | cells | naked | total volume (m³) |
+  | --- | --- | --- | --- |
+  | `whole-level-flat.sam` | 22 | 0 | 3479.896696920142 |
+  | `tilted-two-spaces.sam` | 2 | 0 | 723.6524777123251 |
+  | `whole-level-tilted.sam` | 22 | 0 | 3377.8280592825126 |
+  | `two-level-tilted.sam` | 29 | 29 | 2213.30306718148 |
+  | `whole-level-towers.sam` | 22 | 12 | 8777.056042123724 |
+
+  These are the values already documented in the "Per-level frames" §6c/§6e tables above (measured
+  freshly for this change, matching exactly); this is a test-hardening change, not a re-baseline - the
+  §6e stop rule ("a managed golden-master value changes... without an explicit, reasoned delta") is now
+  machine-enforced instead of living in prose only.
+- **O2 - frame-aware `NormalizeCaps` diagnostics parity.** The frame-aware `NormalizeCaps` overload
+  (`Panel3DSnapSolver.cs`, consumed by `SnapStage.Clean`) was diagnostically silent (the legacy
+  world-frame overload's call site is too, but the frame-aware path is where Phase 6 debugging actually
+  needs the signal). It gained an optional `SolverDiagnostics` parameter, purely additive:
+  - A new `DiagnosticCode.FrameNormalization` (Info) reports the frame count formed, the cap count
+    classified onto a frame, and a per-frame line naming the cap count normalized onto that frame's
+    datum (or "nothing to normalize onto" for a single-cap frame).
+  - `SnapStage.Clean` reports the legacy-fallback event (`FrameNormalization`, Info) when no cap forms a
+    frame and the flat world-frame band is used instead.
+  - The existing `LevelFrame.ClassifyFace` (and the `AssignCapToFrame`/`RoleInFrame` diagnostics it
+    already supported but the frame-aware `NormalizeCaps` call never wired through) now receives the
+    `diagnostics` instance, so an ambiguous cap-to-frame assignment (`AmbiguousLevelFrame`) surfaces from
+    cap normalization too, not only from `StackedSlabInterfaceDetector`.
+  - The frame bucket iteration in `NormalizeCaps` is now explicitly ordered by frame index
+    (`OrderBy(x => x.Key)` instead of an implicit `Dictionary.Values` walk) as a side effect of adding the
+    per-frame diagnostic line - each frame's cap set is disjoint and self-contained, so this has no effect
+    on the produced geometry (confirmed: all ten golden-master signatures unchanged).
+  - Visible via `Panel3DSnapSolver.Diagnostics` and the `SAM_OCCT_SOLVE3D_DIAGNOSTIC:` lines `Modify.Solve3D`
+    already surfaces; no new output parameter.
+
+**Verification run (local, native present).** Build 0 errors; unit **400/400**; integration **126 passed /
+1 skipped** (the inverse-gated native-missing test, expected since native is present); all 10 golden-master
+signatures confirmed (raw byte-identical 5/5; managed now exact-match 5/5 against the table above); Phase
+5f `Benchmark1500` unaffected (~5 s, well inside the 90 s ceiling). `docs/P6_ARCHITECTURE_REVIEW.md` records
+the full checkpoint review these two items come from; `docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md`
+points to it.

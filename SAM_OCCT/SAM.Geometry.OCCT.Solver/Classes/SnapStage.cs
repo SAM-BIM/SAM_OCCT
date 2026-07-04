@@ -141,10 +141,12 @@ namespace SAM.Geometry.OCCT.Solver
                 LevelFrame.DEFAULT_ElevationBand);
             if (capFrames.Count != 0)
             {
-                Panel3DSnapSolver.NormalizeCaps(panels, capFrames, tol.Angle, tol.Distance, tol.VerticalAngle);
+                Panel3DSnapSolver.NormalizeCaps(panels, capFrames, tol.Angle, tol.Distance, tol.VerticalAngle, diagnostics);
             }
             else
             {
+                diagnostics?.Add(SolverStage.Snap, DiagnosticCode.FrameNormalization, OcctDiagnosticSeverity.Info,
+                    string.Format("Frame-aware cap normalization: no cap formed a level frame; falling back to the legacy world-frame band ({0:0.###} m).", normalizeCapOffset));
                 Panel3DSnapSolver.NormalizeCaps(panels, tol.Angle, normalizeCapOffset, tol.Distance, tol.VerticalAngle);
             }
 

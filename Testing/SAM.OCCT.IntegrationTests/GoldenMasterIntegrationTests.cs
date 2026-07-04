@@ -131,13 +131,29 @@ namespace SAM.OCCT.IntegrationTests
             Assert.True(signature.NakedEdgeCount <= maxNakedEdgeCount, string.Format("{0}: expected <= {1} naked edge(s), got {2}", fixture, maxNakedEdgeCount, signature.NakedEdgeCount));
         }
 
+        /// <summary>
+        /// Managed-path baseline pinned to the Phase 6c/6d documented values (TESTING.md "Per-level
+        /// frames" §6c/§6e, <c>docs/P6_ARCHITECTURE_REVIEW.md</c> §O.O1): fixture, expected cell count,
+        /// expected naked-edge count, expected total volume (m3). Cell/naked counts are exact; volume is
+        /// asserted within <see cref="ClosureSignature3D.IsRegressionOf"/>'s own tolerance
+        /// (<see cref="Core.Tolerance.MacroDistance"/>), not string-formatted equality, so harmless
+        /// floating-point noise in the native volume sum does not fail the test while any real drift
+        /// still does. Three of five fixtures are unchanged from Phase 5; `two-level-tilted` and
+        /// `whole-level-towers` are the intentional Phase 6c re-baseline. A value changing here without
+        /// an explicit, reasoned PR delta is a regression, per the golden-master contract in TESTING.md.
+        /// </summary>
+        public static IEnumerable<object[]> ManagedFixtures()
+        {
+            yield return new object[] { "whole-level-flat.sam", 22, 0, 3479.896696920142 };
+            yield return new object[] { "tilted-two-spaces.sam", 2, 0, 723.6524777123251 };
+            yield return new object[] { "whole-level-tilted.sam", 22, 0, 3377.8280592825126 };
+            yield return new object[] { "two-level-tilted.sam", 29, 29, 2213.30306718148 };
+            yield return new object[] { "whole-level-towers.sam", 22, 12, 8777.056042123724 };
+        }
+
         [SkippableTheory]
-        [InlineData("whole-level-flat.sam")]
-        [InlineData("tilted-two-spaces.sam")]
-        [InlineData("whole-level-tilted.sam")]
-        [InlineData("two-level-tilted.sam")]
-        [InlineData("whole-level-towers.sam")]
-        public void Solve3D_ManagedPath_ClosureSignatureIsRecorded(string fixture)
+        [MemberData(nameof(ManagedFixtures))]
+        public void Solve3D_ManagedPath_ClosureSignatureMatchesGoldenMaster(string fixture, int expectedCellCount, int expectedNakedEdgeCount, double expectedVolume)
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
             string path = Path.Combine(FixturesDirectory, fixture);
@@ -149,8 +165,8 @@ namespace SAM.OCCT.IntegrationTests
             // ForceManagedPipeline bypasses the raw-first shortcut so the managed clean/extend/resolve
             // pipeline runs on the SAME well-modelled fixtures it would otherwise never see (raw-first
             // adopts them directly). §A documents this pipeline as historically weaker on these exact
-            // fixtures (merged rooms, residual naked edges at inter-level slab corners) - this test
-            // locks TODAY'S number, whatever it is, not a specific expected value.
+            // fixtures (merged rooms, residual naked edges at inter-level slab corners); the expected
+            // values above are the Phase 6c/6d baseline this test now machine-enforces.
             List<Panel> solved = panels.Solve3D(out List<Point3D> nakedPoint3Ds, out List<string> diagnostics, forceManagedPipeline: true);
             Assert.NotNull(solved);
             Assert.NotEmpty(solved);
@@ -158,7 +174,11 @@ namespace SAM.OCCT.IntegrationTests
             ClosureSignature3D signature = CaptureSignature(solved, nakedPoint3Ds);
             output.WriteLine(string.Format("{0} [managed]: {1}", fixture, signature));
 
-            Assert.True(signature.CellCount >= 1, string.Format("{0}: managed pipeline produced no closed cell", fixture));
+            Assert.True(signature.CellCount == expectedCellCount, string.Format("{0}: expected exactly {1} cell(s), got {2}", fixture, expectedCellCount, signature.CellCount));
+            Assert.True(signature.NakedEdgeCount == expectedNakedEdgeCount, string.Format("{0}: expected exactly {1} naked edge(s), got {2}", fixture, expectedNakedEdgeCount, signature.NakedEdgeCount));
+
+            double volumeDelta = System.Math.Abs(signature.TotalVolume - expectedVolume);
+            Assert.True(volumeDelta <= Core.Tolerance.MacroDistance, string.Format("{0}: expected total volume {1:0.###} m3 (+/- {2}), got {3:0.###} m3 (delta {4})", fixture, expectedVolume, Core.Tolerance.MacroDistance, signature.TotalVolume, volumeDelta));
         }
     }
 }
