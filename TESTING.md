@@ -72,6 +72,18 @@ dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj
 If the native library is not on the load path, the integration tests skip and
 the unit tests still validate all managed behaviour.
 
+**Full regression (build + Grasshopper + both test projects).** The command sequence a PR review runs
+end to end — the integration run already includes `GoldenMasterIntegrationTests` (all 10 raw/managed
+signatures) and `PerformanceGuardIntegrationTests` (`Benchmark1500`; see "Benchmark1500 performance
+guard" above for the `SAM_OCCT_SKIP_PERF` opt-out):
+
+```powershell
+dotnet build SAM_OCCT.sln -c Debug
+dotnet build Grasshopper/SAM.Analytical.Grasshopper.OCCT/SAM.Analytical.Grasshopper.OCCT.csproj -c Debug
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj -c Debug
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj -c Debug
+```
+
 ## Continuous integration
 
 `.github/workflows/build.yml` builds the solution (including sibling SAM
@@ -1042,3 +1054,71 @@ benchmark fixture (per-stage ms in diagnostics - the reason this phase's `Closur
 `O3`/`O4`/`O7` hygiene items from `docs/P6_ARCHITECTURE_REVIEW.md` §O ("Should/Can fix"). The deferred
 per-level-frame extend/fill work (§6c/§6e stop rules) remains untouched and out of scope for Phase 8, as
 required.
+
+### Phase 9 closeout (performance/hardening audit and PR readiness, 2026-07-04)
+
+Phase 9, as scoped for this closeout pass, is a performance-verification/hardening/documentation audit
+over the completed Phases 0-8 - **not** the full spatial-index/`GlueMode`/timing-harness rewrite the
+plan's §E Phase 9 originally sized (that remains a legitimate, larger follow-up; see below). The audit:
+
+- **Performance verification** - `Benchmark1500`/`SAM_OCCT_SKIP_PERF` were already fully documented in
+  Phase 5f ("Benchmark1500 performance guard" above); re-confirmed this pass (build 0 errors, `Benchmark1500`
+  passes in ~6 s against the 90 s ceiling, `SAM_OCCT_SKIP_PERF=1` correctly skips it) - **already complete,
+  no doc changes needed**.
+- **Test verification** - full regression re-run: build 0 errors (solution + Grasshopper project), unit
+  **432/432**, integration **144 passed / 1 skipped**, all 10 golden-master signatures (raw byte-identical
+  5/5, managed matching the pinned 7-pre baseline 5/5) confirmed via `GoldenMasterIntegrationTests`.
+- **Hardening audit** - reviewed every Phase 8 addition (`ClosureReport`, `Solve3DReport`,
+  `SolverReportFormat`, the `Modify.Solve3D`/`Clean3D`/`Extend3D`/`AutoTune3D` report overloads, all four
+  Grasshopper components) for native handle lifetime risk (none found - `CellClassifier.ClassifyCells`'s
+  envelope decode, the only native call Phase 8 added a path to via `classifyCells_`, already disposes its
+  `OcctCellComplexResult` in a `try`/`finally`, unmodified since Phase 7b), repeated/eager expensive
+  recomputation (none found - every `Solve3DReport` is built exactly once per solve, on exactly one control
+  path, and `classifyCells_` defaults to false so no extra native decode runs unless explicitly requested),
+  and null-safety in report formatting (one minor inconsistency found and fixed: `SAMOCCTSolve3D`'s
+  `CellVolumes` output was missing the null-element guard its sibling `Cells`/`CellCentres` outputs already
+  had - `report?.Cells?.Select(x => x.Volume)` -> `report?.Cells?.Where(x => x != null).Select(x => x.Volume)`;
+  a defensive fix, not a fix for an observed failure, since `SolverCell` list entries are never actually
+  null under normal operation).
+- **Documentation** - this section, the "Full regression" command block above, and the PR review checklist
+  below are the only additions; every other Phase 9 documentation requirement (Benchmark1500/skip-seam,
+  the manual Grasshopper checklist) was already satisfied by Phase 5f/Phase 8 and is not duplicated here.
+
+**Known follow-ups (unchanged in substance from the Phase 8 note above, restated per the closeout brief):**
+
+1. **Safer per-frame extend/fill conditioning** - the Phase 6c deferral (condition in a dominant frame,
+   split only across proven-separate storeys) remains untouched; resume only per the TESTING.md §6e stop
+   rules.
+2. **Real gappy multi-storey fixtures** - the plan's own "as they become available" item (§K, Phase 6
+   review); the synthetic perturbed-towers route was invalidated in 5f. Still blocked on real models.
+3. **Optional native CI** - CI still builds managed-only (`SAM_OCCT_SKIP_NATIVE_BUILD=true`); native-gated
+   integration tests are run locally per this document's protocol, an owner decision unchanged since Phase 0.
+4. **Optional `Panel3DSnapSolver` façade slimming** - `docs/P6_ARCHITECTURE_REVIEW.md` §O item `O7`
+   (extract `FinalizeAndValidate` + legacy statics out of the ~2,300-line façade, behaviour-preserving);
+   still "can defer," not required by any phase's acceptance criteria.
+
+The original §E Phase 9 performance work (timing harness, Stage-A spatial index, `GlueMode=Shift` on
+escalation re-runs, `O3`/`O4` hygiene) remains a separate, larger, legitimate follow-up beyond this
+closeout's audit-only scope - listed above in "Remaining work (Phase 9)" and not reopened here.
+
+### PR review checklist (Phase 9)
+
+Copy into the PR description; every item below was verified during the Phase 9 closeout pass.
+
+- [ ] `dotnet build SAM_OCCT.sln -c Debug` - 0 errors.
+- [ ] `dotnet build Grasshopper/SAM.Analytical.Grasshopper.OCCT/SAM.Analytical.Grasshopper.OCCT.csproj -c Debug` - 0 errors.
+- [ ] `dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj` - all passed, 0 failed.
+- [ ] `dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj` - all passed, only the
+  inverse-gated native-missing test skipped (native present) or every native-gated test skipped (native
+  absent).
+- [ ] `GoldenMasterIntegrationTests` - all 10 raw/managed signatures unchanged from the pinned 7-pre baseline.
+- [ ] `PerformanceGuardIntegrationTests` (`Benchmark1500`) passed under the 90 s ceiling, or was skipped only
+  via `SAM_OCCT_SKIP_PERF`.
+- [ ] No native ABI change (`sam_occt_abi_version` unchanged; no new/removed native entry points).
+- [ ] No solver geometry/algorithm change (`ConditionStage`/`ResolveStage`/`HealStage` untouched, unless the
+  PR explicitly says otherwise with a golden-master delta explained).
+- [ ] Grasshopper compatibility preserved: every new component output/input is `ParamVisibility.Voluntary`
+  (or a brand-new component); no existing input/output renamed, retyped, reordered, or removed.
+- [ ] Docs (`TESTING.md`, `docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md`) updated to match what actually
+  shipped, with commit IDs recorded.
+- [ ] Working tree clean after the final commit.

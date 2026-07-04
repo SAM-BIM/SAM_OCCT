@@ -276,7 +276,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
             index = Params.IndexOfOutputParam("CellVolumes");
             if (index != -1)
             {
-                dataAccess.SetDataList(index, report?.Cells?.Select(x => x.Volume));
+                dataAccess.SetDataList(index, report?.Cells?.Where(x => x != null).Select(x => x.Volume));
             }
 
             index = Params.IndexOfOutputParam("CellClassification");

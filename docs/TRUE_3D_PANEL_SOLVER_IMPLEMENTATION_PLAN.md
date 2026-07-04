@@ -805,6 +805,39 @@ explicitly out of scope by owner decision — the local run is the merge gate, r
 - **Failure modes/diagnostics:** per-stage timing always emitted; budget-exceeded diagnostic.
 - **Depends:** all prior. **Out of scope:** >2k-panel chunking strategies, GPU/meshing work,
   CI-native enablement (still owner-deferred; leave the design note in TESTING.md).
+- **Phase 9 CLOSED OUT AS AN AUDIT PASS (2026-07-04) — not fully implemented as originally scoped.**
+  This section's full performance work (timing harness, Stage-A spatial index, `GlueMode=Shift` on
+  escalation re-runs, single-session native chaining) was **not** undertaken in this pass — it remains a
+  legitimate, larger follow-up (see below). What this pass did complete is a scoped performance-
+  verification/hardening/documentation/PR-readiness audit over Phases 0–8: `Benchmark1500`/
+  `SAM_OCCT_SKIP_PERF` were already fully documented at Phase 5f and reconfirmed unchanged (build 0
+  errors; `Benchmark1500` ~6 s against the 90 s ceiling; the skip seam verified to actually skip); the full
+  regression (build + Grasshopper build + both test suites) reconfirmed unit **432/432**, integration
+  **144 passed / 1 skipped**, and all 10 golden-master signatures unchanged; a hardening audit of every
+  Phase 8 addition found no native-handle-lifetime risk, no repeated/eager expensive recomputation, and one
+  minor report-formatting null-safety inconsistency (`SAMOCCTSolve3D`'s `CellVolumes` output missing the
+  null-element guard its `Cells`/`CellCentres` siblings already had — fixed, defensively, not because a
+  failure was observed). See `TESTING.md` "Phase 9 closeout" for the full audit record, the "Full
+  regression" command block, and the PR review checklist.
+
+  **Final state through Phase 9:** unit **432/432**, integration **144 passed / 1 skipped**, all 10
+  golden-master signatures unchanged since Phase 7-pre (raw byte-identical 5/5, managed matching the pinned
+  baseline 5/5), `Benchmark1500` ~6 s (90 s ceiling), no native ABI change since ABI v4 (Phase 3), no
+  solver-geometry/algorithm change since Phase 7, no Grasshopper breaking change since Phase 8 (every new
+  output/input is `ParamVisibility.Voluntary` or lives on the brand-new `SAMOCCTAutoTune3D` component).
+
+  **Known follow-ups (unchanged, carried forward — none are Phase 9 blockers):**
+  1. Safer per-frame extend/fill conditioning (Phase 6c deferral; resume only per the TESTING.md §6e stop
+     rules — condition in a dominant frame, split only across proven-separate storeys).
+  2. Real gappy multi-storey fixtures, once available (the plan's own "as they become available" item;
+     blocked on real models, not on any implementation gap).
+  3. Optional native CI (still owner-deferred; CI stays managed-only, native-gated tests run locally per
+     TESTING.md's protocol).
+  4. Optional `Panel3DSnapSolver` façade slimming (`docs/P6_ARCHITECTURE_REVIEW.md` §O item `O7` — extract
+     `FinalizeAndValidate` + legacy statics out of the ~2,300-line façade, behaviour-preserving; still
+     "can defer").
+  5. The original §E Phase 9 performance work itself (timing harness, Stage-A spatial index,
+     `GlueMode=Shift`, `O3`/`O4` hygiene) — genuinely deferred, not done in this audit-only pass.
 
 ---
 
