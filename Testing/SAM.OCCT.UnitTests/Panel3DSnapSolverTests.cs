@@ -430,6 +430,41 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void ExtendTopTo_SlopedBase_PreservesPlanFootprint()
+        {
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0),
+                new Point3D(4, 0, 1),
+                new Point3D(4, 0, 3),
+                new Point3D(0, 0, 2)), 1, 0.3, 0.5);
+
+            bool extended = wall.ExtendTopTo(5.0, 1e-6);
+
+            Assert.True(extended);
+            BoundingBox3D box = wall.GetBoundingBox();
+            Assert.Equal(4.0, box.Max.X - box.Min.X, 3);
+            Assert.Equal(5.0, box.Max.Z, 3);
+            Assert.True(wall.GetArea() > 10.0, "Wall extension must not collapse a sloped-base wall to zero area.");
+        }
+
+        [Fact]
+        public void ExtendTopTo_ShiftedTop_UsesExternalEdgeNotDiagonal()
+        {
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0),
+                new Point3D(4, 0, 0),
+                new Point3D(5, 0, 3),
+                new Point3D(1, 0, 3)), 1, 0.3, 0.5);
+
+            bool extended = wall.ExtendTopTo(5.0, 1e-6);
+
+            Assert.True(extended);
+            BoundingBox3D box = wall.GetBoundingBox();
+            Assert.Equal(2, BoundaryPoints(wall.Face3D).Count(x => System.Math.Abs(x.Z) <= 1e-6));
+            Assert.Equal(5.0, box.Max.Z, 3);
+        }
+
+        [Fact]
         public void ExtendTopTo_TargetBelowCurrentTop_NoChangeAndReturnsFalse()
         {
             SnappedPanel wall = MakeWallPanel(0); // top at z = 3
@@ -509,6 +544,24 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(3.5, box.Max.X - box.Min.X, 3);
             Assert.Equal(0.0, box.Min.Z, 3); // height preserved
             Assert.Equal(3.0, box.Max.Z, 3);
+        }
+
+        [Fact]
+        public void ExtendHorizontal_ShiftedTop_MovesSideEdgesWithoutFlattening()
+        {
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0),
+                new Point3D(4, 0, 0),
+                new Point3D(5, 0, 3),
+                new Point3D(1, 0, 3)), 1, 0.3, 0.5);
+
+            bool extended = wall.ExtendHorizontal(startReach: 0.5, endReach: 1.0, tolerance: 1e-6);
+
+            Assert.True(extended);
+            List<Point3D> points = BoundaryPoints(wall.Face3D);
+            Assert.Equal(2, points.Count(x => System.Math.Abs(x.Z) <= 1e-6));
+            Assert.Equal(2, points.Count(x => System.Math.Abs(x.Z - 3.0) <= 1e-6));
+            Assert.True(wall.GetBoundingBox().Max.X - wall.GetBoundingBox().Min.X > 5.0);
         }
 
         [Fact]

@@ -630,10 +630,10 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>
         /// Lengthens this (vertical) panel upward so its top reaches <paramref name="targetZ"/>, by
-        /// re-extruding its base edge to the new height. The 3D analogue of the 2D solver's
+        /// extending the top external boundary edge in the panel plane. The 3D analogue of the 2D solver's
         /// extend-to-junction: a wall that stops short of the floor/roof above is grown so the native
         /// kernel can trim it against that cap (e.g. split a gable wall at the roof pitch). Only the
-        /// top moves; the base footprint and supporting plane are preserved.
+        /// top edge moves; the rest of the external boundary and supporting plane are preserved.
         /// </summary>
         /// <returns>True when the panel was extended to a valid taller face.</returns>
         public bool ExtendTopTo(double targetZ, double tolerance)
@@ -656,29 +656,14 @@ namespace SAM.Geometry.OCCT.Solver
                 return false; // already tall enough
             }
 
-            // Recover the horizontal base edge: the panel cut just above its foot.
-            Segment3D baseSegment3D = GetBaseSegment(tolerance);
-            if (baseSegment3D == null)
-            {
-                return false;
-            }
-
-            Face3D extended = Geometry.Spatial.Create.Face3D(baseSegment3D, new Vector3D(0, 0, targetZ - baseZ));
-            if (extended == null || !extended.IsValid())
-            {
-                return false;
-            }
-
-            face3D = extended;
-            plane = extended.GetPlane();
-            return true;
+            return ExtendBoundaryEdgeToZ(targetZ, true, tolerance);
         }
 
         /// <summary>
         /// Lengthens this (vertical) panel downward so its base reaches <paramref name="targetZ"/>, by
-        /// re-extruding its top edge down to the new height. The mirror of <see cref="ExtendTopTo"/>: a wall
+        /// extending the bottom external boundary edge in the panel plane. The mirror of <see cref="ExtendTopTo"/>: a wall
         /// that stops short of the floor below is grown down so the native kernel can trim it against that
-        /// floor and close the room. Only the base moves; the top and supporting plane are preserved.
+        /// floor and close the room. Only the base edge moves; the rest of the boundary is preserved.
         /// </summary>
         /// <returns>True when the panel was extended to a valid taller face.</returns>
         public bool ExtendBottomTo(double targetZ, double tolerance)
@@ -701,20 +686,153 @@ namespace SAM.Geometry.OCCT.Solver
                 return false; // already low enough
             }
 
-            // Recover the horizontal base edge, then drop it to the target elevation.
-            Segment3D baseSegment3D = GetBaseSegment(tolerance);
-            if (baseSegment3D == null)
+            return ExtendBoundaryEdgeToZ(targetZ, false, tolerance);
+        }
+
+        private bool ExtendBoundaryEdgeToZ(double targetZ, bool top, double tolerance)
+        {
+            Vector3D direction = ProjectOntoPlane(new Vector3D(0, 0, 1), plane);
+            if (direction == null || direction.Length <= tolerance || System.Math.Abs(direction.Z) <= 1e-9)
             {
                 return false;
             }
 
-            Point3D start = baseSegment3D.GetStart();
-            Point3D end = baseSegment3D.GetEnd();
-            Segment3D loweredSegment3D = new Segment3D(
-                new Point3D(start.X, start.Y, targetZ),
-                new Point3D(end.X, end.Y, targetZ));
+            if (direction.Z < 0)
+            {
+                direction = direction.GetNegated();
+            }
 
-            Face3D extended = Geometry.Spatial.Create.Face3D(loweredSegment3D, new Vector3D(0, 0, topZ - targetZ));
+            direction = direction.Unit;
+
+            List<Point3D> point3Ds = BoundaryPointsOpen(face3D, tolerance);
+            if (point3Ds == null || point3Ds.Count < 3)
+            {
+                return false;
+            }
+
+            int edgeIndex = BoundaryEdgeIndex(point3Ds, direction, top, tolerance);
+            if (edgeIndex < 0)
+            {
+                return false;
+            }
+
+            int nextIndex = (edgeIndex + 1) % point3Ds.Count;
+            Point3D start = point3Ds[edgeIndex];
+            Point3D end = point3Ds[nextIndex];
+            double currentZ = top ? System.Math.Max(start.Z, end.Z) : System.Math.Min(start.Z, end.Z);
+            Vector3D translation = direction * ((targetZ - currentZ) / direction.Z);
+
+            point3Ds[edgeIndex] = Move(start, translation);
+            point3Ds[nextIndex] = Move(end, translation);
+            return ReplaceExternalBoundary(point3Ds);
+        }
+
+        private static int BoundaryEdgeIndex(List<Point3D> point3Ds, Vector3D direction, bool top, double tolerance)
+        {
+            int result = -1;
+            double best = top ? double.MinValue : double.MaxValue;
+            for (int i = 0; i < point3Ds.Count; i++)
+            {
+                Point3D start = point3Ds[i];
+                Point3D end = point3Ds[(i + 1) % point3Ds.Count];
+                if (start == null || end == null || start.Distance(end) <= tolerance)
+                {
+                    continue;
+                }
+
+                double score = 0.5 * (CoordinateAlong(start, direction) + CoordinateAlong(end, direction));
+                if ((top && score > best) || (!top && score < best))
+                {
+                    best = score;
+                    result = i;
+                }
+            }
+
+            return result;
+        }
+
+        private static double CoordinateAlong(Point3D point3D, Vector3D direction)
+        {
+            return point3D.X * direction.X + point3D.Y * direction.Y + point3D.Z * direction.Z;
+        }
+
+        private static Point3D Move(Point3D point3D, Vector3D vector)
+        {
+            return new Point3D(point3D.X + vector.X, point3D.Y + vector.Y, point3D.Z + vector.Z);
+        }
+
+        private static double PlanParameter(double x, double y, double ux, double uy)
+        {
+            return x * ux + y * uy;
+        }
+
+        private static int PlanEndEdgeIndex(List<Point3D> point3Ds, double ux, double uy, bool max, double tolerance)
+        {
+            int result = -1;
+            double best = max ? double.MinValue : double.MaxValue;
+            for (int i = 0; i < point3Ds.Count; i++)
+            {
+                Point3D start = point3Ds[i];
+                Point3D end = point3Ds[(i + 1) % point3Ds.Count];
+                if (start == null || end == null || start.Distance(end) <= tolerance)
+                {
+                    continue;
+                }
+
+                double score = 0.5 * (PlanParameter(start.X, start.Y, ux, uy) + PlanParameter(end.X, end.Y, ux, uy));
+                if ((max && score > best) || (!max && score < best))
+                {
+                    best = score;
+                    result = i;
+                }
+            }
+
+            return result;
+        }
+
+        private static bool MovePlanEndEdge(List<Point3D> point3Ds, double ux, double uy, double delta, bool max, double tolerance)
+        {
+            int edgeIndex = PlanEndEdgeIndex(point3Ds, ux, uy, max, tolerance);
+            if (edgeIndex < 0)
+            {
+                return false;
+            }
+
+            int nextIndex = (edgeIndex + 1) % point3Ds.Count;
+            Point3D start = point3Ds[edgeIndex];
+            Point3D end = point3Ds[nextIndex];
+            Vector3D translation = new Vector3D(ux * delta, uy * delta, 0);
+            point3Ds[edgeIndex] = Move(start, translation);
+            point3Ds[nextIndex] = Move(end, translation);
+            return true;
+        }
+
+        private static Vector3D ProjectOntoPlane(Vector3D vector, Plane plane)
+        {
+            if (vector == null || plane?.Normal == null)
+            {
+                return null;
+            }
+
+            Vector3D normal = plane.Normal.Unit;
+            return vector - normal * vector.DotProduct(normal);
+        }
+
+        private bool ReplaceExternalBoundary(List<Point3D> point3Ds)
+        {
+            if (point3Ds == null || point3Ds.Count < 3)
+            {
+                return false;
+            }
+
+            List<IClosedPlanar3D> loops = new List<IClosedPlanar3D> { new Polygon3D(point3Ds) };
+            List<IClosedPlanar3D> internalEdge3Ds = face3D.GetInternalEdge3Ds();
+            if (internalEdge3Ds != null)
+            {
+                loops.AddRange(internalEdge3Ds.Where(x => x != null));
+            }
+
+            Face3D extended = Face3D.Create(loops);
             if (extended == null || !extended.IsValid())
             {
                 return false;
@@ -726,11 +844,11 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
-        /// The horizontal foot of a (vertical) wall: the panel cut by a horizontal plane just above its
-        /// base. Its direction is the wall's in-plan axis - the X/Y direction the wall runs along - and its
-        /// endpoints are the wall's two ends in plan. The basis for both the vertical re-extrude
+        /// The horizontal foot of a (vertical) wall: the longest external boundary edge projected into plan,
+        /// placed at the panel's base elevation. Its direction is the wall's in-plan axis - the X/Y direction
+        /// the wall runs along - and its endpoints are the wall's two ends in plan. The basis for both the vertical re-extrude
         /// (<see cref="ExtendTopTo"/>) and the lateral one (<see cref="ExtendHorizontal"/>). Null for a
-        /// degenerate face or a cut that yields no segment.
+        /// degenerate face or a boundary with no usable plan edge.
         /// </summary>
         public Segment3D GetBaseSegment(double tolerance)
         {
@@ -745,14 +863,48 @@ namespace SAM.Geometry.OCCT.Solver
                 return null;
             }
 
-            Plane basePlane = Geometry.Spatial.Create.Plane(boundingBox3D.Min.Z + tolerance);
-            Segment3D baseSegment3D = Geometry.Spatial.Query.MaxIntersectionSegment3D(basePlane, face3D);
-            if (baseSegment3D == null || baseSegment3D.GetLength() <= tolerance)
+            List<Point3D> point3Ds = BoundaryPoints(face3D);
+            if (point3Ds == null || point3Ds.Count < 2)
             {
                 return null;
             }
 
-            return baseSegment3D;
+            Point3D start = null;
+            Point3D end = null;
+            double maxLengthSquared = 0;
+            for (int i = 0; i < point3Ds.Count; i++)
+            {
+                Point3D a = point3Ds[i];
+                Point3D b = point3Ds[(i + 1) % point3Ds.Count];
+                if (a == null)
+                {
+                    continue;
+                }
+
+                if (b == null)
+                {
+                    continue;
+                }
+
+                double dx = b.X - a.X;
+                double dy = b.Y - a.Y;
+                double lengthSquared = dx * dx + dy * dy;
+                if (lengthSquared > maxLengthSquared)
+                {
+                    maxLengthSquared = lengthSquared;
+                    start = a;
+                    end = b;
+                }
+            }
+
+            if (start == null || end == null || maxLengthSquared <= tolerance * tolerance)
+            {
+                return null;
+            }
+
+            return new Segment3D(
+                new Point3D(start.X, start.Y, boundingBox3D.Min.Z),
+                new Point3D(end.X, end.Y, boundingBox3D.Min.Z));
         }
 
         /// <summary>
@@ -778,15 +930,6 @@ namespace SAM.Geometry.OCCT.Solver
                 return false; // nothing to grow
             }
 
-            BoundingBox3D boundingBox3D = face3D.GetBoundingBox();
-            if (boundingBox3D == null)
-            {
-                return false;
-            }
-
-            double baseZ = boundingBox3D.Min.Z;
-            double topZ = boundingBox3D.Max.Z;
-
             Segment3D baseSegment3D = GetBaseSegment(tolerance);
             if (baseSegment3D == null)
             {
@@ -801,23 +944,14 @@ namespace SAM.Geometry.OCCT.Solver
             double dx = (end.X - start.X) / length;
             double dy = (end.Y - start.Y) / length;
 
-            Point3D widenedStart = startReach > tolerance
-                ? new Point3D(start.X - dx * startReach, start.Y - dy * startReach, baseZ)
-                : new Point3D(start.X, start.Y, baseZ);
-            Point3D widenedEnd = endReach > tolerance
-                ? new Point3D(end.X + dx * endReach, end.Y + dy * endReach, baseZ)
-                : new Point3D(end.X, end.Y, baseZ);
+            Geometry.Planar.Point2D widenedStart = startReach > tolerance
+                ? new Geometry.Planar.Point2D(start.X - dx * startReach, start.Y - dy * startReach)
+                : new Geometry.Planar.Point2D(start.X, start.Y);
+            Geometry.Planar.Point2D widenedEnd = endReach > tolerance
+                ? new Geometry.Planar.Point2D(end.X + dx * endReach, end.Y + dy * endReach)
+                : new Geometry.Planar.Point2D(end.X, end.Y);
 
-            Segment3D widenedSegment3D = new Segment3D(widenedStart, widenedEnd);
-            Face3D extended = Geometry.Spatial.Create.Face3D(widenedSegment3D, new Vector3D(0, 0, topZ - baseZ));
-            if (extended == null || !extended.IsValid())
-            {
-                return false;
-            }
-
-            face3D = extended;
-            plane = extended.GetPlane();
-            return true;
+            return SetVerticalFootprint(widenedStart, widenedEnd, tolerance);
         }
 
         /// <summary>
@@ -847,23 +981,43 @@ namespace SAM.Geometry.OCCT.Solver
                 return false;
             }
 
-            Segment3D foot = new Segment3D(
-                new Point3D(newStart.X, newStart.Y, baseZ),
-                new Point3D(newEnd.X, newEnd.Y, baseZ));
-            if (foot.GetLength() <= tolerance)
+            Segment3D baseSegment3D = GetBaseSegment(tolerance);
+            if (baseSegment3D == null)
             {
                 return false;
             }
 
-            Face3D extended = Geometry.Spatial.Create.Face3D(foot, new Vector3D(0, 0, topZ - baseZ));
-            if (extended == null || !extended.IsValid())
+            Point3D baseStart = baseSegment3D.GetStart();
+            Point3D baseEnd = baseSegment3D.GetEnd();
+            double length = baseSegment3D.GetLength();
+            double ux = (baseEnd.X - baseStart.X) / length;
+            double uy = (baseEnd.Y - baseStart.Y) / length;
+
+            List<Point3D> point3Ds = BoundaryPointsOpen(face3D, tolerance);
+            if (point3Ds == null || point3Ds.Count < 3)
             {
                 return false;
             }
 
-            face3D = extended;
-            plane = extended.GetPlane();
-            return true;
+            double startParameter = PlanParameter(baseStart.X, baseStart.Y, ux, uy);
+            double endParameter = PlanParameter(baseEnd.X, baseEnd.Y, ux, uy);
+            bool startIsMin = startParameter <= endParameter;
+            double targetMin = PlanParameter(startIsMin ? newStart.X : newEnd.X, startIsMin ? newStart.Y : newEnd.Y, ux, uy);
+            double targetMax = PlanParameter(startIsMin ? newEnd.X : newStart.X, startIsMin ? newEnd.Y : newStart.Y, ux, uy);
+            double currentMin = System.Math.Min(startParameter, endParameter);
+            double currentMax = System.Math.Max(startParameter, endParameter);
+
+            if (!MovePlanEndEdge(point3Ds, ux, uy, targetMin - currentMin, false, tolerance))
+            {
+                return false;
+            }
+
+            if (!MovePlanEndEdge(point3Ds, ux, uy, targetMax - currentMax, true, tolerance))
+            {
+                return false;
+            }
+
+            return ReplaceExternalBoundary(point3Ds);
         }
 
         private static IClosedPlanar3D ProjectLoop(IClosedPlanar3D loop, Plane backerPlane)
@@ -881,6 +1035,23 @@ namespace SAM.Geometry.OCCT.Solver
         private static List<Point3D> BoundaryPoints(Face3D face3D)
         {
             return (face3D?.GetExternalEdge3D() as ISegmentable3D)?.GetPoints();
+        }
+
+        private static List<Point3D> BoundaryPointsOpen(Face3D face3D, double tolerance)
+        {
+            List<Point3D> point3Ds = BoundaryPoints(face3D);
+            if (point3Ds == null || point3Ds.Count == 0)
+            {
+                return point3Ds;
+            }
+
+            List<Point3D> result = new List<Point3D>(point3Ds);
+            if (result.Count > 1 && result[0].Distance(result[result.Count - 1]) <= tolerance)
+            {
+                result.RemoveAt(result.Count - 1);
+            }
+
+            return result;
         }
 
         /// <summary>True when the two boxes overlap in the XY (plan) projection after both are grown by
