@@ -43,4 +43,16 @@
     <None Update="Fixtures\Robustness\*.sam" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- P1 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): disables xUnit's default cross-class test-collection
+       parallelism. This assembly mixes native-heap-heavy tests (WorkflowParityIntegrationTests now
+       runs ~27 OCCT builds per fixture across 9 fixtures) with a memory-growth threshold test
+       (HistoryExportIntegrationTests.Build_FiftySuccessiveBuildsWithHistory_NoLeakOrCrash); run
+       concurrently they contend for the same process heap and the threshold test flakes on GC
+       jitter from unrelated tests, not a real leak (passes cleanly alone or on the pre-P1 suite).
+       Serializing collections trades some wall-clock time for a suite that is not flaky by
+       construction - the standard fix for this class of native-interop test flake. -->
+  <ItemGroup>
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

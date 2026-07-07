@@ -1134,3 +1134,83 @@ Copy into the PR description; every item below was verified during the Phase 9 c
 - [ ] Docs (`TESTING.md`, `docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md`) updated to match what actually
   shipped, with commit IDs recorded.
 - [ ] Working tree clean after the final commit.
+
+## CellComplex-first workflow parity (docs/CELLCOMPLEX_FIRST_HANDOVER.md, Phase P1)
+
+P1 makes workflow A measurable against the OCCT CellComplex and fixes a production options
+mismatch, without touching solver geometry or any adoption gate. Two changes:
+
+1. **GH options bugfix.** `SAMOCCTCreateAdjacencyCluster` and `SAMOCCTCreateAdjacencyClusterByShells`
+   built their cell complex with `OcctBuildOptions`' bare defaults
+   (`AvoidInternalShapes=true, SewBeforeBuild=false, SewingTolerance=0.0`), diverging from every
+   solver/test call site, which builds with the **solver-matched options**
+   (`AvoidInternalShapes=false, SewBeforeBuild=true, SewingTolerance=0.01`). Both components now use
+   the solver-matched recipe by default (`SAMOCCTCreateAdjacencyClusterByShells`'s `sew_` toggle
+   default flipped from `false` to `true`; it stays overridable per-run).
+2. **Parity diagnostic.** `Create.AdjacencyCluster`'s `DirectAdjacencyCluster`
+   (`SAM_OCCT_ANALYTICAL_PARITY`) counts, on every direct rebuild: relations added vs. expected
+   (`2 x |FaceAdjacencies| + envelope faces`, i.e. every shared face owned by two cells contributes
+   two relations and every face owned by exactly one cell contributes one); faces with
+   `TopologyKey == 0` (silently skipped by the relation loop otherwise); and panels that ended up
+   with zero relations. Counting only - no rebuild behaviour changes. `TopologyKey` is a per-decode
+   signature (`OcctCellComplexResult.BuildFaceAdjacencies`), so this never compares keys across two
+   different decodes.
+
+### Workflow parity harness
+
+`Testing/SAM.OCCT.IntegrationTests/WorkflowParityIntegrationTests.cs` runs all 9 fixtures through
+three workflows built from the same source panels, each finished with
+`MergeCoplanarPanels(AdjacencyCluster)`:
+
+- **A (old defaults)** - `Solve3D` -> `Create.AdjacencyCluster` with the pre-P1 default options.
+  Logged for the bugfix comparison only; never asserted as the workflow that should be correct.
+- **A (solver-matched)** - the same solved panels, rebuilt with the solver-matched options the P1
+  bugfix now uses in production.
+- **B (Clean3D -> Extend3D)** - the pre-conditioned pipeline that never runs Solve3D's own native
+  resolve, finished the same way.
+
+For A-solver-matched and B, the harness asserts: the cluster's space count equals the solver's own
+`Solve3DReport.ResolvedCellCount`; the parity diagnostic is clean; and the set of spaces each panel
+relates to (an unordered space-pair for an internal panel, a single space for an envelope panel) is
+identical before and after `MergeCoplanarPanels` - space `Guid`s survive the merge
+(`SAMObject(string name, SAMObject)` preserves `Guid`), so this is a real identity comparison, not a
+count comparison. Where a fixture/workflow is broken today, the harness pins the **current** value
+via an explicit `Expectations` entry with a tracking comment - it never skips silently.
+
+**Result of this harness turning up real E2E coverage of `MergeCoplanarPanels(AdjacencyCluster)`
+for the first time** (previously zero, per the CellComplex handover's diagnosed seam): the relation
+invariant holds on all 9 fixtures for both solver-matched workflows today. The gaps this harness
+found are all in workflow closure (space count), not in the merge.
+
+### Per-fixture table (2026-07-07, native present)
+
+| Fixture | Input panels | Solver `ResolvedCellCount` (naked) | Workflow A (old defaults) | Workflow A (solver-matched) | Workflow B (Clean3D→Extend3D) | Dropped/Retained (solve) | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| whole-level-flat.sam | 148 | 22 (0) | cells=22 faces=134 adj=2; spaces=22 panels=134 (int=2 ext=132 orphan=0) parity=clean merged=134 | cells=22 faces=134 adj=2; spaces=22 panels=134 (int=2 ext=132 orphan=0) parity=clean merged=134 | cells=22 faces=237 adj=22; spaces=22 panels=237 (int=22 ext=215 orphan=0) parity=clean merged=142 | 16/0 | OK |
+| tilted-two-spaces.sam | 16 | 2 (0) | cells=2 faces=12 adj=0; spaces=2 panels=12 (int=0 ext=12 orphan=0) parity=clean merged=12 | cells=2 faces=12 adj=0; spaces=2 panels=12 (int=0 ext=12 orphan=0) parity=clean merged=12 | cells=2 faces=19 adj=1; spaces=2 panels=19 (int=1 ext=18 orphan=0) parity=clean merged=12 | 4/0 | OK |
+| whole-level-tilted.sam | 148 | 22 (0) | cells=22 faces=199 adj=22; spaces=22 panels=199 (int=22 ext=177 orphan=0) parity=clean merged=146 | cells=22 faces=165 adj=22; spaces=22 panels=165 (int=22 ext=143 orphan=0) parity=clean merged=142 | cells=22 faces=234 adj=22; spaces=22 panels=234 (int=22 ext=212 orphan=0) parity=clean merged=146 | 30/0 | OK |
+| two-level-tilted.sam | 287 | 44 (0) | cells=44 faces=266 adj=2; spaces=44 panels=266 (int=2 ext=264 orphan=0) parity=clean merged=266 | cells=43 faces=261 adj=1; spaces=43 panels=261 (int=1 ext=260 orphan=0) parity=clean merged=259 | cells=26 faces=421 adj=49; spaces=26 panels=417 (int=47 ext=370 orphan=0) parity=**WARN** merged=181 | 22/0 | both workflows diverge from solver cell count |
+| whole-level-towers.sam | 215 | 32 (0) | cells=32 faces=192 adj=0; spaces=32 panels=192 (int=0 ext=192 orphan=0) parity=clean merged=192 | cells=32 faces=192 adj=0; spaces=32 panels=192 (int=0 ext=192 orphan=0) parity=clean merged=192 | cells=26 faces=291 adj=24; spaces=26 panels=291 (int=24 ext=267 orphan=0) parity=clean merged=169 | 23/0 | workflow B under/over-closes |
+| AdjacencyCluster-home.sam | 106 | 19 (13) | cells=16 faces=105 adj=36; spaces=16 panels=105 (int=36 ext=69 orphan=0) parity=clean merged=94 | cells=8 faces=52 adj=4; spaces=8 panels=52 (int=4 ext=48 orphan=0) parity=clean merged=48 | cells=16 faces=100 adj=36; spaces=16 panels=100 (int=36 ext=64 orphan=0) parity=clean merged=94 | 0/0 | both workflows diverge from solver cell count |
+| Face3D-home.sam | 124 | 13 (8) | cells=13 faces=79 adj=21; spaces=13 panels=79 (int=21 ext=58 orphan=0) parity=clean merged=75 | cells=11 faces=70 adj=17; spaces=11 panels=70 (int=17 ext=53 orphan=0) parity=**WARN** merged=66 | cells=13 faces=77 adj=21; spaces=13 panels=77 (int=21 ext=56 orphan=0) parity=clean merged=75 | 4/0 | workflow A under/over-closes |
+| Revit-home-panels.sam | 39 | 13 (11) | cells=10 faces=65 adj=18; spaces=10 panels=65 (int=18 ext=47 orphan=0) parity=clean merged=57 | cells=7 faces=48 adj=11; spaces=7 panels=48 (int=11 ext=37 orphan=0) parity=clean merged=45 | cells=6 faces=42 adj=11; spaces=6 panels=42 (int=11 ext=31 orphan=0) parity=clean merged=39 | 12/0 | both workflows diverge from solver cell count |
+| three-spaces.sam | 19 | 3 (0) | cells=3 faces=18 adj=0; spaces=3 panels=18 (int=0 ext=18 orphan=0) parity=clean merged=18 | cells=3 faces=18 adj=0; spaces=3 panels=18 (int=0 ext=18 orphan=0) parity=clean merged=18 | cells=3 faces=28 adj=2; spaces=3 panels=28 (int=2 ext=26 orphan=0) parity=clean merged=19 | 1/0 | OK |
+
+Four fixtures had **no prior baseline at all** (`AdjacencyCluster-home`, `Face3D-home`,
+`Revit-home-panels`, `three-spaces` - Appendix B of the CellComplex handover); this table is their
+first workflow-level measurement. Known-broken cells are tracked with a tracking comment in the
+harness's `Expectations` table, not silently skipped:
+
+- **two-level-tilted / whole-level-towers, workflow B:** matches the already-pinned
+  `GoldenMasterIntegrationTests.ManagedFixtures` finding that the managed pipeline under-closes
+  these two multi-storey fixtures. This is the E-track's (`docs/EXTEND3D_ROBUST_HANDOVER.md`) target
+  - E2 (plane-intersection cap targets) is expected to move these rows; P4 gate hardening is
+  blocked until E2 merges for exactly this reason.
+- **AdjacencyCluster-home, Face3D-home, Revit-home-panels:** new findings with no prior baseline,
+  not yet triaged - tracked in the harness, not a regression against anything previously measured.
+
+### Running the P1 harness
+
+```powershell
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~WorkflowParityIntegrationTests"
+```

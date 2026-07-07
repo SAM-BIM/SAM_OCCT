@@ -392,6 +392,9 @@ namespace SAM.Analytical.OCCT
 
             stopwatch.Restart();
             int relationCount = 0;
+            int topologyKeyZeroFaceCount = 0;
+            Dictionary<int, int> topologyKeyOwnerCounts = new Dictionary<int, int>();
+            HashSet<System.Guid> relatedPanelGuids = new HashSet<System.Guid>();
             for (int cellIndex = 0; cellIndex < cellComplexResult.Cells.Count; cellIndex++)
             {
                 IReadOnlyList<OcctCellFace> faces = cellComplexResult.Cells[cellIndex].Faces;
@@ -402,10 +405,21 @@ namespace SAM.Analytical.OCCT
 
                 foreach (OcctCellFace face in faces)
                 {
-                    if (face == null || face.TopologyKey == 0)
+                    if (face == null)
                     {
                         continue;
                     }
+
+                    if (face.TopologyKey == 0)
+                    {
+                        // Parity (P1): a decoded face with no per-decode identity is silently skipped
+                        // by the relation loop below - count it so it is never a silent gap.
+                        topologyKeyZeroFaceCount++;
+                        continue;
+                    }
+
+                    topologyKeyOwnerCounts.TryGetValue(face.TopologyKey, out int ownerCount);
+                    topologyKeyOwnerCounts[face.TopologyKey] = ownerCount + 1;
 
                     if (!panels.TryGetValue(face.TopologyKey, out Panel panel))
                     {
@@ -415,9 +429,29 @@ namespace SAM.Analytical.OCCT
                     if (result.AddRelation(spaces[cellIndex], panel))
                     {
                         relationCount++;
+                        relatedPanelGuids.Add(panel.Guid);
                     }
                 }
             }
+
+            // Parity diagnostic (P1, SAM_OCCT_ANALYTICAL_PARITY): counting only, does not change the
+            // relationCount==0 refusal below. Expected relation count assumes each shared face is owned
+            // by exactly two cells (the geometrically normal case for a planar cell complex): every
+            // OcctCellComplexResult.FaceAdjacencies entry contributes two relations (one per owning
+            // cell), and every envelope face (TopologyKey owned by exactly one cell) contributes one.
+            // TopologyKey keys are per-decode only (OcctCellComplexResult.BuildFaceAdjacencies); this
+            // never compares keys across two different decodes.
+            int envelopeFaceCount = topologyKeyOwnerCounts.Values.Count(x => x == 1);
+            int faceAdjacencyCount = cellComplexResult.FaceAdjacencies?.Count ?? 0;
+            int expectedRelationCount = (2 * faceAdjacencyCount) + envelopeFaceCount;
+            int zeroRelationPanelCount = panels.Count - relatedPanelGuids.Count;
+            bool parityClean = relationCount == expectedRelationCount && topologyKeyZeroFaceCount == 0 && zeroRelationPanelCount == 0;
+            cellComplexResult.AddDiagnostic(
+                parityClean ? OcctDiagnosticSeverity.Info : OcctDiagnosticSeverity.Warning,
+                "SAM_OCCT_ANALYTICAL_PARITY",
+                string.Format(
+                    "Parity check: {0} relation(s) added vs {1} expected (2 x {2} shared face adjacency(ies) + {3} envelope face(s)); {4} face(s) had TopologyKey==0 (silently skipped); {5} panel(s) received zero relation(s).",
+                    relationCount, expectedRelationCount, faceAdjacencyCount, envelopeFaceCount, topologyKeyZeroFaceCount, zeroRelationPanelCount));
 
             if (relationCount == 0)
             {
