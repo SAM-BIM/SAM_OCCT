@@ -132,23 +132,34 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         /// <summary>
-        /// Managed-path baseline pinned to the Phase 6c/6d documented values (TESTING.md "Per-level
-        /// frames" §6c/§6e, <c>docs/P6_ARCHITECTURE_REVIEW.md</c> §O.O1): fixture, expected cell count,
-        /// expected naked-edge count, expected total volume (m3). Cell/naked counts are exact; volume is
-        /// asserted within <see cref="ClosureSignature3D.IsRegressionOf"/>'s own tolerance
-        /// (<see cref="Core.Tolerance.MacroDistance"/>), not string-formatted equality, so harmless
-        /// floating-point noise in the native volume sum does not fail the test while any real drift
-        /// still does. Three of five fixtures are unchanged from Phase 5; `two-level-tilted` and
-        /// `whole-level-towers` are the intentional Phase 6c re-baseline. A value changing here without
-        /// an explicit, reasoned PR delta is a regression, per the golden-master contract in TESTING.md.
+        /// Managed-path baseline: fixture, expected cell count, expected naked-edge count, expected total
+        /// volume (m3). Cell/naked counts are exact; volume is asserted within
+        /// <see cref="Core.Tolerance.MacroDistance"/>, so harmless floating-point noise does not fail the
+        /// test while any real drift still does. This is a tripwire on the managed conditioning pipeline,
+        /// NOT a correctness claim about which path is better; the golden-master contract (TESTING.md) is
+        /// that a phase legitimately changing this pipeline updates these values with a stated delta.
+        ///
+        /// E1 re-baseline (docs/EXTEND3D_ROBUST_HANDOVER.md, PR #48): the SnappedPanel extend/trim
+        /// primitives were rebuilt as profile-preserving plane-ops (walls no longer collapse or verticalize).
+        /// The RAW golden master and the production raw-first path are byte-identical (they never call these
+        /// primitives). Two managed pins are unchanged (whole-level-flat, tilted-two-spaces). Three moved
+        /// and are re-baselined here (per-fixture mechanism table in TESTING.md "E1" section):
+        ///   - whole-level-tilted: 22c/0n unchanged; volume 3377.828 -> 3377.841 (+0.0004%) because tilted
+        ///     walls now keep their true plane instead of being verticalized (R5) by the old straight-up
+        ///     re-extrude.
+        ///   - whole-level-towers: 22c/12n -> 21c/8n (naked improved 12 -> 8): sloped/non-rectangular walls
+        ///     that the old re-extrude collapsed to slivers now extend to their full profile.
+        ///   - two-level-tilted: 29c/29n -> 15c/32n on this already-degraded managed fixture (raw-first,
+        ///     the production path, closes it 40+c/0n and is unchanged). E2 (plane-target cap extension)
+        ///     targets the residual managed closure here.
         /// </summary>
         public static IEnumerable<object[]> ManagedFixtures()
         {
             yield return new object[] { "whole-level-flat.sam", 22, 0, 3479.896696920142 };
             yield return new object[] { "tilted-two-spaces.sam", 2, 0, 723.6524777123251 };
-            yield return new object[] { "whole-level-tilted.sam", 22, 0, 3377.8280592825126 };
-            yield return new object[] { "two-level-tilted.sam", 29, 29, 2213.30306718148 };
-            yield return new object[] { "whole-level-towers.sam", 22, 12, 8777.056042123724 };
+            yield return new object[] { "whole-level-tilted.sam", 22, 0, 3377.840918174829 };
+            yield return new object[] { "two-level-tilted.sam", 15, 32, 2307.8631371507768 };
+            yield return new object[] { "whole-level-towers.sam", 21, 8, 8689.70734882758 };
         }
 
         [SkippableTheory]

@@ -338,42 +338,48 @@ namespace SAM.OCCT.IntegrationTests
         /// </summary>
         private static readonly Dictionary<(string fixture, string workflow), Expectation> Expectations = new Dictionary<(string, string), Expectation>
         {
-            // whole-level-towers: A-solver-matched closes 32/32 (the P1 bugfix fix), but workflow B's
-            // Clean3D->Extend3D pre-conditioning under-closes this fixture's plan loops (26 spaces).
-            // Tracked, not the E-track's problem to fix here - docs/EXTEND3D_ROBUST_HANDOVER.md E2
-            // (plane-intersection cap targets) is the fix; P1 only measures and pins the gap.
+            // Values current after E1 (docs/EXTEND3D_ROBUST_HANDOVER.md): the profile-preserving
+            // extend/trim primitives changed Solve3D's managed fallback (and thus the solver cell count)
+            // on the fixtures raw-first does not fully adopt, plus workflow B's Clean3D->Extend3D output.
+            // Rows E1 improved are re-pinned to the better value with a mechanism note.
+
+            // whole-level-towers: A-solver-matched closes 32/32; workflow B's pre-conditioning still
+            // under-closes (28 spaces vs 32) - E1 improved it (26 -> 28); E2 (plane-target cap extension)
+            // is the remaining fix.
             [("whole-level-towers.sam", "B-clean-extend")] = new Expectation
             {
                 SpacesMatchResolvedCellCount = false,
-                TrackingComment = "workflow B under-closes whole-level-towers (26 vs 32 solver cells) - see docs/EXTEND3D_ROBUST_HANDOVER.md E2"
+                TrackingComment = "workflow B under-closes whole-level-towers (28 vs 32 solver cells; E1 improved 26 -> 28) - see docs/EXTEND3D_ROBUST_HANDOVER.md E2"
             },
-            // Face3D-home: the raw fixture geometry itself (no solver conditioning at all upstream of
-            // A) does not sew cleanly under solver-matched options on this hand-built fixture - fewer
-            // cells AND a parity warning (some relations lost to the coarser sew). A-old happens to
-            // match here (13/13) only because AvoidInternalShapes=true papers over the same gap.
+            // Face3D-home: E1 changed the managed fallback (solver now resolves 25 cells, up from 13).
+            // Both solver-matched workflows now rebuild CLEANLY (E1 fixed the prior A-matched parity
+            // warning); they close fewer spaces than the fallback's 25 cells. New fixture, no baseline.
             [("Face3D-home.sam", "A-solver-matched")] = new Expectation
             {
                 SpacesMatchResolvedCellCount = false,
-                ParityClean = false,
-                TrackingComment = "Face3D-home solver-matched rebuild merges cells (11 vs 13) with a parity warning - fixture has no prior baseline (Appendix B); tracked as a new finding, not yet triaged"
+                ParityClean = true,
+                TrackingComment = "Face3D-home A-solver-matched rebuilds cleanly (11 vs 25 solver cells after E1's managed fallback change) - new fixture, no prior baseline; parity now clean (E1 improvement)"
             },
-            // Revit-home-panels: a genuinely messy Revit export (Appendix B: no prior baseline at
-            // all). Both solver-matched workflows under-close relative to the solver's own resolved
-            // cell count; A-old also mismatches (10 vs 13, unasserted). Tracked as a new finding.
+            [("Face3D-home.sam", "B-clean-extend")] = new Expectation
+            {
+                SpacesMatchResolvedCellCount = false,
+                TrackingComment = "Face3D-home workflow B closes 20 vs 25 solver cells - new fixture, no prior baseline; tracked"
+            },
+            // Revit-home-panels: a genuinely messy Revit export (no prior baseline). Both solver-matched
+            // workflows under-close relative to the E1 managed fallback's 12 cells.
             [("Revit-home-panels.sam", "A-solver-matched")] = new Expectation
             {
                 SpacesMatchResolvedCellCount = false,
-                TrackingComment = "Revit-home-panels solver-matched rebuild under-closes (7 vs 13 solver cells) - new fixture, no prior baseline; tracked, not yet triaged"
+                TrackingComment = "Revit-home-panels solver-matched rebuild under-closes (9 vs 12 solver cells) - new fixture, no prior baseline; tracked"
             },
             [("Revit-home-panels.sam", "B-clean-extend")] = new Expectation
             {
                 SpacesMatchResolvedCellCount = false,
-                TrackingComment = "Revit-home-panels workflow B under-closes (6 vs 13 solver cells) - new fixture, no prior baseline; tracked, not yet triaged"
+                TrackingComment = "Revit-home-panels workflow B under-closes (8 vs 12 solver cells) - new fixture, no prior baseline; tracked"
             },
-            // two-level-tilted: the pinned managed-path golden master (GoldenMasterIntegrationTests)
-            // already documents this fixture as broken on the managed pipeline (29c/29n baseline).
-            // A-solver-matched is off by one cell (43 vs 44 - likely one merged/dropped separator);
-            // workflow B is far off (26 vs 44) with a parity warning - the E-track's target fixture.
+            // two-level-tilted: raw-first (the production path) adopts it at 44 cells. A-solver-matched
+            // rebuilds 43; workflow B is far off (25 vs 44) with a parity warning - the E-track's target
+            // fixture (E2 plane-target cap extension).
             [("two-level-tilted.sam", "A-solver-matched")] = new Expectation
             {
                 SpacesMatchResolvedCellCount = false,
@@ -383,21 +389,11 @@ namespace SAM.OCCT.IntegrationTests
             {
                 SpacesMatchResolvedCellCount = false,
                 ParityClean = false,
-                TrackingComment = "two-level-tilted workflow B under-closes (26 vs 44 solver cells) with a parity warning - matches the known-broken managed pipeline on this fixture (GoldenMasterIntegrationTests.ManagedFixtures); the E-track (docs/EXTEND3D_ROBUST_HANDOVER.md E2) targets this"
+                TrackingComment = "two-level-tilted workflow B under-closes (25 vs 44 solver cells) with a parity warning - the E-track (docs/EXTEND3D_ROBUST_HANDOVER.md E2) targets this"
             },
-            // AdjacencyCluster-home: no prior baseline (Appendix B). Both solver-matched workflows
-            // merge far more cells than the solver resolved (8 and 16 vs 19) though parity stays
-            // internally clean (every relation the rebuild DID form is complete/consistent).
-            [("AdjacencyCluster-home.sam", "A-solver-matched")] = new Expectation
-            {
-                SpacesMatchResolvedCellCount = false,
-                TrackingComment = "AdjacencyCluster-home A-solver-matched rebuild merges cells heavily (8 vs 19 solver cells) - new fixture, no prior baseline; tracked, not yet triaged"
-            },
-            [("AdjacencyCluster-home.sam", "B-clean-extend")] = new Expectation
-            {
-                SpacesMatchResolvedCellCount = false,
-                TrackingComment = "AdjacencyCluster-home workflow B rebuild merges cells (16 vs 19 solver cells) - new fixture, no prior baseline; tracked, not yet triaged"
-            },
+            // AdjacencyCluster-home: E1 changed the managed fallback (solver now resolves 18 cells) and
+            // BOTH solver-matched workflows now close 18/18 cleanly - an E1 improvement (was 8 and 16 vs
+            // 19 before). No expectation entries needed: they pass on the default (match + clean).
         };
 
         private class Expectation

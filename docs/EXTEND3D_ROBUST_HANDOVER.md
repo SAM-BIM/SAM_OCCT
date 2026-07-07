@@ -173,7 +173,7 @@ Combined order: **P1 → E1 → P2 → merge #48 → E2 → {P3 ∥ E3-after-E2}
 
 | Phase | Scope (one line) | Branch / PR | Implementation | Review | Why this model/effort | Merge condition |
 |---|---|---|---|---|---|---|
-| E1 | Plane-ops rebuild of the extend/trim primitives (profile + hole preserving), scalar targets unchanged, all goldens frozen | `fix/solver-raw-first` / **PR #48** (after P1) | **Opus 4.8, xhigh** | **Opus 4.8, xhigh** | Geometry edge cases (holes, near-vertical planes, keep-piece selection) need a strong implementer; #48's Fable-Max merge gate (P2 review) re-walks E1, so a second Fable pass here is redundant | Review approves; five managed pins AND raw goldens byte-identical (verified, not assumed); workflow-B harness rows that flip carry updated tracking comments |
+| E1 | Plane-ops rebuild of the extend/trim primitives (profile + hole preserving), scalar targets unchanged | `fix/solver-raw-first` / **PR #48** (after P1) | **Opus 4.8, xhigh** | **Opus 4.8, xhigh** | Geometry edge cases (holes, near-vertical planes, keep-piece selection) need a strong implementer; #48's Fable-Max merge gate (P2 review) re-walks E1, so a second Fable pass here is redundant | **DONE (2026-07-07).** Raw goldens byte-identical; the fast path could NOT hold the managed pins (structural — the golden fixtures contain the non-rectangular walls E1 fixes, so the managed tripwire and workflow B share code+geometry). Per owner decision, three managed pins re-baselined in #48 with a mechanism table (TESTING.md "E1"); two unchanged. Workflow-B harness rows re-pinned. See §3 note. |
 | E2 | Plane-intersection cap targets (walls extend to actual roof/floor planes; gable policy; no-op when conforming); managed re-baseline | new `feat/extend3d-plane-targets` off `sow/2026-Q3` / new PR | **Opus 4.8, Max** | **Fable 5, Max** (adversarial) | Target-selection policy is the highest-risk E phase and moves managed pins — reviewer's job is to construct wrong-plane / runaway-extension counterexamples | Review approves; managed re-baseline table row-by-row justified via P1 harness; naked count must not increase on ANY fixture in either workflow; raw goldens byte-identical; **unblocks P4** |
 | E3 | Per-panel extend observability (which edge, how far, toward what), workflow-B pins for the two new fixtures, GH polish, docs | new `feat/extend3d-observability` off `sow/2026-Q3` (after E2) / new PR | **Sonnet 5, High** | **Opus 4.8, xhigh** | Diagnostics plumbing + table pinning is mechanical; review focuses on honesty and GH append-only back-compat | Review approves; zero behaviour change (all goldens + E2 pins byte-identical); TESTING.md E-track section committed |
 
@@ -242,6 +242,21 @@ owner if the fast path cannot hold). WorkflowParityIntegrationTests rows that im
 pinned value + tracking comment updated, each naming the mechanism ("profile preserved -> wall no
 longer collapses -> N naked edges closed"). TESTING.md gets the E1 section.
 ```
+
+**E1 outcome note (2026-07-07, Opus 4.8 impl):** the acceptance gate's "if any managed pin moves,
+STOP and escalate" clause fired. A fast-path census (`Extend3DCensusIntegrationTests`) proved the
+freeze could not hold: the five golden fixtures themselves contain the non-rectangular walls E1
+fixes (37–107 plane-ops operations each), and the managed golden path and workflow B run the same
+`ConditionStage` primitives on the same geometry — so the correctness fix (tilt preservation R5,
+sloped-wall no-collapse) necessarily changes the managed signatures. Loosening the vertical-sides
+tolerance did not move the failures (structural, not float noise). Escalated to the owner, who chose
+to **re-baseline the three moved managed tripwire pins inside PR #48** (raw/production goldens stay
+byte-identical). Implemented: plane-ops via SAM-core `Query.Extend`/`Query.Cut` (union-to-plane /
+cut-keep-body-side); rectangular fast path frozen behind a private legacy helper; `GetBaseSegment`
+full-extent (R7); `ExtendHorizontal` removed; `SAM_OCCT_EXTEND3D_HOLE_DROPPED` recorded on the panel
+(surfacing it to `Solve3DReport` deferred to E3). The E1 review below should treat check #1 as
+"raw goldens byte-identical + the managed re-baseline table is justified fixture-by-fixture" rather
+than "all pins frozen".
 
 ## 4. E1 review prompt (Opus 4.8, xhigh)
 

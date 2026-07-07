@@ -1214,3 +1214,65 @@ harness's `Expectations` table, not silently skipped:
 ```powershell
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~WorkflowParityIntegrationTests"
 ```
+
+## Robust Extend3D primitives (docs/EXTEND3D_ROBUST_HANDOVER.md, Phase E1)
+
+E1 rebuilds the `SnappedPanel` extend/trim primitives (`ExtendTopTo`, `ExtendBottomTo`,
+`SetVerticalFootprint`, `GetBaseSegment`; `ExtendHorizontal` retired) so they preserve a wall's
+profile and openings instead of collapsing or verticalizing it. The old code re-extruded a flat
+rectangle from a horizontal base cut, which turned a sloped/shifted/gable/M-top wall into a
+degenerate sliver ("walls disappear after `SAMOCCT.Extend3D`", PR #49) and verticalized a tilted
+wall (dropping its plane).
+
+**Mechanism (plane-ops, reusing SAM-core primitives):**
+
+- A plain **vertical rectangle** (4 corners, horizontal top/bottom, vertical sides, no openings)
+  takes a byte-identical **fast path** (the legacy straight-up re-extrude, frozen behind a private
+  helper so it is insulated from the `GetBaseSegment` change).
+- Any other profile takes **plane-ops**: `ExtendTopTo`/`ExtendBottomTo` call
+  `Query.Extend(Face3D, horizontal plane at targetZ)` (base profile + openings + supporting plane
+  preserved, flat top/bottom at the target for the kernel to re-cut); `SetVerticalFootprint` moves
+  each plan end via `Query.Extend` (lengthen) or `Query.Cut` keeping the wall-body side (shorten).
+  A trim that clips an opening emits `SAM_OCCT_EXTEND3D_HOLE_DROPPED` on the panel (never silent).
+- `GetBaseSegment` now spans the **full plan extent** of all boundary points (not a horizontal cut
+  that under-measures a door-notched foot), with a deterministic direction (longest edge → lower
+  mean Z → lower index).
+
+Unit tests assert **shape**, not bounding-box spans alone (a bbox check passes even under a shear):
+gable/M-top reach the target without collapse, a 10-degree-tilted wall keeps its plane normal, a
+window survives an extend and is diagnosed on a trim, and the parallelogram base/top tie resolves
+deterministically. The three PR #49 (`26ac05a`) profile-preservation tests are cherry-picked in.
+
+### Managed golden re-baseline (E1)
+
+The **raw** golden master and the production **raw-first** path are byte-identical (they never call
+these primitives - verified). The **managed** tripwire (`GoldenMasterIntegrationTests.ManagedFixtures`,
+`forceManagedPipeline: true`) and workflow B share the conditioning code and the same walls, so the
+fix necessarily changes the managed signatures. Per the golden-master contract (a managed pin is "a
+tripwire, not a correctness assertion... a phase that changes either pipeline's closure must update
+the expected values with a stated delta"), the three moved managed pins are re-baselined:
+
+| Fixture | Before (cells/naked/vol) | After (cells/naked/vol) | Mechanism |
+| --- | --- | --- | --- |
+| whole-level-flat | 22 / 0 / 3479.897 | **unchanged** | all walls take the fast path or extend identically |
+| tilted-two-spaces | 2 / 0 / 723.652 | **unchanged** | " |
+| whole-level-tilted | 22 / 0 / 3377.828 | 22 / 0 / 3377.**841** | tilted walls keep their true plane instead of being verticalized (R5); cells/naked identical, volume +0.0004% |
+| whole-level-towers | 22 / **12** / 8777.056 | 21 / **8** / 8689.707 | sloped/non-rectangular walls that collapsed to slivers now extend to full profile; **naked improved 12 → 8** |
+| two-level-tilted | 29 / **29** / 2213.303 | 15 / **32** / 2307.863 | already-degraded managed fixture (raw-first, the production path, closes it 40+ / 0 and is unchanged); E2 (plane-target cap extension) targets the residual managed closure |
+
+Workflow B (E1's actual target, measured by `WorkflowParityIntegrationTests`) mostly improved:
+whole-level-towers 26 → 28 spaces, AdjacencyCluster-home now closes 18 / 18 cleanly (was 16),
+Face3D-home's A-solver-matched parity warning cleared. Those harness rows are re-pinned with a
+mechanism note; none are silently skipped.
+
+### Fast-vs-plane-ops census
+
+`Extend3DCensusIntegrationTests` records, per golden fixture, how many operations took each path
+(observational, not a freeze gate - the fast path is deliberately NOT expected to fire for every
+wall, since these fixtures contain the non-rectangular walls E1 fixes). Current split (native-free
+`Extend3D`): whole-level-flat 120/56, tilted-two-spaces 11/7, whole-level-tilted 107/72,
+two-level-tilted 230/107, whole-level-towers 183/37 (fast/plane-ops).
+
+```powershell
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~Extend3DCensusIntegrationTests"
+```

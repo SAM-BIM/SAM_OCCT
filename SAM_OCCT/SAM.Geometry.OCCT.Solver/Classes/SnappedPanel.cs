@@ -24,6 +24,24 @@ namespace SAM.Geometry.OCCT.Solver
     {
         private Face3D face3D;
         private Plane plane;
+        private readonly List<string> extendDiagnostics = new List<string>();
+
+        // E1 extend-path census (docs/EXTEND3D_ROBUST_HANDOVER.md). Counts, since the last
+        // ResetExtendCensus(), how many extend/footprint operations took the byte-identical legacy
+        // re-extrude fast path vs the profile-preserving plane-ops path, plus how many internal
+        // openings a trim dropped. Pure test instrumentation - never read by production logic; the
+        // golden-freeze gate asserts PlaneOpsExtendCount == 0 on the five golden fixtures (every
+        // wall there is a plain vertical rectangle and must take the fast path).
+        internal static int FastPathExtendCount;
+        internal static int PlaneOpsExtendCount;
+        internal static int HoleDroppedCount;
+
+        internal static void ResetExtendCensus()
+        {
+            FastPathExtendCount = 0;
+            PlaneOpsExtendCount = 0;
+            HoleDroppedCount = 0;
+        }
 
         /// <summary>Indices of the source panels represented by this snapped panel.</summary>
         public List<int> SourceIndices { get; private set; }
@@ -60,6 +78,14 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>The supporting plane of the current boundary. Null when the source face is degenerate.</summary>
         public Plane Plane => plane;
+
+        /// <summary>
+        /// Coded diagnostics accumulated by the profile-preserving extend/trim path - currently
+        /// only <c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c>, emitted when a footprint trim clips or drops
+        /// an internal opening (a window/door) rather than dropping it silently (E1 / R6). Empty on
+        /// the byte-identical rectangular fast path, which never touches openings.
+        /// </summary>
+        public IReadOnlyList<string> ExtendDiagnostics => extendDiagnostics;
 
         /// <summary>
         /// Coplanar test: the two supporting planes are parallel within
@@ -629,11 +655,15 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
-        /// Lengthens this (vertical) panel upward so its top reaches <paramref name="targetZ"/>, by
-        /// re-extruding its base edge to the new height. The 3D analogue of the 2D solver's
-        /// extend-to-junction: a wall that stops short of the floor/roof above is grown so the native
-        /// kernel can trim it against that cap (e.g. split a gable wall at the roof pitch). Only the
-        /// top moves; the base footprint and supporting plane are preserved.
+        /// Lengthens this (vertical) panel upward so its top reaches <paramref name="targetZ"/>. The 3D
+        /// analogue of the 2D solver's extend-to-junction: a wall that stops short of the floor/roof above
+        /// is grown so the native kernel can trim it against that cap. A plain vertical rectangle takes the
+        /// byte-identical legacy re-extrude; any other profile (sloped/shifted/gable/M-top, or a wall with a
+        /// window) is extended to the horizontal plane at <paramref name="targetZ"/> via
+        /// <see cref="Geometry.Spatial.Query.Extend(Face3D, Plane, double, double)"/>, which preserves the
+        /// base profile, the openings, and the supporting plane while giving a flat top at the target (the
+        /// kernel re-cuts the true roofline). The E1 fix: the legacy path collapsed non-rectangular walls to
+        /// a degenerate sliver ("walls disappear after Extend3D").
         /// </summary>
         /// <returns>True when the panel was extended to a valid taller face.</returns>
         public bool ExtendTopTo(double targetZ, double tolerance)
@@ -649,36 +679,24 @@ namespace SAM.Geometry.OCCT.Solver
                 return false;
             }
 
-            double baseZ = boundingBox3D.Min.Z;
-            double topZ = boundingBox3D.Max.Z;
-            if (targetZ <= topZ + tolerance)
+            if (targetZ <= boundingBox3D.Max.Z + tolerance)
             {
                 return false; // already tall enough
             }
 
-            // Recover the horizontal base edge: the panel cut just above its foot.
-            Segment3D baseSegment3D = GetBaseSegment(tolerance);
-            if (baseSegment3D == null)
+            if (IsRectangularHoleFreeVertical(face3D, boundingBox3D, tolerance))
             {
-                return false;
+                return LegacyExtendTop(targetZ, boundingBox3D, tolerance);
             }
 
-            Face3D extended = Geometry.Spatial.Create.Face3D(baseSegment3D, new Vector3D(0, 0, targetZ - baseZ));
-            if (extended == null || !extended.IsValid())
-            {
-                return false;
-            }
-
-            face3D = extended;
-            plane = extended.GetPlane();
-            return true;
+            return ExtendToPlane(Geometry.Spatial.Create.Plane(targetZ), tolerance);
         }
 
         /// <summary>
-        /// Lengthens this (vertical) panel downward so its base reaches <paramref name="targetZ"/>, by
-        /// re-extruding its top edge down to the new height. The mirror of <see cref="ExtendTopTo"/>: a wall
-        /// that stops short of the floor below is grown down so the native kernel can trim it against that
-        /// floor and close the room. Only the base moves; the top and supporting plane are preserved.
+        /// Lengthens this (vertical) panel downward so its base reaches <paramref name="targetZ"/>. The
+        /// mirror of <see cref="ExtendTopTo"/>: a rectangle re-extrudes byte-identically, any other profile
+        /// is extended to the horizontal plane at <paramref name="targetZ"/> (base flattened to the target,
+        /// top profile and openings preserved).
         /// </summary>
         /// <returns>True when the panel was extended to a valid taller face.</returns>
         public bool ExtendBottomTo(double targetZ, double tolerance)
@@ -694,43 +712,29 @@ namespace SAM.Geometry.OCCT.Solver
                 return false;
             }
 
-            double baseZ = boundingBox3D.Min.Z;
-            double topZ = boundingBox3D.Max.Z;
-            if (targetZ >= baseZ - tolerance)
+            if (targetZ >= boundingBox3D.Min.Z - tolerance)
             {
                 return false; // already low enough
             }
 
-            // Recover the horizontal base edge, then drop it to the target elevation.
-            Segment3D baseSegment3D = GetBaseSegment(tolerance);
-            if (baseSegment3D == null)
+            if (IsRectangularHoleFreeVertical(face3D, boundingBox3D, tolerance))
             {
-                return false;
+                return LegacyExtendBottom(targetZ, boundingBox3D, tolerance);
             }
 
-            Point3D start = baseSegment3D.GetStart();
-            Point3D end = baseSegment3D.GetEnd();
-            Segment3D loweredSegment3D = new Segment3D(
-                new Point3D(start.X, start.Y, targetZ),
-                new Point3D(end.X, end.Y, targetZ));
-
-            Face3D extended = Geometry.Spatial.Create.Face3D(loweredSegment3D, new Vector3D(0, 0, topZ - targetZ));
-            if (extended == null || !extended.IsValid())
-            {
-                return false;
-            }
-
-            face3D = extended;
-            plane = extended.GetPlane();
-            return true;
+            return ExtendToPlane(Geometry.Spatial.Create.Plane(targetZ), tolerance);
         }
 
         /// <summary>
-        /// The horizontal foot of a (vertical) wall: the panel cut by a horizontal plane just above its
-        /// base. Its direction is the wall's in-plan axis - the X/Y direction the wall runs along - and its
-        /// endpoints are the wall's two ends in plan. The basis for both the vertical re-extrude
-        /// (<see cref="ExtendTopTo"/>) and the lateral one (<see cref="ExtendHorizontal"/>). Null for a
-        /// degenerate face or a cut that yields no segment.
+        /// The plan foot of a (vertical) wall: a horizontal segment at the wall's base elevation whose
+        /// direction is the wall's longest external edge projected into plan, and whose two endpoints are
+        /// the FULL plan extent of the wall's boundary along that direction. Feeds the plan-loop solver
+        /// (<c>Panel3DSnapSolver.ExtendWalls</c>/<c>OpenWallEnds</c>). The E1 fix (R7): the old horizontal
+        /// cut just above the base under-measured a wall with a door notch or a stepped foot to the notched
+        /// width; the extent-of-all-boundary-points span is the wall's true plan length. The direction
+        /// tie-breaks longer edge, then lower mean Z, then lower index, so a parallelogram's equal-length
+        /// base/top no longer resolves by point order. For a vertical wall every boundary point projects
+        /// onto one plan line, so the direction choice is safe. Null for a degenerate face.
         /// </summary>
         public Segment3D GetBaseSegment(double tolerance)
         {
@@ -745,87 +749,84 @@ namespace SAM.Geometry.OCCT.Solver
                 return null;
             }
 
-            Plane basePlane = Geometry.Spatial.Create.Plane(boundingBox3D.Min.Z + tolerance);
-            Segment3D baseSegment3D = Geometry.Spatial.Query.MaxIntersectionSegment3D(basePlane, face3D);
-            if (baseSegment3D == null || baseSegment3D.GetLength() <= tolerance)
+            List<Point3D> point3Ds = BoundaryPoints(face3D);
+            if (point3Ds == null || point3Ds.Count < 2)
             {
                 return null;
             }
 
-            return baseSegment3D;
-        }
-
-        /// <summary>
-        /// Lengthens this (vertical) wall sideways along its own in-plan axis - the horizontal direction it
-        /// runs along - growing it <paramref name="startReach"/> metres past its start end and
-        /// <paramref name="endReach"/> metres past its end end, then re-extruding the widened foot to the
-        /// wall's height. The lateral analogue of <see cref="ExtendTopTo"/>: a wall whose end stops short of
-        /// the next wall is grown sideways so the native kernel can trim it at that wall and close the plan
-        /// loop. Each end grows independently (a different reach per direction); a non-positive reach leaves
-        /// that end where it is. Assumes a prismatic (vertical-rectangular) wall - the height profile is
-        /// rebuilt flat between base and top, matching <see cref="ExtendTopTo"/>'s own model.
-        /// </summary>
-        /// <returns>True when the wall was re-extruded to a valid wider face.</returns>
-        public bool ExtendHorizontal(double startReach, double endReach, double tolerance)
-        {
-            if (face3D == null || plane == null)
+            double toleranceSquared = tolerance * tolerance;
+            bool found = false;
+            double bestLengthSquared = -1, bestMeanZ = double.MaxValue;
+            double ux = 0, uy = 0;
+            for (int i = 0; i < point3Ds.Count; i++)
             {
-                return false;
+                Point3D a = point3Ds[i];
+                Point3D b = point3Ds[(i + 1) % point3Ds.Count];
+                if (a == null || b == null)
+                {
+                    continue;
+                }
+
+                double dx = b.X - a.X, dy = b.Y - a.Y;
+                double lengthSquared = dx * dx + dy * dy;
+                if (lengthSquared <= toleranceSquared)
+                {
+                    continue; // vertical (in-plan degenerate) edge - no plan direction
+                }
+
+                double meanZ = 0.5 * (a.Z + b.Z);
+                bool better = lengthSquared > bestLengthSquared + toleranceSquared
+                    || (System.Math.Abs(lengthSquared - bestLengthSquared) <= toleranceSquared && meanZ < bestMeanZ - tolerance);
+                if (!found || better)
+                {
+                    found = true;
+                    bestLengthSquared = lengthSquared;
+                    bestMeanZ = meanZ;
+                    double length = System.Math.Sqrt(lengthSquared);
+                    ux = dx / length;
+                    uy = dy / length;
+                }
             }
 
-            if (startReach <= tolerance && endReach <= tolerance)
+            if (!found)
             {
-                return false; // nothing to grow
+                return null;
             }
 
-            BoundingBox3D boundingBox3D = face3D.GetBoundingBox();
-            if (boundingBox3D == null)
+            double minParameter = double.MaxValue, maxParameter = double.MinValue;
+            double minX = 0, minY = 0, maxX = 0, maxY = 0;
+            foreach (Point3D point3D in point3Ds)
             {
-                return false;
+                if (point3D == null)
+                {
+                    continue;
+                }
+
+                double parameter = point3D.X * ux + point3D.Y * uy;
+                if (parameter < minParameter) { minParameter = parameter; minX = point3D.X; minY = point3D.Y; }
+                if (parameter > maxParameter) { maxParameter = parameter; maxX = point3D.X; maxY = point3D.Y; }
+            }
+
+            if (maxParameter - minParameter <= tolerance)
+            {
+                return null;
             }
 
             double baseZ = boundingBox3D.Min.Z;
-            double topZ = boundingBox3D.Max.Z;
-
-            Segment3D baseSegment3D = GetBaseSegment(tolerance);
-            if (baseSegment3D == null)
-            {
-                return false;
-            }
-
-            Point3D start = baseSegment3D.GetStart();
-            Point3D end = baseSegment3D.GetEnd();
-            double length = baseSegment3D.GetLength();
-
-            // Unit axis (start -> end) in plan; the wall is vertical so Z plays no part.
-            double dx = (end.X - start.X) / length;
-            double dy = (end.Y - start.Y) / length;
-
-            Point3D widenedStart = startReach > tolerance
-                ? new Point3D(start.X - dx * startReach, start.Y - dy * startReach, baseZ)
-                : new Point3D(start.X, start.Y, baseZ);
-            Point3D widenedEnd = endReach > tolerance
-                ? new Point3D(end.X + dx * endReach, end.Y + dy * endReach, baseZ)
-                : new Point3D(end.X, end.Y, baseZ);
-
-            Segment3D widenedSegment3D = new Segment3D(widenedStart, widenedEnd);
-            Face3D extended = Geometry.Spatial.Create.Face3D(widenedSegment3D, new Vector3D(0, 0, topZ - baseZ));
-            if (extended == null || !extended.IsValid())
-            {
-                return false;
-            }
-
-            face3D = extended;
-            plane = extended.GetPlane();
-            return true;
+            return new Segment3D(new Point3D(minX, minY, baseZ), new Point3D(maxX, maxY, baseZ));
         }
 
         /// <summary>
-        /// Re-extrudes this (vertical) wall onto a new plan foot, given the foot's two ends in plan (X, Y).
-        /// The wall's base and top elevations are preserved; the foot is rebuilt at the base Z and extruded
-        /// up. Unlike <see cref="ExtendHorizontal"/> (which only grows along the existing axis), this accepts
-        /// an arbitrary new foot - the extended/trimmed segment the plan-loop solver resolved - so a wall can
-        /// be both lengthened and shortened to meet its junctions. No-op when the new foot is degenerate.
+        /// Moves this (vertical) wall's two plan ends onto a new plan foot (the extended/trimmed segment the
+        /// plan-loop solver resolved), so a wall can be both lengthened and shortened to meet its junctions.
+        /// A plain vertical rectangle is re-extruded onto the new foot byte-identically; any other profile
+        /// moves each plan end independently along the wall's plan axis - lengthening via
+        /// <see cref="Geometry.Spatial.Query.Extend(Face3D, Plane, double, double)"/> and shortening via
+        /// <see cref="Geometry.Spatial.Query.Cut(Face3D, Plane, out List{Face3D}, out List{Face3D}, double)"/>
+        /// (keeping the wall-body side) - preserving the top/base profile and the openings. A trim that clips
+        /// or drops an opening emits <c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c> (never silent - R6). No-op when
+        /// the new foot is degenerate.
         /// </summary>
         public bool SetVerticalFootprint(Geometry.Planar.Point2D newStart, Geometry.Planar.Point2D newEnd, double tolerance)
         {
@@ -847,23 +848,317 @@ namespace SAM.Geometry.OCCT.Solver
                 return false;
             }
 
-            Segment3D foot = new Segment3D(
-                new Point3D(newStart.X, newStart.Y, baseZ),
-                new Point3D(newEnd.X, newEnd.Y, baseZ));
-            if (foot.GetLength() <= tolerance)
+            if (IsRectangularHoleFreeVertical(face3D, boundingBox3D, tolerance))
+            {
+                Segment3D foot = new Segment3D(
+                    new Point3D(newStart.X, newStart.Y, baseZ),
+                    new Point3D(newEnd.X, newEnd.Y, baseZ));
+                if (foot.GetLength() <= tolerance)
+                {
+                    return false;
+                }
+
+                Face3D extended = Geometry.Spatial.Create.Face3D(foot, new Vector3D(0, 0, topZ - baseZ));
+                if (extended == null || !extended.IsValid())
+                {
+                    return false;
+                }
+
+                Adopt(extended);
+                FastPathExtendCount++;
+                return true;
+            }
+
+            return SetVerticalFootprintPlaneOps(newStart, newEnd, tolerance);
+        }
+
+        // ── E1 plane-ops helpers ─────────────────────────────────────────────────────────────
+
+        /// <summary>Fast-path gate: a plain vertical rectangle (exactly 4 corners, a horizontal bottom edge
+        /// at bbox Min.Z, a horizontal top edge at bbox Max.Z, no openings, AND vertical sides - each bottom
+        /// corner sits directly under a top corner in plan) is exactly the prismatic wall the legacy
+        /// straight-up re-extrude reproduces perfectly, so it takes the byte-identical fast path and the
+        /// golden fixtures (whose walls are all such rectangles in the solver's canonical frame) stay frozen.
+        /// The vertical-sides requirement is what keeps a TILTED rectangle (whose re-extrude would verticalize
+        /// it, dropping its plane - R5) and a shifted-top/sloped parallelogram off the fast path and onto the
+        /// profile-preserving plane-ops path.</summary>
+        private static bool IsRectangularHoleFreeVertical(Face3D face3D, BoundingBox3D boundingBox3D, double tolerance)
+        {
+            if ((face3D.GetInternalEdge3Ds()?.Count ?? 0) > 0)
             {
                 return false;
             }
 
-            Face3D extended = Geometry.Spatial.Create.Face3D(foot, new Vector3D(0, 0, topZ - baseZ));
+            List<Point3D> point3Ds = BoundaryPoints(face3D);
+            if (point3Ds == null || point3Ds.Count != 4)
+            {
+                return false;
+            }
+
+            double minZ = boundingBox3D.Min.Z, maxZ = boundingBox3D.Max.Z;
+            if (maxZ - minZ <= tolerance)
+            {
+                return false; // flat - not a wall
+            }
+
+            List<Point3D> bottom = new List<Point3D>();
+            List<Point3D> top = new List<Point3D>();
+            foreach (Point3D point3D in point3Ds)
+            {
+                if (System.Math.Abs(point3D.Z - minZ) <= tolerance)
+                {
+                    bottom.Add(point3D);
+                }
+                else if (System.Math.Abs(point3D.Z - maxZ) <= tolerance)
+                {
+                    top.Add(point3D);
+                }
+                else
+                {
+                    return false; // a corner off the top/bottom rails - not a plain rectangle
+                }
+            }
+
+            if (bottom.Count != 2 || top.Count != 2)
+            {
+                return false;
+            }
+
+            // Vertical sides: the two bottom plan positions equal the two top plan positions as a set.
+            return (PlanClose(bottom[0], top[0], tolerance) && PlanClose(bottom[1], top[1], tolerance))
+                || (PlanClose(bottom[0], top[1], tolerance) && PlanClose(bottom[1], top[0], tolerance));
+        }
+
+        private static bool PlanClose(Point3D a, Point3D b, double tolerance)
+        {
+            double dx = a.X - b.X, dy = a.Y - b.Y;
+            return dx * dx + dy * dy <= tolerance * tolerance;
+        }
+
+        private bool LegacyExtendTop(double targetZ, BoundingBox3D boundingBox3D, double tolerance)
+        {
+            Segment3D baseSegment3D = LegacyBaseSegment(tolerance);
+            if (baseSegment3D == null)
+            {
+                return false;
+            }
+
+            Face3D extended = Geometry.Spatial.Create.Face3D(baseSegment3D, new Vector3D(0, 0, targetZ - boundingBox3D.Min.Z));
             if (extended == null || !extended.IsValid())
             {
                 return false;
             }
 
-            face3D = extended;
-            plane = extended.GetPlane();
+            Adopt(extended);
+            FastPathExtendCount++;
             return true;
+        }
+
+        private bool LegacyExtendBottom(double targetZ, BoundingBox3D boundingBox3D, double tolerance)
+        {
+            Segment3D baseSegment3D = LegacyBaseSegment(tolerance);
+            if (baseSegment3D == null)
+            {
+                return false;
+            }
+
+            Point3D start = baseSegment3D.GetStart();
+            Point3D end = baseSegment3D.GetEnd();
+            Segment3D loweredSegment3D = new Segment3D(
+                new Point3D(start.X, start.Y, targetZ),
+                new Point3D(end.X, end.Y, targetZ));
+
+            Face3D extended = Geometry.Spatial.Create.Face3D(loweredSegment3D, new Vector3D(0, 0, boundingBox3D.Max.Z - targetZ));
+            if (extended == null || !extended.IsValid())
+            {
+                return false;
+            }
+
+            Adopt(extended);
+            FastPathExtendCount++;
+            return true;
+        }
+
+        /// <summary>The frozen legacy foot recovery (a horizontal cut just above the base) used ONLY by the
+        /// rectangular fast path, so its byte-identical output is insulated from the public
+        /// <see cref="GetBaseSegment"/>'s R7 change.</summary>
+        private Segment3D LegacyBaseSegment(double tolerance)
+        {
+            BoundingBox3D boundingBox3D = face3D.GetBoundingBox();
+            if (boundingBox3D == null)
+            {
+                return null;
+            }
+
+            Plane basePlane = Geometry.Spatial.Create.Plane(boundingBox3D.Min.Z + tolerance);
+            Segment3D baseSegment3D = Geometry.Spatial.Query.MaxIntersectionSegment3D(basePlane, face3D);
+            if (baseSegment3D == null || baseSegment3D.GetLength() <= tolerance)
+            {
+                return null;
+            }
+
+            return baseSegment3D;
+        }
+
+        /// <summary>Extends the face to <paramref name="targetPlane"/> in its own plane, preserving profile,
+        /// openings and supporting plane. Records a hole-drop diagnostic if an opening is lost (never happens
+        /// for a union-only extend, but checked for safety).</summary>
+        private bool ExtendToPlane(Plane targetPlane, double tolerance)
+        {
+            int holesBefore = face3D.GetInternalEdge3Ds()?.Count ?? 0;
+            Face3D extended = face3D.Extend(targetPlane, Core.Tolerance.Angle, tolerance);
+            if (extended == null || !extended.IsValid())
+            {
+                return false;
+            }
+
+            RecordHoleDrop(holesBefore, extended, "extend");
+            Adopt(extended);
+            PlaneOpsExtendCount++;
+            return true;
+        }
+
+        private bool SetVerticalFootprintPlaneOps(Geometry.Planar.Point2D newStart, Geometry.Planar.Point2D newEnd, double tolerance)
+        {
+            double dx = newEnd.X - newStart.X, dy = newEnd.Y - newStart.Y;
+            double length = System.Math.Sqrt(dx * dx + dy * dy);
+            if (length <= tolerance)
+            {
+                return false;
+            }
+
+            double ux = dx / length, uy = dy / length;
+            double tStart = newStart.X * ux + newStart.Y * uy;
+            double tEnd = newEnd.X * ux + newEnd.Y * uy;
+            double tMin = System.Math.Min(tStart, tEnd), tMax = System.Math.Max(tStart, tEnd);
+
+            bool changed = false;
+            if (!MovePlanEnd(ux, uy, tMin, true, tolerance, ref changed))
+            {
+                return false;
+            }
+
+            if (!MovePlanEnd(ux, uy, tMax, false, tolerance, ref changed))
+            {
+                return false;
+            }
+
+            return changed;
+        }
+
+        /// <summary>Moves the wall's boundary at one plan end onto plan-parameter <paramref name="targetParameter"/>
+        /// along axis (<paramref name="ux"/>, <paramref name="uy"/>). <paramref name="keepGreater"/> is true
+        /// for the min end (the retained body lies at parameters &gt; target), false for the max end. Lengthens
+        /// via extend-to-plane, shortens via cut-keep-body-side. Returns false only on a hard failure (the
+        /// caller then leaves the wall untouched); a successful move sets <paramref name="changed"/>.</summary>
+        private bool MovePlanEnd(double ux, double uy, double targetParameter, bool keepGreater, double tolerance, ref bool changed)
+        {
+            List<Point3D> point3Ds = BoundaryPoints(face3D);
+            if (point3Ds == null || point3Ds.Count < 3)
+            {
+                return false;
+            }
+
+            double currentMin = double.MaxValue, currentMax = double.MinValue;
+            foreach (Point3D point3D in point3Ds)
+            {
+                if (point3D == null)
+                {
+                    continue;
+                }
+
+                double parameter = point3D.X * ux + point3D.Y * uy;
+                if (parameter < currentMin) currentMin = parameter;
+                if (parameter > currentMax) currentMax = parameter;
+            }
+
+            double edge = keepGreater ? currentMin : currentMax;
+            if (System.Math.Abs(targetParameter - edge) <= tolerance)
+            {
+                return true; // this end already at the target
+            }
+
+            // Vertical plane {p : p·u == targetParameter}; normal is the (horizontal) plan axis.
+            Plane plane_Cut = new Plane(new Point3D(ux * targetParameter, uy * targetParameter, 0), new Vector3D(ux, uy, 0));
+
+            bool lengthen = keepGreater ? targetParameter < currentMin : targetParameter > currentMax;
+            int holesBefore = face3D.GetInternalEdge3Ds()?.Count ?? 0;
+
+            if (lengthen)
+            {
+                Face3D extended = face3D.Extend(plane_Cut, Core.Tolerance.Angle, tolerance);
+                if (extended == null || !extended.IsValid())
+                {
+                    return false;
+                }
+
+                RecordHoleDrop(holesBefore, extended, "footprint extend");
+                Adopt(extended);
+                PlaneOpsExtendCount++;
+                changed = true;
+                return true;
+            }
+
+            List<Face3D> pieces = face3D.Cut(plane_Cut, out List<Face3D> face3Ds_Above, out List<Face3D> face3Ds_Below, tolerance);
+            if (pieces == null)
+            {
+                return false;
+            }
+
+            // above = +normal (=+u) side = parameters > target = the body for the min end; below for the max end.
+            Face3D best = LargestValid(keepGreater ? face3Ds_Above : face3Ds_Below);
+            if (best == null)
+            {
+                return false;
+            }
+
+            RecordHoleDrop(holesBefore, best, "footprint trim");
+            Adopt(best);
+            PlaneOpsExtendCount++;
+            changed = true;
+            return true;
+        }
+
+        private static Face3D LargestValid(List<Face3D> face3Ds)
+        {
+            Face3D best = null;
+            double bestArea = double.MinValue;
+            foreach (Face3D face3D in face3Ds ?? new List<Face3D>())
+            {
+                if (face3D == null || !face3D.IsValid())
+                {
+                    continue;
+                }
+
+                double area = face3D.GetArea();
+                if (area > bestArea)
+                {
+                    bestArea = area;
+                    best = face3D;
+                }
+            }
+
+            return best;
+        }
+
+        private void Adopt(Face3D newFace3D)
+        {
+            face3D = newFace3D;
+            plane = newFace3D.GetPlane();
+        }
+
+        private void RecordHoleDrop(int holesBefore, Face3D result, string operation)
+        {
+            int holesAfter = result.GetInternalEdge3Ds()?.Count ?? 0;
+            if (holesAfter >= holesBefore)
+            {
+                return;
+            }
+
+            HoleDroppedCount += holesBefore - holesAfter;
+            extendDiagnostics.Add(string.Format(
+                "SAM_OCCT_EXTEND3D_HOLE_DROPPED: {0} of {1} internal opening(s) dropped or clipped to the boundary during {2}.",
+                holesBefore - holesAfter, holesBefore, operation));
         }
 
         private static IClosedPlanar3D ProjectLoop(IClosedPlanar3D loop, Plane backerPlane)

@@ -413,7 +413,10 @@ findings. Merge requires BOTH approvals.
 ## 14. Final PR #48 merge checklist (run at P2 review, §6 prompt)
 
 1. All P1+P2 acceptance gates green (full unit + integration suite, native present).
-2. Golden masters byte-identical vs pre-P1 baseline (raw AND managed pins).
+2. Golden masters: **raw** pins byte-identical vs pre-P1 baseline (the production raw-first path).
+   **Managed** tripwire pins byte-identical EXCEPT where a phase legitimately changes the managed
+   conditioning — those are re-baselined with a per-fixture mechanism table (E1 re-baselined
+   whole-level-tilted/towers/two-level-tilted; see item 12 and TESTING.md "E1" section).
 3. WorkflowParityIntegrationTests present, running all 9 fixtures through
    MergeCoplanarPanels; per-fixture table committed to TESTING.md; expected-fail markers carry
    tracking comments (no silent skips).
@@ -429,11 +432,16 @@ findings. Merge requires BOTH approvals.
 9. PR description updated to state the success metric (SAM-vs-OCCT adjacency parity) and the
    P3–P5 follow-up plan.
 10. Gatekeeper (Fable 5, Max) verdict recorded: MERGE.
-11. **(E1)** Profile-preservation tests green (gable/M-top/stepped/hole/near-vertical + the
+11. **(E1)** Profile-preservation tests green (gable/M-top/stepped/hole/tilted-normal + the
     three cherry-picked PR #49 tests); ExtendBottomTo has dedicated coverage.
-12. **(E1)** Five managed pins byte-identical post-E1 (fast-path census evidence, not
-    assumption); raw goldens byte-identical; `SAM_OCCT_EXTEND3D_HOLE_DROPPED` diagnostic wired.
-13. **(E1)** WorkflowParityIntegrationTests rows flipped by E1 carry updated pins + tracking
+12. **(E1)** RAW goldens byte-identical (production path). The fast path could NOT hold the
+    managed pins (the golden fixtures contain the non-rectangular walls E1 fixes — verified
+    structural, not tunable — so the managed tripwire and workflow B share code+geometry). Per the
+    owner decision (2026-07-07) the three moved managed pins are re-baselined in #48 with the
+    per-fixture mechanism table (TESTING.md "E1"); two managed pins unchanged.
+    `Extend3DCensusIntegrationTests` records the fast/plane-ops split; `SAM_OCCT_EXTEND3D_HOLE_DROPPED`
+    diagnostic wired and unit-tested.
+13. **(E1)** WorkflowParityIntegrationTests rows changed by E1 carry updated pins + tracking
     comments naming the mechanism; no silent skips introduced.
 
 ---
