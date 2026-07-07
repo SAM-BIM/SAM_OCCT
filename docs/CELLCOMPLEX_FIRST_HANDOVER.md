@@ -37,12 +37,18 @@ adjacency.**
   pre-conditioners and managed-fallback internals.
 - Full analysis, 12 CellComplex Q&A, risks: see review record (Appendix A/B at end).
 
-## B. Phase merge strategy (confirmed)
+## B. Phase merge strategy (confirmed; amended 2026-07-07 for the E-track)
 
 - Continue **PR #48**.
-- Implement **P1 and P2 inside PR #48**.
-- **Merge PR #48 only after P2 passes** its acceptance gate and the merge checklist (§14).
-- **P3, P4, P5 are follow-up PRs** (new branches off `sow/2026-Q3` after the merge).
+- Implement **P1, then E1, then P2 inside PR #48**. E1 is the robust-Extend3D primitive rebuild
+  (plane-ops, all goldens frozen) from `docs/EXTEND3D_ROBUST_HANDOVER.md` — it supersedes PR #49.
+- **Merge PR #48 only after P2 passes** its acceptance gate and the merge checklist (§14,
+  now including the E1 items 11–13).
+- **P3, P4, P5 are follow-up PRs** (new branches off `sow/2026-Q3` after the merge), joined by
+  **E2** (plane-target extension, the managed-pin re-baseline PR) and **E3** (extend
+  observability). Combined order: **merge #48 → E2 → {P3 ∥ E3-after-E2} → P4 → P5.**
+  **P4 is blocked until E2 merges** — gate hardening pushes more input onto the managed
+  pipeline, so the managed extend quality must improve first.
 - **P5 is the separate re-baseline PR** — never enters #48, ships with its own re-baseline table.
 
 ---
@@ -116,6 +122,11 @@ Definitions:
 Model-strategy note: adopted as given. Where alternatives were offered I pinned: P2 impl =
 xhigh (Max reserved for its merge review), P2 merge decision = Fable 5 Max, P4 impl = Max.
 No strong disagreement anywhere.
+
+E-track note (2026-07-07): the robust-Extend3D phases E1–E3 of
+`docs/EXTEND3D_ROBUST_HANDOVER.md` interleave with this table — E1 sits between P1 and P2
+inside PR #48; E2 lands right after the #48 merge and **gates P4**; E3 follows E2 (parallel to
+P3). See §B for the combined order.
 
 ## 3. P1 implementation prompt (Sonnet 5, High → PR #48)
 
@@ -207,8 +218,10 @@ exactly one native build per solve.
 
 ```
 [paste Shared context]
-You are the merge gatekeeper for PR #48 (phases 0-9 + P1 + P2). Two jobs: line-level review of
-the P2 diff, then the merge decision for the whole PR.
+You are the merge gatekeeper for PR #48 (phases 0-9 + P1 + E1 + P2). Two jobs: line-level review
+of the P2 diff, then the merge decision for the whole PR. Note the PR also contains E1 (robust
+Extend3D primitives, docs/EXTEND3D_ROBUST_HANDOVER.md) — walk its checklist items 11-13 in §14
+and confirm its golden-freeze evidence as part of the merge decision.
 P2 REVIEW:
 1. Observationality: prove adopted geometry unchanged — goldens byte-identical, determinism
    tests green, no gate touched.
@@ -277,6 +290,8 @@ OUTPUT: findings with file:line + failure scenario; verdict merge yes/no.
 [paste Shared context]
 GOAL: Close the two watertight-but-wrong gate holes (deferred codex findings #3 and #7) without
 regressing the five golden fixtures. Branch feat/solver-gate-hardening off sow/2026-Q3.
+PRECONDITION: branch only after E2 (feat/extend3d-plane-targets, docs/EXTEND3D_ROBUST_HANDOVER.md)
+has merged — E2 re-baselines the managed pins this phase's risk math depends on.
 SCOPE: adoption-gate logic + targeted fixtures only.
 TASKS:
 1. Codex #3: in Panel3DSnapSolver.FinalizeAndValidate (~:722), the consolidation-rebuild
@@ -295,7 +310,8 @@ TASKS:
    (sampled grid or planar boolean ≥ threshold) IF needed to make (2) sound — keep the change
    scoped to gate measurement, not RetainDropped dedup (note follow-up if wider).
 DO NOT CHANGE: golden fixtures' outcomes (all five must adopt exactly as today), DTO, cluster,
-GH, PanelReconstruction.
+GH, PanelReconstruction, SnappedPanel extend/trim primitives and ConditionStage (E-track
+territory — docs/EXTEND3D_ROBUST_HANDOVER.md).
 TESTS: unit tests for the pure gate rule (all branches); the two new integration fixtures;
 full suite green.
 ACCEPTANCE GATE: goldens byte-identical (the findings do not fire on them — verify, don't
@@ -307,12 +323,16 @@ assume); new fixtures prove both gates; every new rejection path emits a coded d
 ```
 [paste Shared context]
 Adversarial review of the P4 gate-hardening diff. Your job is to break the under-split gate.
+(Precondition check first: P4 branches only after E2 merged — verify the diff is based on a
+post-E2 sow/2026-Q3.)
 1. Construct (on paper, or as a quick fixture) realistic well-modelled inputs that the new gate
    would FALSELY reject — courtyard rings, atria spanning floors, deliberate double-height
    spaces, models where the biggest room legitimately dwarfs the median. A false rejection
-   pushes input onto the managed pipeline, which currently FAILS multi-storey fixtures
-   (two-level-tilted 29c/29n, towers 22c/12n) — so a false positive is a regression, not a
-   safety win. Verify the gate's thresholds/diagnostics make this visible and tunable.
+   pushes input onto the managed pipeline — judge that cost against the managed baselines
+   CURRENT at review time (read GoldenMasterIntegrationTests.ManagedFixtures and the P1
+   WorkflowParityIntegrationTests table; the E-track, docs/EXTEND3D_ROBUST_HANDOVER.md,
+   re-baselined them after this doc was written) — a false positive is still a regression, not
+   a safety win. Verify the gate's thresholds/diagnostics make this visible and tunable.
 2. Verify #3 fix actually decodes the appended set (not a cached count) and only when a rebuild
    is attempted (perf).
 3. Verify the five goldens adopt identically (run the suite; byte-identical signatures).
@@ -409,6 +429,12 @@ findings. Merge requires BOTH approvals.
 9. PR description updated to state the success metric (SAM-vs-OCCT adjacency parity) and the
    P3–P5 follow-up plan.
 10. Gatekeeper (Fable 5, Max) verdict recorded: MERGE.
+11. **(E1)** Profile-preservation tests green (gable/M-top/stepped/hole/near-vertical + the
+    three cherry-picked PR #49 tests); ExtendBottomTo has dedicated coverage.
+12. **(E1)** Five managed pins byte-identical post-E1 (fast-path census evidence, not
+    assumption); raw goldens byte-identical; `SAM_OCCT_EXTEND3D_HOLE_DROPPED` diagnostic wired.
+13. **(E1)** WorkflowParityIntegrationTests rows flipped by E1 carry updated pins + tracking
+    comments naming the mechanism; no silent skips introduced.
 
 ---
 
