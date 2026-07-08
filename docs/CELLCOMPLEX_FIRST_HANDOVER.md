@@ -444,6 +444,119 @@ findings. Merge requires BOTH approvals.
 13. **(E1)** WorkflowParityIntegrationTests rows changed by E1 carry updated pins + tracking
     comments naming the mechanism; no silent skips introduced.
 
+## 15. PR #48 merge-decision record (2026-07-08, Fable 5 Max — §6 gatekeeper)
+
+**Verdict: MERGE.** P2 line-level review passed on all four §6 axes; all 13 §14 items verified
+with evidence at commit `0de4fc3` (P1 `112ba61`, E1 `d459562`, P2 `0de4fc3`, pushed to
+`origin/fix/solver-raw-first`).
+
+P2 review findings (none blocking):
+1. **Observationality — clean.** The P2 diff adds only pure-managed reads: `Project()` before
+   `Dispose()` on both paths (raw `TryRawResolve`; managed rebuild-adopted from `rebuildResult`,
+   appended/rejected from the same `DecodeCellVolumes` decode that feeds the Signature). No new
+   native calls, no call-order change, no gate logic touched. Raw golden pins byte-identical vs
+   pre-P1 baseline `c68e200` (only the three owner-approved E1 managed pins moved — verified by
+   diff). Suites green at HEAD: 451/451 unit, 163/164 integration (1 skip =
+   `NativeMissingIntegrationTests`, the inverse-gated native-absent test — by design).
+2. **DTO soundness — sound, one recorded dependency.** Bridge is emitted by replicating the
+   solver flatten filter (never arithmetic); unit-tested against filter drift; dedup is
+   per-decode key only; shared face = one entry/two owners (unit + integration asserted);
+   round-trip green. Recorded dependency: filter equivalence rests on SAM-core behaviour —
+   `Shell.Add` drops a face only when `GetBoundingBox()==null`, and `IsValid()==true` implies a
+   non-null bbox (valid plane + valid edge ⇒ `Plane.Convert` non-null) — verified in SAM core at
+   review time. A SAM-core change to `Shell.Add`/`IsValid` could skew ordinals silently; P5 (the
+   ordinal consumer) must add an end-to-end ordinal↔face assertion before consuming ordinals.
+   Doc nuance: on the appended (no-rebuild) managed path the ordinals index the decode's own
+   flatten, which is not the published `ResolvedFace3Ds` (= appended input faces) — the DTO
+   remark's "the ordering ResolvedFace3Ds is built from" holds on the raw and rebuild-adopted
+   paths only. Ordinals stay well-defined per decode; P5 concern, noted here so it is not
+   rediscovered.
+3. **Create.Spaces equivalence — verified.** Second `CellComplexByPanels` rebuild removed
+   (grep-clean); the one native build left in Spaces is the classifier's envelope decode
+   (`CellClassifier.ClassifyCells`, which reads only Volume/Centre/Index — null `Shell` in the
+   DTO-sourced `SolverCell` is safe). Exclusion is by cell index. 22 / 43 / managed-refusal pins
+   green (refusal fires at the pre-existing closure gate, Warning severity, before the new
+   no-complex Error check).
+4. **Overload contract — never silent.** Identity inherited only on a sole
+   coplanar+interior-point match; zero/ambiguous ⇒ default + counted in
+   `SAM_OCCT_ANALYTICAL_PANEL_IDENTITY`. Intentional divergence from the private
+   `DirectAdjacencyCluster` (no `UpdatePanelTypes(0)`/`SetDefaultConstructionByPanelType()`
+   finalisers) is documented in-code — inherited identity must survive. Two watch-notes for
+   P3/P5: the match is point-containment (a cell face spanning two coplanar source panels
+   inherits from the one containing its internal point — rare at imprint granularity, diagnosed
+   only in aggregate), and a `Create.Panel` null return drops a face uncounted (decode-valid
+   faces make this practically unreachable).
+
+§14 walk (evidence one-liner each): (1) suites green as above; (2) raw pins byte-identical vs
+`c68e200`, managed re-baseline = exactly the three E1 rows with mechanism table (TESTING.md
+"E1"); (3) `WorkflowParityIntegrationTests` runs all 9 fixtures through `MergeCoplanarPanels`,
+table at TESTING.md §P1, TrackingComment fields present, no silent skips; (4) GH options fix in
+both components (ByShells resolves `SewBeforeBuild` from sew/mesh-input detection, labelled
+bugfix in-code) — release-noted in the PR description below; (5) report carries the complex on
+both paths (integration tests), round-trip + ordinal-bridge unit tests green; (6) single build
+by inspection + removed call site, counts pinned green; (7) no native/.cpp/ABI/
+PanelReconstruction changes in `112ba61..0de4fc3`; golden edit = the approved E1 managed
+re-baseline only; (8) TESTING.md P1/E1/P2 sections present, SPDX on all six new files, all
+three commits signed; (9) PR description below states metric + follow-ups; (10) this record;
+(11) gable/M-top/tilted-normal/hole/ExtendBottomTo×2 + PR #49 cherry-picks (`26ac05a`) present
+and green — "stepped" is covered via the M-top family (R2 groups M/stepped tops) and the
+shifted-top exact-foot `SetVerticalFootprint` trims; no literal staircase-profile fixture (minor
+gap, non-blocking — E2/E3 may add one); (12) raw goldens byte-identical, census test present,
+`SAM_OCCT_EXTEND3D_HOLE_DROPPED` unit-tested
+(`SetVerticalFootprint_ShortenThroughWindow_EmitsHoleDroppedDiagnostic`); (13) E1-changed parity
+rows carry mechanism-naming tracking comments (`towers 26 -> 28`, `Face3D-home 25-cell managed
+fallback`, `AdjacencyCluster-home 18/18 clean`).
+
+Post-merge order (unchanged): **E2** (`feat/extend3d-plane-targets` off `sow/2026-Q3`, Opus 4.8
+Max, prompt at `docs/EXTEND3D_ROBUST_HANDOVER.md` §5) → {P3 ∥ E3-after-E2} → P4 (blocked on E2)
+→ P5. `gh` unavailable on the review VM, so the PR description update is delivered here for the
+owner to paste:
+
+```markdown
+## CellComplex-first solver: P1 + E1 + P2
+
+**New success metric:** SAM adjacency parity against OCCT CellComplex adjacency — per shared
+cell face exactly one SAM panel related to both spaces; per envelope face exactly one space.
+Watertight is necessary, not sufficient. `Panel soup → reliable OCCT CellComplex →
+adjacency-ready SAM panels → correct SAM adjacency cluster`.
+
+**P1 — options-parity bugfix + measurement (the one behaviour change, release note):**
+`SAMOCCTCreateAdjacencyCluster` / `SAMOCCTCreateAdjacencyClusterByShells` now build with the
+solver-matched recipe (`AvoidInternalShapes=false, SewBeforeBuild=true, SewingTolerance=0.01`)
+instead of defaults (`true`/`0.0`) — production GH clusters previously used different options
+than every validated solver build. Plus: `SAM_OCCT_ANALYTICAL_PARITY` diagnostic (relations
+added vs expected, TopologyKey==0 count, zero-relation panels) and
+`WorkflowParityIntegrationTests` — all 9 fixtures through workflows A/A-matched/B and
+`MergeCoplanarPanels`, per-fixture table in TESTING.md, broken cases pinned with tracking
+comments, never skipped.
+
+**E1 — robust Extend3D primitives (supersedes PR #49):** `SnappedPanel` extend/trim rebuilt as
+profile-preserving plane-ops (SAM-core `Query.Extend`/`Query.Cut`); gables, M-tops, sloped and
+tilted walls keep their profile and plane; `ExtendHorizontal` retired into
+`SetVerticalFootprint`; `SAM_OCCT_EXTEND3D_HOLE_DROPPED` when a trim consumes an opening. RAW
+goldens (production path) byte-identical; three managed tripwire pins re-baselined per owner
+decision 2026-07-07 with a per-fixture mechanism table (TESTING.md "E1"); two managed pins
+unchanged; `Extend3DCensusIntegrationTests` records the fast/plane-ops split.
+
+**P2 — the complex becomes the product:** `ResolvedCellComplex` DTO (cells; unique faces with
+owner cells, per-decode keys, flat ordinals; adjacency pairs; naked wires; SolveId) captured at
+adoption on both solver paths, surfaced as `Solve3DReport.ResolvedCellComplex` — pure managed,
+serializable, round-trips. Public `Create.AdjacencyCluster(panels, complex, out diagnostics,
+..., excludeCellIndices)` consumes it with NO rebuild; panel identity inherited only on an
+unambiguous match, defaulted-and-diagnosed otherwise. `Create.Spaces` consumes the report's
+complex (single native build — the classifier's envelope decode); non-Interior cells excluded
+by cell index. Invariants hold: flat 22, two-level raw 43, managed refusal.
+
+**Follow-ups (separate PRs):** E2 plane-target extension (gates P4) → P3 GH handoff (DTO goo,
+SolveId roster gate, cell/adjacency outputs) ∥ E3 extend observability → P4 gate hardening
+(codex #3/#7) → P5 panels from unique cell faces + ABI v5 (the only re-baselining phase).
+
+Suites: 451 unit / 163 integration green (native present); raw goldens byte-identical;
+determinism green; merge-decision record in `docs/CELLCOMPLEX_FIRST_HANDOVER.md` §15.
+
+Generated by Michal Dengusiak & Claude Code
+```
+
 ---
 
 ## Appendix A — the 12 CellComplex questions (accepted answers, unchanged)
