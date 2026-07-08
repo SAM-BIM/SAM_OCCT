@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
+using SAM.Core.OCCT;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
 using System.Linq;
@@ -13,9 +14,373 @@ namespace SAM.Geometry.OCCT.Solver
     /// become air panels. Free edges are found managed-side (boundary edges used by a single face) and the
     /// loops are kept only when they sit near a native naked-edge anchor, so true exterior boundaries are
     /// never mistaken for holes.
+    /// <para>
+    /// Phase 5b adds <see cref="FromNakedWires"/>: the preferred entry that consumes the native ordered
+    /// naked wires (ABI v4, <see cref="OcctNakedWire"/>) directly instead of re-walking free edges
+    /// managed-side. The legacy <see cref="NakedLoopFace3Ds"/> walk is retained ONLY as the fallback for a
+    /// pre-v4 native (wires empty but naked points present), and every loop outcome - patched, fan-patched,
+    /// open, rejected - carries a diagnostic (never a silent fabrication or drop). See
+    /// docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §G.
+    /// </para>
     /// </summary>
     public static class GapFill
     {
+        /// <summary>Air-panel area floor (m2): a loop enclosing less than this is a float-noise sliver, not a gap.</summary>
+        public const double MinPatchArea = 1e-4;
+
+        /// <summary>What became of one naked wire in <see cref="FromNakedWires"/> - the per-loop evidence
+        /// behind the whole-set outcome (docs/P5 review §G/§I). Exactly one of the boolean states holds.</summary>
+        public sealed class LoopOutcome
+        {
+            /// <summary>The wire closed on itself (a candidate for patching).</summary>
+            public bool IsClosed { get; set; }
+
+            /// <summary>Closed within the planarity band and patched with a single planar face.</summary>
+            public bool PlanarPatched { get; set; }
+
+            /// <summary>Non-planar (or planar build unsafe): closed with centroid-fan triangles (tagged, inspect).</summary>
+            public bool FanPatched { get; set; }
+
+            /// <summary>No patch produced (open wire, or a rejected degenerate/self-intersecting/tiny loop).</summary>
+            public bool Residual { get; set; }
+
+            /// <summary>Human-readable reason, mirrored into the emitted diagnostic.</summary>
+            public string Reason { get; set; }
+
+            /// <summary>How many patch faces this loop contributed (1 for planar, N for a fan).</summary>
+            public int PatchCount { get; set; }
+        }
+
+        /// <summary>The patches <see cref="FromNakedWires"/> built plus a per-loop outcome record.</summary>
+        public sealed class GapFillResult
+        {
+            public List<Face3D> Patches { get; } = new List<Face3D>();
+
+            public List<LoopOutcome> LoopOutcomes { get; } = new List<LoopOutcome>();
+        }
+
+        /// <summary>
+        /// Builds patch faces over the native ordered naked <paramref name="wires"/> (ABI v4) - the Phase 5b
+        /// primary gap-fill path (docs/P5_DIAGNOSIS_DRIVEN_CLOSURE_DESIGN_REVIEW.md §G). Per closed wire
+        /// (>= 3 points):
+        /// <list type="bullet">
+        /// <item><b>Planar</b> (max deviation from the best-fit plane &lt;= max(0.01 m, 10x tolerance)) and the
+        /// single polygon is valid, non-self-intersecting and above <see cref="MinPatchArea"/> -&gt; one planar
+        /// patch (<see cref="DiagnosticCode.NakedLoop"/> Info).</item>
+        /// <item><b>Non-planar or planar build unsafe</b> -&gt; centroid-fan triangles, tagged
+        /// <see cref="DiagnosticCode.NakedLoop"/> Warning ("fan-patched - inspect") - a last-resort close,
+        /// never a silent success.</item>
+        /// <item><b>Tiny / degenerate / self-intersecting with no safe fan</b> -&gt; rejected, no patch,
+        /// <see cref="DiagnosticCode.NakedLoop"/> Warning.</item>
+        /// </list>
+        /// Open wires produce no patch and a residual <see cref="DiagnosticCode.NakedLoop"/> Warning. Nested
+        /// (coplanar-containing) closed loops are NOT specially handled in P5 - a Warning is emitted (documented
+        /// scope cut). The imprint of the patches into the resolved set happens in the consolidation rebuild
+        /// (<c>Panel3DSnapSolver.FinalizeAndValidate</c>), not here.
+        /// </summary>
+        public static GapFillResult FromNakedWires(IEnumerable<OcctNakedWire> wires, SolverDiagnostics diagnostics, double tolerance)
+        {
+            GapFillResult result = new GapFillResult();
+            List<OcctNakedWire> wireList = wires?.Where(x => x != null).ToList() ?? new List<OcctNakedWire>();
+            if (wireList.Count == 0)
+            {
+                return result;
+            }
+
+            double planarTolerance = System.Math.Max(0.01, 10 * System.Math.Max(tolerance, 0));
+
+            foreach (OcctNakedWire wire in wireList)
+            {
+                List<Point3D> points = wire.Point3Ds?.Where(x => x != null).ToList() ?? new List<Point3D>();
+                LoopOutcome outcome = new LoopOutcome { IsClosed = wire.IsClosed };
+
+                // Open or degenerate wire: no patch, residual (Phase 8 will display the polyline).
+                if (!wire.IsClosed || points.Count < 3)
+                {
+                    outcome.Residual = true;
+                    outcome.Reason = "open/degenerate naked wire; no patch (residual)";
+                    Emit(diagnostics, OcctDiagnosticSeverity.Warning, outcome.Reason, points);
+                    result.LoopOutcomes.Add(outcome);
+                    continue;
+                }
+
+                Plane plane = PlanarFitPlane(points, planarTolerance);
+                if (plane != null)
+                {
+                    Face3D planar = TryBuildPlanarPatch(points, plane, tolerance, out string rejectReason);
+                    if (planar != null)
+                    {
+                        result.Patches.Add(planar);
+                        outcome.PlanarPatched = true;
+                        outcome.PatchCount = 1;
+                        outcome.Reason = "closed planar loop patched";
+                        Emit(diagnostics, OcctDiagnosticSeverity.Info, outcome.Reason, points);
+                        result.LoopOutcomes.Add(outcome);
+                        continue;
+                    }
+
+                    // Planar but unsafe (self-intersecting / tiny / invalid): if it is a tiny area, reject
+                    // outright rather than fan a sliver into noise triangles.
+                    if (rejectReason != null && rejectReason.Contains("tiny"))
+                    {
+                        outcome.Residual = true;
+                        outcome.Reason = "planar loop rejected (" + rejectReason + ")";
+                        Emit(diagnostics, OcctDiagnosticSeverity.Warning, outcome.Reason, points);
+                        result.LoopOutcomes.Add(outcome);
+                        continue;
+                    }
+                }
+
+                // Non-planar, or planar build failed for a non-tiny reason: centroid-fan fallback (tagged).
+                List<Face3D> fan = FanTriangles(points, tolerance);
+                if (fan.Count != 0)
+                {
+                    result.Patches.AddRange(fan);
+                    outcome.FanPatched = true;
+                    outcome.PatchCount = fan.Count;
+                    outcome.Reason = "non-planar loop; fan-patched - inspect";
+                    Emit(diagnostics, OcctDiagnosticSeverity.Warning, outcome.Reason, points);
+                    result.LoopOutcomes.Add(outcome);
+                    continue;
+                }
+
+                outcome.Residual = true;
+                outcome.Reason = "closed loop could not be patched (degenerate/self-intersecting); residual";
+                Emit(diagnostics, OcctDiagnosticSeverity.Warning, outcome.Reason, points);
+                result.LoopOutcomes.Add(outcome);
+            }
+
+            WarnOnNestedLoops(wireList, diagnostics);
+
+            return result;
+        }
+
+        /// <summary>Emits a <see cref="DiagnosticCode.NakedLoop"/> diagnostic (Heal stage) for one loop outcome.</summary>
+        private static void Emit(SolverDiagnostics diagnostics, OcctDiagnosticSeverity severity, string message, IEnumerable<Point3D> point3Ds)
+        {
+            diagnostics?.Add(SolverStage.Heal, DiagnosticCode.NakedLoop, severity, "GapFill: " + message, point3Ds);
+        }
+
+        /// <summary>
+        /// The best-fit plane of a closed loop when every vertex lies within <paramref name="planarTolerance"/>
+        /// of the plane through its first non-degenerate corner triple; null when the loop is non-planar or
+        /// too degenerate to define a plane (so the caller falls back to the fan).
+        /// </summary>
+        private static Plane PlanarFitPlane(List<Point3D> loop, double planarTolerance)
+        {
+            Point3D origin = loop[0];
+            Vector3D normal = null;
+            // Seed the plane normal from the first non-degenerate corner triple. The cross-product magnitude
+            // scales with triangle AREA, so it is thresholded against a tiny epsilon (a collinear/degenerate
+            // triple has ~0 area) - NOT against planarTolerance, which is the point-to-plane DEVIATION bound
+            // below. (Using planarTolerance here mis-read a small-but-planar loop, e.g. a tiny square, as
+            // non-planar.)
+            for (int i = 1; i < loop.Count - 1 && normal == null; i++)
+            {
+                Vector3D cross = new Vector3D(origin, loop[i]).CrossProduct(new Vector3D(origin, loop[i + 1]));
+                if (cross.Length > 1e-9)
+                {
+                    normal = cross.Unit;
+                }
+            }
+
+            if (normal == null)
+            {
+                return null;
+            }
+
+            foreach (Point3D point3D in loop)
+            {
+                if (System.Math.Abs(new Vector3D(origin, point3D).DotProduct(normal)) > planarTolerance)
+                {
+                    return null;
+                }
+            }
+
+            return new Plane(origin, normal);
+        }
+
+        /// <summary>
+        /// Builds a single planar patch and gates it: valid Face3D, area &gt;= <see cref="MinPatchArea"/>, and a
+        /// simple (non-self-intersecting) boundary. Returns null with a <paramref name="rejectReason"/> when a
+        /// gate fails, so the caller can reject (tiny) or fan (self-intersecting/invalid).
+        /// </summary>
+        /// <remarks>
+        /// The self-intersection gate is a direct boundary edge-crossing test in the loop's own plane, NOT
+        /// <c>Query.SelfIntersectionFace3Ds</c>: that helper decomposes a face into sub-faces and returns the
+        /// face itself for a clean polygon (it is not "empty when simple"), so it cannot serve as a boolean
+        /// self-intersection gate here (design-review §G names it, but its contract does not match).
+        /// </remarks>
+        private static Face3D TryBuildPlanarPatch(List<Point3D> loop, Plane plane, double tolerance, out string rejectReason)
+        {
+            rejectReason = null;
+
+            if (LoopSelfIntersects(loop, plane, System.Math.Max(tolerance, 1e-9)))
+            {
+                rejectReason = "self-intersecting boundary";
+                return null;
+            }
+
+            Face3D face3D = Geometry.Spatial.Create.Face3D(new Polygon3D(loop));
+            if (face3D == null || !face3D.IsValid())
+            {
+                rejectReason = "invalid planar face";
+                return null;
+            }
+
+            if (face3D.GetArea() < MinPatchArea)
+            {
+                rejectReason = "tiny area (< " + MinPatchArea + " m2)";
+                return null;
+            }
+
+            return face3D;
+        }
+
+        /// <summary>Centroid-fan triangulation of a loop into planar triangles (each valid, above the area floor).</summary>
+        private static List<Face3D> FanTriangles(List<Point3D> loop, double tolerance)
+        {
+            List<Face3D> result = new List<Face3D>();
+            Point3D centroid = Centroid(loop);
+            if (centroid == null)
+            {
+                return result;
+            }
+
+            for (int i = 0; i < loop.Count; i++)
+            {
+                Point3D a = loop[i];
+                Point3D b = loop[(i + 1) % loop.Count];
+                Triangle3D triangle3D = new Triangle3D(centroid, a, b);
+                Face3D face3D = new Face3D(triangle3D);
+                if (face3D != null && face3D.IsValid() && face3D.GetArea() > System.Math.Max(tolerance, 1e-9))
+                {
+                    result.Add(face3D);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// True when two non-adjacent boundary edges of the loop cross in its plane - a self-intersecting
+        /// (bow-tie) boundary a single planar face cannot represent. O(n2) over the small loop vertex set.
+        /// </summary>
+        private static bool LoopSelfIntersects(List<Point3D> loop, Plane plane, double tolerance)
+        {
+            int n = loop.Count;
+            if (n < 4)
+            {
+                return false; // a triangle cannot self-intersect
+            }
+
+            List<Geometry.Planar.Point2D> pts = new List<Geometry.Planar.Point2D>(n);
+            foreach (Point3D point3D in loop)
+            {
+                Geometry.Planar.Point2D point2D = plane.Convert(point3D);
+                if (point2D == null)
+                {
+                    return false; // cannot test - do not falsely reject
+                }
+
+                pts.Add(point2D);
+            }
+
+            for (int i = 0; i < n; i++)
+            {
+                Geometry.Planar.Point2D a1 = pts[i];
+                Geometry.Planar.Point2D a2 = pts[(i + 1) % n];
+                for (int j = i + 1; j < n; j++)
+                {
+                    // Skip edges that share a vertex (adjacent, or the wrap-around closing edge).
+                    if (j == i || (j + 1) % n == i || (i + 1) % n == j)
+                    {
+                        continue;
+                    }
+
+                    if (SegmentsProperlyIntersect(a1, a2, pts[j], pts[(j + 1) % n], tolerance))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>Proper 2D segment-segment crossing test (endpoints touching does not count), via orientation signs.</summary>
+        private static bool SegmentsProperlyIntersect(Geometry.Planar.Point2D p1, Geometry.Planar.Point2D p2, Geometry.Planar.Point2D p3, Geometry.Planar.Point2D p4, double tolerance)
+        {
+            double d1 = Cross(p3, p4, p1);
+            double d2 = Cross(p3, p4, p2);
+            double d3 = Cross(p1, p2, p3);
+            double d4 = Cross(p1, p2, p4);
+
+            // Strict opposite signs on both segments => a proper crossing in the interior of both.
+            return ((d1 > tolerance && d2 < -tolerance) || (d1 < -tolerance && d2 > tolerance))
+                && ((d3 > tolerance && d4 < -tolerance) || (d3 < -tolerance && d4 > tolerance));
+        }
+
+        /// <summary>2D cross product of (b - a) x (c - a) - the orientation of c about the directed line a-&gt;b.</summary>
+        private static double Cross(Geometry.Planar.Point2D a, Geometry.Planar.Point2D b, Geometry.Planar.Point2D c)
+        {
+            return (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
+        }
+
+        /// <summary>
+        /// Warns when one closed wire is coplanar with and encloses another (a nested/hole loop) - not
+        /// specially handled in P5 (documented scope cut), so it is surfaced rather than silently mis-patched.
+        /// </summary>
+        private static void WarnOnNestedLoops(List<OcctNakedWire> wires, SolverDiagnostics diagnostics)
+        {
+            if (diagnostics == null)
+            {
+                return;
+            }
+
+            List<List<Point3D>> closed = wires
+                .Where(w => w.IsClosed && (w.Point3Ds?.Count ?? 0) >= 3)
+                .Select(w => w.Point3Ds.ToList())
+                .ToList();
+
+            for (int i = 0; i < closed.Count; i++)
+            {
+                Plane planeI = PlanarFitPlane(closed[i], 0.01);
+                if (planeI == null)
+                {
+                    continue;
+                }
+
+                BoundingBox3D boxI = new BoundingBox3D(closed[i]);
+                for (int j = 0; j < closed.Count; j++)
+                {
+                    if (j == i)
+                    {
+                        continue;
+                    }
+
+                    // j coplanar with i and fully inside i's bbox => a candidate nested loop.
+                    if (closed[j].All(p => System.Math.Abs(planeI.Distance(p)) <= 0.01)
+                        && closed[j].All(p => Contains(boxI, p, 0.01)))
+                    {
+                        diagnostics.Add(SolverStage.Heal, DiagnosticCode.NakedLoop, OcctDiagnosticSeverity.Warning,
+                            "GapFill: nested/hole loop detected (coplanar loop enclosed by another); not handled in P5 - inspect.",
+                            closed[j]);
+                    }
+                }
+            }
+        }
+
+        /// <summary>True when <paramref name="point3D"/> lies inside <paramref name="box"/> grown by <paramref name="tolerance"/>.</summary>
+        private static bool Contains(BoundingBox3D box, Point3D point3D, double tolerance)
+        {
+            Point3D min = box.Min;
+            Point3D max = box.Max;
+            return point3D.X >= min.X - tolerance && point3D.X <= max.X + tolerance
+                && point3D.Y >= min.Y - tolerance && point3D.Y <= max.Y + tolerance
+                && point3D.Z >= min.Z - tolerance && point3D.Z <= max.Z + tolerance;
+        }
+
         public static List<Face3D> NakedLoopFace3Ds(IEnumerable<Face3D> face3Ds, IEnumerable<Point3D> nakedAnchors, double tolerance)
         {
             List<Face3D> result = new List<Face3D>();

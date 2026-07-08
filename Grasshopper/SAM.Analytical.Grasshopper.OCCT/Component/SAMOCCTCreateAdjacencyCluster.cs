@@ -121,7 +121,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
             Stopwatch stopwatch = Stopwatch.StartNew();
             Log log = new Log();
             diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_PANEL_METADATA: Supplied {0} panel(s) and {1} existing space(s). Panel OCCT path will match supplied spaces after OCCT cell creation and otherwise use auto-generated names.", panels?.Count ?? 0, spaces?.Count ?? 0));
-            AdjacencyCluster adjacencyCluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(spaces, panels, out OcctCellComplexResult result, log, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance });
+            // Bugfix (P1): match the solver's own validated build recipe instead of OcctBuildOptions'
+            // defaults (AvoidInternalShapes=true, SewBeforeBuild=false, SewingTolerance=0.0). Production
+            // previously diverged from every test/solver call site, which built with these solver-matched
+            // options - see docs/CELLCOMPLEX_FIRST_HANDOVER.md §A "Diagnosed seam".
+            AdjacencyCluster adjacencyCluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(spaces, panels, out OcctCellComplexResult result, log, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01 });
             diagnostics.Add(string.Format("SAM_OCCT_TIMING_OCCT_AND_ADJACENCY: {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
 
             if (result?.Diagnostics != null)

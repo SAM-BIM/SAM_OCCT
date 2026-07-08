@@ -96,6 +96,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Point() { Name = "OpenEnds", NickName = "OpenEnds", Description = "Locations of the open (naked-in-plan) wall-foot ends - the corners where the loop does not close.", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "Diagnostics", NickName = "Diagnostics", Description = "Diagnostics", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "Successful", NickName = "Successful", Description = "Run successfully?", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
+
+                // Phase 8: pre-resolve reporting, append-only and Voluntary - existing saved definitions keep working.
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "SourceMap", NickName = "SourceMap", Description = "One line per input source: which filled/extended output face(s) it contributed to.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelFrames", NickName = "LevelFrames", Description = "One line per clustered level datum (elevation, tilt, cap count) cap normalization conditioned onto. Empty when the model formed no frames.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+
                 return result.ToArray();
             }
         }
@@ -183,7 +188,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
             // weights/maxExtends null => read SolverParameter.Weight / SolverParameter.MaxExtend off each
             // panel (the same parameters SAMAnalytical.Visualize shows), so they can be tuned per panel.
-            List<Panel> extendedPanels = panels.Extend3D(out List<string> diagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, fillMargin: fillMargin, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset);
+            List<Panel> extendedPanels = panels.Extend3D(out List<string> diagnostics, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, fillMargin: fillMargin, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset);
 
             index = Params.IndexOfOutputParam("Panels");
             if (index != -1)
@@ -241,6 +246,18 @@ namespace SAM.Analytical.Grasshopper.OCCT
             if (index_Successful != -1)
             {
                 dataAccess.SetData(index_Successful, extendedPanels != null && extendedPanels.Count != 0);
+            }
+
+            index = Params.IndexOfOutputParam("SourceMap");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, report?.FormatSourceMap());
+            }
+
+            index = Params.IndexOfOutputParam("LevelFrames");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, report == null ? null : SolverReportFormat.FormatLevelFrames(report.LevelFrames));
             }
         }
 

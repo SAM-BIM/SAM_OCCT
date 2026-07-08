@@ -76,6 +76,30 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
+        /// <summary>
+        /// Native ABI revision as an integer, 0 when the native library is missing
+        /// or predates <c>sam_occt_abi_version</c>. Derived from the once-probed
+        /// <see cref="AbiVersionString"/>.
+        /// </summary>
+        public static int AbiVersion
+        {
+            get
+            {
+                return int.TryParse(AbiVersionString, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int version)
+                    ? version
+                    : 0;
+            }
+        }
+
+        /// <summary>
+        /// True when the native build exposes the ABI v4 observational history /
+        /// naked-wire / tolerance accessors (probe/degrade like the v3 glue path).
+        /// </summary>
+        public static bool SupportsHistory
+        {
+            get { return AbiVersion >= 4; }
+        }
+
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sam_occt_abi_version();
 
@@ -463,5 +487,84 @@ namespace SAM.Geometry.OCCT.Native
 
         [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
         public static extern int sam_occt_result_point(IntPtr resultHandle, int cellIndex, int faceIndex, int loopIndex, int pointIndex, out double x, out double y, out double z);
+
+        // ---- ABI v4: observational history / naked wires / tolerance drift ----
+        // Additive; managed callers probe AbiVersion >= 4 (SupportsHistory) and the
+        // per-call EntryPointNotFoundException guard, then degrade to the geometric
+        // NearestSourceIndex heuristic. None of these change the geometry the ops
+        // produce (docs/P3_ABI_V4_NATIVE_HISTORY_DESIGN_REVIEW.md).
+
+        // History on the existing result handle (captured by sam_occt_build_cell_complex
+        // and sam_occt_merge_coplanar). Output faces are FLAT ORDINALS - the cell-major,
+        // face-minor enumeration identical to the managed decode walk.
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_result_history_available(IntPtr resultHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_result_history_input_count(IntPtr resultHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_result_history_face(
+            IntPtr resultHandle,
+            int inputIndex,
+            out int deleted,
+            out int modifiedCount,
+            out int generatedCount);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_result_history_entries(
+            IntPtr resultHandle,
+            int inputIndex,
+            [Out] int[] modifiedOrdinals,
+            int modifiedCapacity,
+            [Out] int[] generatedOrdinals,
+            int generatedCapacity);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_result_max_tolerance(
+            IntPtr resultHandle,
+            out double maxTolerance,
+            out double averageTolerance);
+
+        // Naked wires on the existing validation handle (grouped from the same
+        // ShapeAnalysis_FreeBounds pass sam_occt_shape_validate already runs).
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_validation_wire_count(IntPtr validationHandle);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_validation_wire_info(
+            IntPtr validationHandle,
+            int wireIndex,
+            out int pointCount,
+            out int edgeCount,
+            out int isClosed);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_validation_wire_point(
+            IntPtr validationHandle,
+            int wireIndex,
+            int pointIndex,
+            out double x,
+            out double y,
+            out double z);
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_validation_wire_edge_owner(
+            IntPtr validationHandle,
+            int wireIndex,
+            int edgeIndex,
+            out int inputFaceIndex);
+
+        // Tolerance drift on a live shape handle. subshapeType: 0 any, 1 vertex,
+        // 2 edge, 3 face.
+
+        [DllImport("SAM.Occt.Native", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int sam_occt_shape_max_tolerance(
+            OcctTopology shapeHandle,
+            int subshapeType,
+            out double maxTolerance,
+            out double averageTolerance);
     }
 }

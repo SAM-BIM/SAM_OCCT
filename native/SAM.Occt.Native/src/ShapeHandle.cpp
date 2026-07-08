@@ -23,6 +23,7 @@
 #include <STEPControl_StepModelType.hxx>
 #include <STEPControl_Writer.hxx>
 #include <ShapeFix_Shape.hxx>
+#include <ShapeAnalysis_ShapeTolerance.hxx>
 #include <TopAbs.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopTools_ListOfShape.hxx>
@@ -249,7 +250,11 @@ extern "C" {
 
 int sam_occt_abi_version(void)
 {
-    return 3;
+    // 4 = adds observational history export (sam_occt_result_history_*), naked
+    // free-boundary wires (sam_occt_validation_wire_*) and tolerance-drift
+    // (sam_occt_shape_max_tolerance / sam_occt_result_max_tolerance). Additive:
+    // managed callers probe this and degrade to the pre-v4 heuristic path.
+    return 4;
 }
 
 void sam_occt_shape_release(void* shape_handle)
@@ -721,6 +726,48 @@ int sam_occt_shape_solid_count(void* shape_handle)
     catch (...)
     {
         return -99;
+    }
+}
+
+// ABI v4: max / average sub-shape tolerance over a live shape handle (tolerance-
+// drift monitoring). subshape_type: 0 any, 1 vertex, 2 edge, 3 face. Status:
+// 0 ok, 10 null out pointer, 50 invalid handle, 99 exception.
+int sam_occt_shape_max_tolerance(
+    void* shape_handle,
+    int subshape_type,
+    double* max_tolerance,
+    double* average_tolerance)
+{
+    const Shape* shape = as_shape(shape_handle);
+    if (shape == nullptr)
+    {
+        return 50;
+    }
+
+    if (max_tolerance == nullptr || average_tolerance == nullptr)
+    {
+        return 10;
+    }
+
+    TopAbs_ShapeEnum type;
+    switch (subshape_type)
+    {
+        case 1: type = TopAbs_VERTEX; break;
+        case 2: type = TopAbs_EDGE; break;
+        case 3: type = TopAbs_FACE; break;
+        default: type = TopAbs_SHAPE; break;
+    }
+
+    try
+    {
+        ShapeAnalysis_ShapeTolerance analyzer;
+        *max_tolerance = analyzer.Tolerance(shape->shape, 1, type);     // > 0 : maximum
+        *average_tolerance = analyzer.Tolerance(shape->shape, 0, type); // 0   : average
+        return 0;
+    }
+    catch (...)
+    {
+        return 99;
     }
 }
 

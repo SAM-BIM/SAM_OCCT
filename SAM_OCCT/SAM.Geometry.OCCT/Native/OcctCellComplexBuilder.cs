@@ -357,7 +357,18 @@ namespace SAM.Geometry.OCCT.Native
                     return false;
                 }
 
-                return DecodeResult(resultHandle, result);
+                bool decoded = DecodeResult(resultHandle, result);
+
+                // ABI v4 (observational): snapshot the MakerVolume BRepTools_History
+                // while the handle is alive, so the solver can compose an exact
+                // source->output map instead of the geometric NearestSourceIndex
+                // heuristic. Null on a pre-v4 native or when history is unavailable.
+                if (decoded)
+                {
+                    result.History = OcctHistory.Capture(resultHandle);
+                }
+
+                return decoded;
             }
             catch (DllNotFoundException exception)
             {
@@ -762,6 +773,12 @@ namespace SAM.Geometry.OCCT.Native
                     result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_MERGE_COPLANAR_NO_FACES", "Native OCCT coplanar merge did not return any faces.");
                     return false;
                 }
+
+                // ABI v4 (observational): snapshot the merge history (hand-built sew map
+                // merged with UnifySameDomain::History) while the handle is alive. The
+                // merged faces were decoded above in the same cell-major/face-minor order
+                // the history's output ordinals index.
+                result.History = OcctHistory.Capture(resultHandle);
 
                 result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_MERGE_COPLANAR_SUCCESS", string.Format("Merged into {0} face(s).", merged.Count));
                 return true;

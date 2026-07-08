@@ -69,9 +69,12 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 // Sewing heals a triangulated / near-touching face soup into shared topology BEFORE
                 // MakerVolume, instead of relying on MakerVolume's fuzzy-tolerance guesswork. It is
                 // always applied to mesh-derived shells (a mesh is exactly such a soup); this toggle
-                // additionally forces it on for SAM Shell / closed Brep input.
-                global::Grasshopper.Kernel.Parameters.Param_Boolean sew = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "sew_", NickName = "sew_", Description = "Sew-and-heal faces before the OCCT volume build. Mesh input is always sewn (it is a triangle soup); set this true to also sew SAM Shell / closed Brep input. Default false.", Access = GH_ParamAccess.item };
-                sew.SetPersistentData(false);
+                // additionally forces it on for SAM Shell / closed Brep input. Bugfix (P1): default
+                // flipped to true so the default build recipe matches the solver's own validated
+                // options (AvoidInternalShapes=false, SewBeforeBuild=true, SewingTolerance=0.01) - see
+                // docs/CELLCOMPLEX_FIRST_HANDOVER.md §A "Diagnosed seam". Still overridable per-run.
+                global::Grasshopper.Kernel.Parameters.Param_Boolean sew = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "sew_", NickName = "sew_", Description = "Sew-and-heal faces before the OCCT volume build. Mesh input is always sewn (it is a triangle soup). Default true, matching the solver's own validated build recipe; set false to disable for SAM Shell / closed Brep input that is already watertight.", Access = GH_ParamAccess.item };
+                sew.SetPersistentData(true);
                 result.Add(new GH_SAMParam(sew, ParamVisibility.Voluntary));
 
                 // meshInput_ tessellates Brep/surface input with Rhino's mesher before building,
@@ -163,7 +166,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref tolerance);
             }
 
-            bool sew = false;
+            bool sew = true;
             index = Params.IndexOfInputParam("sew_");
             if (index != -1)
             {
@@ -192,8 +195,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
             }
 
             // OcctBuildOptions reused for the watertightness pre-check (tolerance = welding distance)
-            // and the cell build below, so both agree on tolerance.
-            OcctBuildOptions buildOptions = new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance };
+            // and the cell build below, so both agree on tolerance. Bugfix (P1): AvoidInternalShapes
+            // and SewingTolerance now match the solver's own validated build recipe instead of
+            // OcctBuildOptions' defaults (true / 0.0) - see docs/CELLCOMPLEX_FIRST_HANDOVER.md §A
+            // "Diagnosed seam". SewBeforeBuild is still resolved below from sew_/mesh-input detection.
+            OcctBuildOptions buildOptions = new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, AvoidInternalShapes = false, SewingTolerance = 0.01 };
 
             List<string> diagnostics = new List<string>();
 

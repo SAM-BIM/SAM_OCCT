@@ -3,6 +3,7 @@
 
 #include "sam_occt.h"
 #include "OcctNativeCore.h"
+#include "History.h"
 
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
@@ -324,25 +325,39 @@ namespace sam_occt
         }
     }
 
-    bool append_solid_to_result(const TopoDS_Solid& solid, Result& result, double tolerance)
+    bool append_solid_to_result(
+        const TopoDS_Solid& solid,
+        Result& result,
+        double tolerance,
+        std::vector<TopoDS_Face>* ordinal_faces)
     {
         Cell cell;
+        std::vector<TopoDS_Face> cell_topods_faces; // parallel to cell.faces (ABI v4)
 
         GProp_GProps properties;
         BRepGProp::VolumeProperties(solid, properties);
         cell.volume = properties.Mass();
         for (TopExp_Explorer face_explorer(solid, TopAbs_FACE); face_explorer.More(); face_explorer.Next())
         {
-            Face face = extract_face(TopoDS::Face(face_explorer.Current()), result, tolerance);
+            const TopoDS_Face& topods_face = TopoDS::Face(face_explorer.Current());
+            Face face = extract_face(topods_face, result, tolerance);
             if (!face.loops.empty())
             {
                 cell.faces.push_back(face);
+                if (ordinal_faces != nullptr)
+                {
+                    cell_topods_faces.push_back(topods_face);
+                }
             }
         }
 
         if (!cell.faces.empty() && std::abs(cell.volume) > tolerance)
         {
             result.cells.push_back(cell);
+            if (ordinal_faces != nullptr)
+            {
+                ordinal_faces->insert(ordinal_faces->end(), cell_topods_faces.begin(), cell_topods_faces.end());
+            }
             return true;
         }
 
@@ -587,23 +602,31 @@ int sam_occt_build_cell_complex(
 
         TopoDS_Shape shape;
         // The legacy decode-and-free path stays glue-off; glue is opt-in through
-        // the shape-handle _ex entry points (issue #37 follow-on).
-        const int volume_status = make_volume_from_faces(arguments, fuzzy_tolerance, run_parallel, avoid_internal_shapes, 0, shape);
+        // the shape-handle _ex entry points (issue #37 follow-on). ABI v4: capture
+        // the composed MakerVolume+ShapeFix history for SourceMap provenance.
+        Handle(BRepTools_History) history;
+        const int volume_status = make_volume_with_history(arguments, fuzzy_tolerance, run_parallel, avoid_internal_shapes, 0, shape, history);
         if (volume_status != 0)
         {
             return volume_status;
         }
 
         std::unique_ptr<Result> result(new Result());
+        std::vector<TopoDS_Face> ordinal_faces;
         for (TopExp_Explorer solid_explorer(shape, TopAbs_SOLID); solid_explorer.More(); solid_explorer.Next())
         {
-            append_solid_to_result(TopoDS::Solid(solid_explorer.Current()), *result, tolerance);
+            append_solid_to_result(TopoDS::Solid(solid_explorer.Current()), *result, tolerance, &ordinal_faces);
         }
 
         if (result->cells.empty())
         {
             return 40;
         }
+
+        // ABI v4 (observational): translate input->output history to flat ordinals
+        // and record per-stage max/avg tolerance. Never affects the geometry above.
+        finalize_history(*result, arguments, history, ordinal_faces);
+        capture_tolerance(*result, shape);
 
         *result_handle = result.release();
         return 0;
@@ -1121,7 +1144,7 @@ int sam_occt_merge_coplanar(
         BRepBuilderAPI_Sewing sewing(sewing_tolerance);
         int point_offset = 0;
         int loop_offset = 0;
-        int added = 0;
+        TopTools_ListOfShape inputs; // ordinal = caller's face order (ABI v4 history)
 
         for (int face_index = 0; face_index < face_count; ++face_index)
         {
@@ -1129,11 +1152,11 @@ int sam_occt_merge_coplanar(
             if (make_face(coordinates, loop_point_counts, point_offset, loop_offset, face_loop_counts[face_index], face))
             {
                 sewing.Add(face);
-                ++added;
+                inputs.Append(face);
             }
         }
 
-        if (added == 0)
+        if (inputs.IsEmpty())
         {
             return 20;
         }
@@ -1156,15 +1179,36 @@ int sam_occt_merge_coplanar(
             return 30;
         }
 
+        // ABI v4: compose input->sewn (hand-built from Sewing::ModifiedSubShape)
+        // with sewn->merged (UnifySameDomain::History) into input->merged.
+        Handle(BRepTools_History) sew_history = sewing_history(sewing, inputs);
+        Handle(BRepTools_History) usd_history = unify.History();
+        Handle(BRepTools_History) composed;
+        if (!sew_history.IsNull())
+        {
+            composed = sew_history;
+            if (!usd_history.IsNull())
+            {
+                composed->Merge(usd_history);
+            }
+        }
+        else
+        {
+            composed = usd_history; // sewing kept face identity: input IsSame sewn
+        }
+
         std::unique_ptr<Result> result(new Result());
         Cell cell;
         cell.volume = 0;
+        std::vector<TopoDS_Face> ordinal_faces;
         for (TopExp_Explorer face_explorer(merged, TopAbs_FACE); face_explorer.More(); face_explorer.Next())
         {
-            Face face = extract_face(TopoDS::Face(face_explorer.Current()), *result, tolerance);
+            const TopoDS_Face& topods_face = TopoDS::Face(face_explorer.Current());
+            Face face = extract_face(topods_face, *result, tolerance);
             if (!face.loops.empty())
             {
                 cell.faces.push_back(face);
+                ordinal_faces.push_back(topods_face);
             }
         }
 
@@ -1174,6 +1218,11 @@ int sam_occt_merge_coplanar(
         }
 
         result->cells.push_back(cell);
+
+        // ABI v4 (observational): flat-ordinal history + tolerance drift.
+        finalize_history(*result, inputs, composed, ordinal_faces);
+        capture_tolerance(*result, merged);
+
         *result_handle = result.release();
         return 0;
     }
@@ -1370,4 +1419,124 @@ int sam_occt_result_point(
     *y = point.y;
     *z = point.z;
     return 1;
+}
+
+// ---- ABI v4: history + tolerance-drift accessors (observational) ----
+
+int sam_occt_result_history_available(void* result_handle)
+{
+    const Result* result = static_cast<const Result*>(result_handle);
+    if (result == nullptr)
+    {
+        return -1;
+    }
+
+    return result->history_available ? 1 : 0;
+}
+
+int sam_occt_result_history_input_count(void* result_handle)
+{
+    const Result* result = static_cast<const Result*>(result_handle);
+    if (result == nullptr)
+    {
+        return -1;
+    }
+
+    return result->history_available ? static_cast<int>(result->history.size()) : 0;
+}
+
+int sam_occt_result_history_face(
+    void* result_handle,
+    int input_index,
+    int* deleted,
+    int* modified_count,
+    int* generated_count)
+{
+    const Result* result = static_cast<const Result*>(result_handle);
+    if (result == nullptr)
+    {
+        return 50;
+    }
+
+    if (deleted == nullptr || modified_count == nullptr || generated_count == nullptr)
+    {
+        return 10;
+    }
+
+    if (!result->history_available || !is_valid_index(input_index, static_cast<int>(result->history.size())))
+    {
+        return 40;
+    }
+
+    const HistoryRecord& record = result->history[input_index];
+    *deleted = record.deleted ? 1 : 0;
+    *modified_count = static_cast<int>(record.modified.size());
+    *generated_count = static_cast<int>(record.generated.size());
+    return 0;
+}
+
+int sam_occt_result_history_entries(
+    void* result_handle,
+    int input_index,
+    int* modified_ordinals,
+    int modified_capacity,
+    int* generated_ordinals,
+    int generated_capacity)
+{
+    const Result* result = static_cast<const Result*>(result_handle);
+    if (result == nullptr)
+    {
+        return 50;
+    }
+
+    if (!result->history_available || !is_valid_index(input_index, static_cast<int>(result->history.size())))
+    {
+        return 40;
+    }
+
+    const HistoryRecord& record = result->history[input_index];
+    if (static_cast<int>(record.modified.size()) > modified_capacity
+        || static_cast<int>(record.generated.size()) > generated_capacity)
+    {
+        return 11; // caller's buffer too small - re-query counts and retry
+    }
+
+    if ((!record.modified.empty() && modified_ordinals == nullptr)
+        || (!record.generated.empty() && generated_ordinals == nullptr))
+    {
+        return 10;
+    }
+
+    for (std::size_t i = 0; i < record.modified.size(); ++i)
+    {
+        modified_ordinals[i] = record.modified[i];
+    }
+
+    for (std::size_t i = 0; i < record.generated.size(); ++i)
+    {
+        generated_ordinals[i] = record.generated[i];
+    }
+
+    return 0;
+}
+
+int sam_occt_result_max_tolerance(
+    void* result_handle,
+    double* max_tolerance,
+    double* average_tolerance)
+{
+    const Result* result = static_cast<const Result*>(result_handle);
+    if (result == nullptr)
+    {
+        return 50;
+    }
+
+    if (max_tolerance == nullptr || average_tolerance == nullptr)
+    {
+        return 10;
+    }
+
+    *max_tolerance = result->tolerance_available ? result->max_tolerance : 0.0;
+    *average_tolerance = result->tolerance_available ? result->average_tolerance : 0.0;
+    return 0;
 }

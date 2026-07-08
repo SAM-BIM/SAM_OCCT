@@ -26,6 +26,9 @@
     <Reference Include="SAM.Analytical">
       <HintPath>..\..\..\SAM\build\SAM.Analytical.dll</HintPath>
     </Reference>
+    <Reference Include="SAM.Analytical.Solver">
+      <HintPath>..\..\..\SAM_Solver\build\SAM.Analytical.Solver.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>

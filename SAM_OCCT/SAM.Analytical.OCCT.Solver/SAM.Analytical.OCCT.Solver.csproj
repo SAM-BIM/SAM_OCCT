@@ -37,6 +37,9 @@
     <ProjectReference Include="..\SAM.Core.OCCT\SAM.Core.OCCT.csproj" />
     <ProjectReference Include="..\SAM.Geometry.OCCT\SAM.Geometry.OCCT.csproj" />
     <ProjectReference Include="..\SAM.Geometry.OCCT.Solver\SAM.Geometry.OCCT.Solver.csproj" />
+    <!-- Phase 7c: reuse SAM.Analytical.OCCT.Create.AdjacencyCluster (Tower's own path) for
+         Create.Spaces instead of reimplementing adjacency/panel construction. -->
+    <ProjectReference Include="..\SAM.Analytical.OCCT\SAM.Analytical.OCCT.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
