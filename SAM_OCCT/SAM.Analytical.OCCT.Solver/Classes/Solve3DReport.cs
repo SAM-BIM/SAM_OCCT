@@ -65,6 +65,12 @@ namespace SAM.Analytical.OCCT.Solver
         /// <summary>The formatted, human-readable closure report (<see cref="Geometry.OCCT.Solver.ClosureReport.Format"/>).</summary>
         public string ClosureReportText { get; }
 
+        /// <summary>The cell complex the solve ADOPTED, as a first-class pure-managed product (Phase P2):
+        /// cells, unique faces (deduped per-decode key, owner cells, flat ordinals), adjacency pairs, naked
+        /// wires and a SolveId. Null when no cell complex was adopted (native unavailable, or a
+        /// Clean3D/Extend3D pass that never resolves). Carries no native lifetime.</summary>
+        public ResolvedCellComplex ResolvedCellComplex { get; }
+
         public Solve3DReport(
             bool rawAdopted,
             ClosureSignature3D signature,
@@ -80,7 +86,8 @@ namespace SAM.Analytical.OCCT.Solver
             bool nativeResolved,
             int resolvedCellCount,
             int rounds = 0,
-            int roundsAccepted = 0)
+            int roundsAccepted = 0,
+            ResolvedCellComplex resolvedCellComplex = null)
         {
             RawAdopted = rawAdopted;
             Signature = signature;
@@ -97,6 +104,7 @@ namespace SAM.Analytical.OCCT.Solver
             ResolvedCellCount = resolvedCellCount;
             Rounds = rounds;
             RoundsAccepted = roundsAccepted;
+            ResolvedCellComplex = resolvedCellComplex;
 
             ClosureReportText = ClosureReport.Format(rawAdopted, signature, rawAttemptSignature, Diagnostics, rounds, roundsAccepted, LevelFrames);
         }

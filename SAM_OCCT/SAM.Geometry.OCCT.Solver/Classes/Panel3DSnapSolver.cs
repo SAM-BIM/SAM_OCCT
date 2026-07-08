@@ -296,6 +296,20 @@ namespace SAM.Geometry.OCCT.Solver
         /// </summary>
         public IReadOnlyList<SolverCell> Cells { get; private set; } = new List<SolverCell>();
 
+        /// <summary>Identifies this solve (a fresh GUID per <see cref="Execute"/> call). Stamped onto
+        /// <see cref="ResolvedCellComplex.SolveId"/> so a downstream consumer can prove a panel set came from
+        /// THIS solve before consuming the complex directly (P3 roster gate).</summary>
+        public System.Guid SolveId { get; private set; }
+
+        /// <summary>
+        /// The cell complex the solver ADOPTED, as a first-class pure-managed product (Phase P2). Projected
+        /// once from the same native decode that produced <see cref="Cells"/>/<see cref="Signature"/>, before
+        /// that result is disposed - so it carries no native lifetime. Null when no cell complex was adopted
+        /// (native unavailable, no result, or a Stop-after-clean/extend pass that never resolves). Additive:
+        /// capturing it changes no adopted geometry, cell count, or signature.
+        /// </summary>
+        public ResolvedCellComplex ResolvedCellComplex { get; private set; }
+
         /// <summary>Step 1 output: clean single panels - external shape only, within-bucket parallels snapped
         /// onto one backer, contained/overlapping coplanar faces merged. The input to Step 2 (fill/extend).</summary>
         public List<Face3D> CleanFace3Ds { get; private set; } = new List<Face3D>();
@@ -378,6 +392,8 @@ namespace SAM.Geometry.OCCT.Solver
             StackedSlabInterfaces = new List<StackedSlabInterface>();
             NakedWires = new List<OcctNakedWire>();
             ResolveHistorySourceMap = null;
+            ResolvedCellComplex = null;
+            SolveId = System.Guid.NewGuid();
 
             if (face3Ds == null || face3Ds.Count == 0)
             {
@@ -689,6 +705,10 @@ namespace SAM.Geometry.OCCT.Solver
             int cellCount = resolveCellCount;
             SourceMap finalMap = null;
             bool adoptedRebuild = false;
+            // P2: the adopted complex, projected from whichever decode produces the final cells below
+            // (the rebuild result if adopted, else the DecodeCellVolumes decode). Naked wires are stitched
+            // in at the end, once the single outward Validate has measured them.
+            ResolvedCellComplex managedComplex = null;
 
             bool tryRebuild = ConsolidateRebuild && (patchFace3Ds.Count + retainedFace3Ds.Count) > 0;
             int appendedNaked = tryRebuild ? ResolveStage.NakedEdgeCount(appended, occtOptions) : 0;
@@ -727,6 +747,7 @@ namespace SAM.Geometry.OCCT.Solver
                         solverCells = rebuiltSolverCells;
                         finalMap = ComposeRebuildMap(preMap, rebuildHistory, patchStart, patchFace3Ds.Count, retainedStart, retainedFace3Ds.Count, retainedSourceIndices, rebuiltFaces);
                         adoptedRebuild = true;
+                        managedComplex = ResolvedCellComplex.Project(rebuildResult, null, SolveId); // this decode is the adopted one
                         Diagnostics.Add(SolverStage.Heal, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info,
                             string.Format("Consolidation rebuild adopted: {0} cell(s), {1} naked edge(s) (appended alternative had {2}).", rebuiltCells, rebuiltNaked, appendedNaked));
                     }
@@ -753,7 +774,7 @@ namespace SAM.Geometry.OCCT.Solver
 
                 RecordRetainedProvenance(finalMap, retainedStart, retainedFace3Ds.Count, retainedSourceIndices);
 
-                cellVolumes = DecodeCellVolumes(appended, occtOptions, out cellCount, out solverCells);
+                cellVolumes = DecodeCellVolumes(appended, occtOptions, SolveId, out cellCount, out solverCells, out managedComplex);
             }
 
             // Publish the adopted geometry + provenance. HoleFillFace3Ds stays the patch set (the air-panel
@@ -783,6 +804,9 @@ namespace SAM.Geometry.OCCT.Solver
 
             NakedEdgePoint3Ds = nakedPoint3Ds;
             NakedWires = nakedWires;
+            // P2: publish the complex captured from the adopted decode, now with the naked wires the single
+            // outward Validate just measured stitched in.
+            ResolvedCellComplex = managedComplex?.WithNakedWires(nakedWires);
             Signature = new ClosureSignature3D(cellCount, cellVolumes, nakedPoint3Ds.Count, finalFaces.Count, DroppedSourceCount(), cellVolumes.Count(x => x < MinCellVolume));
         }
 
@@ -870,12 +894,14 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>Decodes <paramref name="face3Ds"/> into a cell complex once to read its cell count/volumes
         /// (the appended-set signature metrics when the consolidation rebuild is off or rejected), plus the
-        /// Phase 7a per-cell <paramref name="cells"/> snapshot (index/volume/centre/shell) for the same build -
-        /// one decode, both outputs, so they always describe the same cell complex.</summary>
-        private static List<double> DecodeCellVolumes(List<Face3D> face3Ds, OcctBuildOptions options, out int cellCount, out List<SolverCell> cells)
+        /// Phase 7a per-cell <paramref name="cells"/> snapshot (index/volume/centre/shell) and the P2
+        /// <paramref name="complex"/> product (projected before dispose, sans naked wires) for the same build -
+        /// one decode, three outputs, so they always describe the same cell complex.</summary>
+        private static List<double> DecodeCellVolumes(List<Face3D> face3Ds, OcctBuildOptions options, System.Guid solveId, out int cellCount, out List<SolverCell> cells, out ResolvedCellComplex complex)
         {
             cellCount = 0;
             cells = new List<SolverCell>();
+            complex = null;
             if (face3Ds == null || face3Ds.Count == 0)
             {
                 return new List<double>();
@@ -886,6 +912,7 @@ namespace SAM.Geometry.OCCT.Solver
             {
                 cellCount = result?.Cells?.Count ?? 0;
                 cells = result?.Cells == null ? new List<SolverCell>() : result.Cells.Select((x, idx) => new SolverCell(idx, x.Volume, x.Center, x.Shell)).ToList();
+                complex = result == null ? null : ResolvedCellComplex.Project(result, null, solveId);
                 return result?.Cells == null ? new List<double>() : result.Cells.Select(x => x.Volume).ToList();
             }
             finally
@@ -2170,6 +2197,9 @@ namespace SAM.Geometry.OCCT.Solver
             List<Face3D> resolved = shells == null
                 ? new List<Face3D>()
                 : shells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null && x.IsValid()).ToList();
+            // P2: project the adopted complex from THIS decode before Dispose (raw is adopted only when
+            // watertight, so no naked wires). Only published as ResolvedCellComplex if the gate below adopts.
+            ResolvedCellComplex rawComplex = ResolvedCellComplex.Project(result, null, SolveId);
             result.Dispose();
 
             if (cells < 1 || resolved.Count == 0)
@@ -2287,6 +2317,7 @@ namespace SAM.Geometry.OCCT.Solver
 
             RawAttemptSignature = new ClosureSignature3D(cells, cellVolumes, nakedEdgeCount: 0, faceCount: resolved.Count, droppedCount: droppedFace3Ds.Count);
             Signature = RawAttemptSignature;
+            ResolvedCellComplex = rawComplex; // adopted: publish the complex captured from this decode
             Diagnostics.Add(SolverStage.Resolve, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info,
                 string.Format("Adopted raw (L0): {0}", Signature));
 

@@ -1276,3 +1276,41 @@ two-level-tilted 230/107, whole-level-towers 183/37 (fast/plane-ops).
 ```powershell
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~Extend3DCensusIntegrationTests"
 ```
+
+## ResolvedCellComplex product (docs/CELLCOMPLEX_FIRST_HANDOVER.md, Phase P2)
+
+P2 turns the cell complex the solver validated into a first-class, pure-managed, serializable product
+and consumes it directly, closing the diagnosed seam (solver builds the complex, then everything
+downstream rebuilt it blind). Purely additive to the adopted geometry - all goldens stay
+byte-identical (raw AND the E1-re-baselined managed pins).
+
+- **`ResolvedCellComplex` DTO** (`SAM.Geometry.OCCT`): cells (index/volume/centre), unique faces
+  (Face3D + per-decode `TopologyKey` + owner cell indices + flat ordinals), adjacency pairs, naked
+  wires, and a `SolveId`. `IJSAMObject`-serializable (round-trips through `ToJsonObject`), carries no
+  native lifetime. Projected ONCE from the adopted decode, before it is disposed.
+- **Flat-ordinal bridge:** each owner records the face's position in the decode's `IsValid`-filtered
+  flatten (`shells.SelectMany(Face3Ds).Where(...)`) - emitted by replicating that filter, never
+  derived arithmetically from per-cell counts, so a decoded-but-invalid face does not drift the count
+  (`ResolvedCellComplexTests.Project_InvalidFaceInCell_DoesNotAdvanceFlatOrdinal`).
+- **Capture:** `Panel3DSnapSolver` publishes `ResolvedCellComplex`/`SolveId` at adoption on BOTH paths
+  (`TryRawResolve`, `FinalizeAndValidate`), surfaced on `Solve3DReport.ResolvedCellComplex`.
+- **Public overload** `Create.AdjacencyCluster(IEnumerable<Panel>, ResolvedCellComplex, out diagnostics,
+  ..., excludeCellIndices)`: builds a cluster with NO rebuild - one space per (kept) cell, one panel
+  per unique cell face, relations from owner cells; non-Interior cells excluded BY CELL INDEX. Panel
+  identity (construction/type/Guid) is inherited from a supplied panel ONLY on an unambiguous coplanar
+  containment match, defaulted-and-reported otherwise (`SAM_OCCT_ANALYTICAL_PANEL_IDENTITY`), never
+  silently mis-attributed.
+- **`Create.Spaces` rewired** to consume `report.ResolvedCellComplex` instead of a second
+  `CellComplexByPanels` decode: the only native build it now pays for is the classifier's envelope
+  point-in-solid decode. Space count invariants hold (flat 22, two-level-tilted raw 43, managed
+  refusal); panel granularity can differ slightly from a fresh rebuild (the DTO is the solver's adopted
+  decode, the topology source of truth, not a re-decode of the reconstructed panels).
+
+Tests: `ResolvedCellComplexTests` (DTO projection/dedup/ordinal-bridge/round-trip, native-free),
+`ResolvedCellComplexIntegrationTests` (report carries the complex on both paths; direct consume +
+identity inheritance; index-based exclusion), and the updated `CreateSpacesIntegrationTests`.
+
+```powershell
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~ResolvedCellComplexTests"
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~ResolvedCellComplexIntegrationTests"
+```

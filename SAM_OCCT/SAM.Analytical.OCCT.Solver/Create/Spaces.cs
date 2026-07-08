@@ -92,7 +92,7 @@ namespace SAM.Analytical.OCCT.Solver
             // from the solve and does not re-add them to its own output) - rejoin them here.
             List<Panel> inputAirPanels = panelList.Where(x => x.PanelType == PanelType.Air).ToList();
 
-            List<Panel> solved = panelList.Solve3D(out List<Point3D> nakedPoint3Ds, out List<string> solveDiagnostics, forceManagedPipeline: forceManagedPipeline, options: options);
+            List<Panel> solved = panelList.Solve3D(out List<Point3D> nakedPoint3Ds, out List<string> solveDiagnostics, out _, out Solve3DReport report, forceManagedPipeline: forceManagedPipeline, options: options);
             foreach (string message in solveDiagnostics ?? new List<string>())
             {
                 diagnostics.Add(SolverStage.Heal, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info, message);
@@ -115,6 +115,17 @@ namespace SAM.Analytical.OCCT.Solver
                 return null;
             }
 
+            // P2 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): consume the complex the solver ALREADY validated
+            // (report.ResolvedCellComplex) instead of rebuilding it with a second CellComplexByPanels decode
+            // (the diagnosed seam). The only native build this method now pays for is the classifier's
+            // envelope point-in-solid decode below.
+            ResolvedCellComplex resolvedCellComplex = report?.ResolvedCellComplex;
+            if (resolvedCellComplex == null || resolvedCellComplex.Cells == null || resolvedCellComplex.Cells.Count == 0)
+            {
+                diagnostics.Add(SolverStage.Heal, DiagnosticCode.SpacesRefused, OcctDiagnosticSeverity.Error, "The solve produced no adopted cell complex; cannot create spaces (native unavailable?).");
+                return null;
+            }
+
             List<Panel> nonAirSolved = solved.Where(x => x != null && x.PanelType != PanelType.Air).ToList();
             List<Panel> solvedAirPanels = solved.Where(x => x != null && x.PanelType == PanelType.Air).ToList();
 
@@ -125,58 +136,46 @@ namespace SAM.Analytical.OCCT.Solver
                 SewingTolerance = 0.01
             };
 
-            // Reuse the EXISTING adjacency/panel/space construction path (the Tower prior art) - do not
-            // reimplement it. `out cellComplexResult` is the SAME decode the returned cluster's spaces were
-            // built from, so classification below is guaranteed consistent with it.
-            AdjacencyCluster fullCluster = AnalyticalOcctCreate.AdjacencyCluster(null, nonAirSolved, out OcctCellComplexResult cellComplexResult, null, occtOptions, minArea: minArea, maxAngle: maxAngle);
-            try
+            // Classify the adopted cells (from the DTO - no rebuild). The classifier does its own single
+            // envelope decode of the resolved faces; it reads only cell volume/centre, both carried by the DTO.
+            List<Face3D> nonAirFace3Ds = nonAirSolved.Select(x => x.GetFace3D()).Where(x => x != null && x.IsValid()).ToList();
+            List<SolverCell> cells = resolvedCellComplex.Cells.Select(x => new SolverCell(x.Index, x.Volume, x.Centre, null)).ToList();
+            IReadOnlyList<CellRole> roles = CellClassifier.ClassifyCells(cells, nonAirFace3Ds, minCellVolume, occtOptions, diagnostics);
+
+            // Exclude every non-Interior cell BY CELL INDEX (relation filtering), never a centre-distance match.
+            List<int> excludeCellIndices = new List<int>();
+            for (int i = 0; i < roles.Count; i++)
             {
-                if (fullCluster == null || cellComplexResult == null || !cellComplexResult.NativeAvailable || cellComplexResult.Cells == null || cellComplexResult.Cells.Count == 0)
+                if (roles[i] == CellRole.Interior)
                 {
-                    diagnostics.Add(SolverStage.Heal, DiagnosticCode.SpacesRefused, OcctDiagnosticSeverity.Error, "AdjacencyCluster construction produced no usable cells; cannot create spaces.");
-                    return null;
+                    continue;
                 }
 
-                List<Face3D> nonAirFace3Ds = nonAirSolved.Select(x => x.GetFace3D()).Where(x => x != null && x.IsValid()).ToList();
-                List<SolverCell> cells = cellComplexResult.Cells.Select((x, idx) => new SolverCell(idx, x.Volume, x.Center, x.Shell)).ToList();
-                IReadOnlyList<CellRole> roles = CellClassifier.ClassifyCells(cells, nonAirFace3Ds, minCellVolume, occtOptions, diagnostics);
-
-                // Match each built Space back to its cell by centre location (the exact copy CreateSpaces
-                // makes of OcctCell.Center) rather than by list/dictionary order, which is not a documented
-                // guarantee on the AdjacencyCluster storage this reuses.
-                List<Space> remainingSpaces = fullCluster.GetSpaces() ?? new List<Space>();
-                for (int i = 0; i < cells.Count; i++)
-                {
-                    if (roles[i] == CellRole.Interior)
-                    {
-                        continue;
-                    }
-
-                    Point3D center = cells[i].Center;
-                    Space match = center == null ? null : remainingSpaces.FirstOrDefault(x => x?.Location != null && x.Location.Distance(center) < Tolerance.MacroDistance);
-                    if (match != null)
-                    {
-                        fullCluster.RemoveObject(match);
-                        remainingSpaces.Remove(match);
-                    }
-
-                    diagnostics.Add(SolverStage.Heal, DiagnosticCode.CellExcludedFromSpaces, OcctDiagnosticSeverity.Info,
-                        string.Format("Cell {0} classified {1}; excluded from spaces.", i, roles[i]));
-                }
-
-                // Air policy: rejoin the caller's original air panels and every solver-fabricated GapFill
-                // air panel - both bypass solving/space creation but belong in the analytical output.
-                foreach (Panel airPanel in inputAirPanels.Concat(solvedAirPanels))
-                {
-                    fullCluster.AddObject(airPanel);
-                }
-
-                return fullCluster;
+                excludeCellIndices.Add(i);
+                diagnostics.Add(SolverStage.Heal, DiagnosticCode.CellExcludedFromSpaces, OcctDiagnosticSeverity.Info,
+                    string.Format("Cell {0} classified {1}; excluded from spaces.", i, roles[i]));
             }
-            finally
+
+            AdjacencyCluster cluster = AnalyticalOcctCreate.AdjacencyCluster(nonAirSolved, resolvedCellComplex, out List<string> clusterDiagnostics, minArea: minArea, maxAngle: maxAngle, tolerance: occtOptions.Tolerance, fuzzyTolerance: occtOptions.FuzzyTolerance, excludeCellIndices: excludeCellIndices);
+            foreach (string message in clusterDiagnostics ?? new List<string>())
             {
-                cellComplexResult?.Dispose();
+                diagnostics.Add(SolverStage.Heal, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info, message);
             }
+
+            if (cluster == null)
+            {
+                diagnostics.Add(SolverStage.Heal, DiagnosticCode.SpacesRefused, OcctDiagnosticSeverity.Error, "Building the adjacency cluster from the adopted complex produced no usable spaces; cannot create spaces.");
+                return null;
+            }
+
+            // Air policy: rejoin the caller's original air panels and every solver-fabricated GapFill air
+            // panel - both bypass solving/space creation but belong in the analytical output.
+            foreach (Panel airPanel in inputAirPanels.Concat(solvedAirPanels))
+            {
+                cluster.AddObject(airPanel);
+            }
+
+            return cluster;
         }
     }
 }

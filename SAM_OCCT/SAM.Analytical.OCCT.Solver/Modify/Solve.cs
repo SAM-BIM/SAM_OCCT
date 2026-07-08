@@ -236,7 +236,8 @@ namespace SAM.Analytical.OCCT.Solver
                 solver.CleanFace3Ds,
                 solver.LevelFrames,
                 solver.NativeResolved,
-                solver.ResolvedCellCount);
+                solver.ResolvedCellCount,
+                resolvedCellComplex: solver.ResolvedCellComplex);
         }
 
         /// <summary>
