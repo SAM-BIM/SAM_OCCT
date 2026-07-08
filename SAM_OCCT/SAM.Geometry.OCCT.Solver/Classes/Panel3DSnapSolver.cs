@@ -1566,32 +1566,36 @@ namespace SAM.Geometry.OCCT.Solver
                 return;
             }
 
-            // Overshoot selection identical to the pre-E2 rule: a thin (flat) cap keeps the small wall overshoot,
-            // a thick (sloped/roof) cap the larger roof overshoot so the under-roof wall clears the pitch.
+            // Overshoot selection: a thin (flat) cap keeps the small wall overshoot; a thick (sloped/roof)
+            // cap on the SCALAR path keeps the larger roof overshoot - E1's flat-at-ridge target needs the
+            // wall to clear the whole pitch from below. The PLANE target follows the surface itself, so it
+            // needs only the small overshoot to guarantee the kernel intersection (E2 review: the large
+            // roof overshoot applied to a surface-following target pierces 0.5 m PAST the roof everywhere,
+            // shredding adjacent geometry into naked fragments on the real-export fixtures).
             bool capIsRoof = capBox.Max.Z - capBox.Min.Z > toleranceDistance + 0.1;
-            double os = capIsRoof ? roofOvershoot : overshoot;
+            double scalarOvershoot = capIsRoof ? roofOvershoot : overshoot;
 
             bool flatRelative = IsCapFlatRelativeToWall(wall, capPlane);
             if (up)
             {
                 if (flatRelative)
                 {
-                    wall.ExtendTopTo(capBox.Max.Z + os, toleranceDistance);
+                    wall.ExtendTopTo(capBox.Max.Z + scalarOvershoot, toleranceDistance);
                 }
                 else
                 {
-                    wall.ExtendTopToPlane(capPlane, os, toleranceDistance);
+                    wall.ExtendTopToPlane(capPlane, capBox.Max.Z, overshoot, toleranceDistance);
                 }
             }
             else
             {
                 if (flatRelative)
                 {
-                    wall.ExtendBottomTo(capBox.Min.Z - os, toleranceDistance);
+                    wall.ExtendBottomTo(capBox.Min.Z - scalarOvershoot, toleranceDistance);
                 }
                 else
                 {
-                    wall.ExtendBottomToPlane(capPlane, os, toleranceDistance);
+                    wall.ExtendBottomToPlane(capPlane, capBox.Min.Z, overshoot, toleranceDistance);
                 }
             }
         }

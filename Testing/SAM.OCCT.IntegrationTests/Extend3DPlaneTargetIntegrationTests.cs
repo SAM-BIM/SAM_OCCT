@@ -58,10 +58,10 @@ namespace SAM.OCCT.IntegrationTests
         public void Solve3D_ManagedPath_RevitHome_PlaneTargetClosesWatertight()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
-            // E1: 12 cells / 4 naked. E2 plane-targeting the pitched roofs closes it watertight and finds more
-            // cells: 18 cells / 0 naked (naked strictly improved).
+            // E1: 12 cells / 4 naked. E2 (column-wise clamped plane target, review-corrected): the pitched
+            // roofs are followed as surfaces and the model closes watertight: 14 cells / 0 naked.
             (int cells, int naked) = SolveManaged("Revit-home-panels.sam");
-            Assert.Equal(18, cells);
+            Assert.Equal(14, cells);
             Assert.Equal(0, naked);
         }
 
@@ -69,10 +69,10 @@ namespace SAM.OCCT.IntegrationTests
         public void Solve3D_ManagedPath_AdjacencyClusterHome_PlaneTargetCutsNaked()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
-            // E1: 18 cells / 25 naked. E2 plane-targeting cuts the naked count dramatically and separates more
-            // cells: 20 cells / 4 naked (naked 25 -> 4).
+            // E1: 18 cells / 25 naked. E2 (review-corrected): naked 25 -> 4 at the same 18-cell decomposition
+            // (the pre-review construction reported 20 cells - two were sideways-spill artifacts).
             (int cells, int naked) = SolveManaged("AdjacencyCluster-home.sam");
-            Assert.Equal(20, cells);
+            Assert.Equal(18, cells);
             Assert.Equal(4, naked);
         }
 
@@ -80,11 +80,12 @@ namespace SAM.OCCT.IntegrationTests
         public void Solve3D_ManagedPath_Face3DHome_PlaneTargetRebaseline()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
-            // E1: 25 cells / 3 naked. E2 plane-targeting gives a coarser-but-clean managed decomposition:
-            // 22 cells / 4 naked. The +1 solver-internal naked is the accepted net-tradeoff (owner decision
-            // 2026-07-08); both workflows stay parity-clean (WorkflowParityIntegrationTests).
+            // E1: 25 cells / 3 naked. E2 (review-corrected): 20 cells / 4 naked - a coarser managed
+            // decomposition with +1 solver-internal naked, the accepted net-tradeoff (owner decision
+            // 2026-07-08; net across fixtures -24). Both workflows stay parity-clean
+            // (WorkflowParityIntegrationTests).
             (int cells, int naked) = SolveManaged("Face3D-home.sam");
-            Assert.Equal(22, cells);
+            Assert.Equal(20, cells);
             Assert.Equal(4, naked);
         }
 

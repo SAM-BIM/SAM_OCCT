@@ -656,24 +656,28 @@ namespace SAM.OCCT.UnitTests
             Plane roofPlane = roofFace.GetPlane();
 
             Vector3D normalBefore = wall.Face3D.GetPlane().Normal.Unit;
-            bool extended = wall.ExtendTopToPlane(roofPlane, overshoot: 0.5, tolerance: 1e-6);
+            bool extended = wall.ExtendTopToPlane(roofPlane, capTopZ: 6.0, overshoot: 0.5, tolerance: 1e-6);
 
             Assert.True(extended);
             BoundingBox3D box = wall.GetBoundingBox();
             Assert.Equal(0.0, box.Min.Z, 3); // base preserved - no material added below
+            // Column-wise: the extension never widens the wall's plan extent (E2 review finding - the earlier
+            // Query.Extend construction spilled sideways past the wall's ends, the room-merge vector).
+            Assert.Equal(0.0, box.Min.X, 3);
+            Assert.Equal(4.0, box.Max.X, 3);
             // Top follows the roof slope (rises toward x=4), not a flat top at a single Z: the E1 scalar path
-            // would give topAtX0 == topAtX4. The exact profile is Query.Extend's business (E1-tested); here we
-            // only assert the target was the SLOPED plane - the top is clearly higher on the high-roof side.
+            // would give topAtX0 == topAtX4.
             double topAtX0 = TopZNear(wall.Face3D, 0.0);
             double topAtX4 = TopZNear(wall.Face3D, 4.0);
             Assert.True(topAtX4 - topAtX0 > 1.0, $"Top must follow the roof slope (x4 {topAtX4} well above x0 {topAtX0}).");
-            Assert.True(box.Max.Z > 5.0, "The wall must reach the high side of the roof (ridge near z=6).");
-            // The highest new vertex lies on the offset roof plane (a real plane target, not a flat-Z
-            // extrusion): Query.Extend places the new top edge on the offset-plane / wall-plane intersection.
+            // The reach is clamped at the cap's real top + overshoot (6.5): following the plane further would
+            // build wall with no cap above it to trim against.
+            Assert.Equal(6.5, box.Max.Z, 3);
+            // Where unclamped (the low side), the new top vertex lies ON the offset roof plane.
             Point3D offsetOrigin = (Point3D)roofPlane.Origin.GetMoved(roofPlane.Normal.Unit * 0.5);
             Plane offsetPlane = new Plane(offsetOrigin, roofPlane.Normal);
-            Point3D highest = BoundaryPoints(wall.Face3D).OrderByDescending(p => p.Z).First();
-            Assert.True(offsetPlane.Distance(highest) < 1e-3, $"The extended top vertex {highest} must lie on the offset roof plane (d={offsetPlane.Distance(highest)}).");
+            Point3D lowSideTop = BoundaryPoints(wall.Face3D).Where(p => System.Math.Abs(p.X) <= 0.1).OrderByDescending(p => p.Z).First();
+            Assert.True(offsetPlane.Distance(lowSideTop) < 1e-3, $"The unclamped top vertex {lowSideTop} must lie on the offset roof plane (d={offsetPlane.Distance(lowSideTop)}).");
             // Extended in the wall's own (vertical) plane - normal unchanged.
             Assert.Equal(1.0, System.Math.Abs(normalBefore.DotProduct(wall.Face3D.GetPlane().Normal.Unit)), 4);
         }
@@ -788,7 +792,7 @@ namespace SAM.OCCT.UnitTests
             Point3D capOrigin = (Point3D)wallPlane.Origin.GetMoved(new Vector3D(0, 0, 4));
             Plane capPlane = new Plane(capOrigin, wallPlane.Normal);
 
-            bool extended = wall.ExtendTopToPlane(capPlane, overshoot: 0.5, tolerance: 1e-6);
+            bool extended = wall.ExtendTopToPlane(capPlane, capTopZ: 10.0, overshoot: 0.5, tolerance: 1e-6);
 
             // Fell back to scalar: grew upward without throwing, tilt preserved (extend in the wall's plane).
             Assert.True(extended);

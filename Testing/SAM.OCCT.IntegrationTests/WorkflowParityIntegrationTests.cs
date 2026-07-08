@@ -355,36 +355,27 @@ namespace SAM.OCCT.IntegrationTests
                 SpacesMatchResolvedCellCount = false,
                 TrackingComment = "workflow B under-closes whole-level-towers (28 vs 32 solver cells) - tilted level, byte-identical under E2; needs frame-aware extension"
             },
-            // Face3D-home (real export, pitched roofs): E2 plane-targeting changed the managed fallback
-            // (solver 25 -> 22 cells). Workflow B now closes cleanly 22/22 (was 20/25 - an E2 improvement, so
-            // no entry; passes on the default match + clean). A-solver-matched under-closes 19 vs 22, clean.
+            // Face3D-home (real export, pitched roofs): E2 (review-corrected) changed the managed fallback
+            // (solver 25 -> 20 cells). Workflow B closes cleanly 20/20 (no entry; passes on the default
+            // match + clean). A-solver-matched under-closes 19 vs 20, parity clean.
             [("Face3D-home.sam", "A-solver-matched")] = new Expectation
             {
                 SpacesMatchResolvedCellCount = false,
                 ParityClean = true,
-                TrackingComment = "Face3D-home A-solver-matched under-closes (19 vs 22 solver cells); E2 plane-targeting changed the managed fallback 25 -> 22 cells; parity clean"
+                TrackingComment = "Face3D-home A-solver-matched under-closes (19 vs 20 solver cells); E2 plane-targeting changed the managed fallback 25 -> 20 cells; parity clean"
             },
-            // Revit-home-panels (real export, pitched roofs): E2 raised solver/raw closure 12 -> 18 (managed
-            // naked 4 -> 0). A-solver-matched now closes cleanly 18/18 (an E2 improvement, so no entry).
-            // Workflow B still under-closes 11 vs 18.
+            // Revit-home-panels (real export, pitched roofs): E2 (review-corrected) closed the managed solve
+            // watertight (12/4 -> 14/0). A-solver-matched closes cleanly 14/14 (no entry). Workflow B still
+            // under-closes 9 vs 14.
             [("Revit-home-panels.sam", "B-clean-extend")] = new Expectation
             {
                 SpacesMatchResolvedCellCount = false,
-                TrackingComment = "Revit-home-panels workflow B under-closes (11 vs 18 solver cells); E2 raised solver/raw closure 12 -> 18 (managed naked 4 -> 0)"
+                TrackingComment = "Revit-home-panels workflow B under-closes (9 vs 14 solver cells); E2 closed the managed solve watertight (12/4 -> 14/0)"
             },
-            // AdjacencyCluster-home (real export, pitched roofs): E2 plane-targeting cut managed naked 25 -> 4
-            // and raised cells 18 -> 20. Both solver-matched workflows now under-close the higher cell count
-            // (A 17/20, B 19/20), parity clean - a net improvement over E1's 18/18-at-25-naked.
-            [("AdjacencyCluster-home.sam", "A-solver-matched")] = new Expectation
-            {
-                SpacesMatchResolvedCellCount = false,
-                TrackingComment = "AdjacencyCluster-home A-solver-matched under-closes (17 vs 20 solver cells); E2 plane-targeting cut managed naked 25 -> 4, raised cells 18 -> 20"
-            },
-            [("AdjacencyCluster-home.sam", "B-clean-extend")] = new Expectation
-            {
-                SpacesMatchResolvedCellCount = false,
-                TrackingComment = "AdjacencyCluster-home workflow B under-closes (19 vs 20 solver cells); E2 plane-targeting cut managed naked 25 -> 4"
-            },
+            // AdjacencyCluster-home (real export, pitched roofs): E2 (review-corrected column-wise clamped
+            // plane target) cut managed naked 25 -> 4 at the same 18-cell decomposition, and BOTH
+            // solver-matched workflows close 18/18 parity-clean - no expectation entries needed (they pass
+            // on the default match + clean).
             // two-level-tilted: raw-first (production) adopts 44 cells. UNCHANGED by E2 (rigidly-tilted level,
             // byte-identical). A-solver-matched rebuilds 43; workflow B is far off (25 vs 44) with a parity
             // warning - needs frame-aware extension (not E2's plane-targeting), deferred.

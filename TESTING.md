@@ -1287,9 +1287,16 @@ changes is the TARGET, gated by a discriminator (`IsCapFlatRelativeToWall`):
   — a level floor/ceiling, *including a rigidly tilted level* where wall and slab tilt together) keeps
   the pre-E2 scalar extend to the cap elevation + overshoot. **Byte-identical.**
 - A cap **pitched relative to the wall** (a real sloped roof over a vertical wall) is followed as a
-  sloped plane via the E1 plane-ops mechanism (`SnappedPanel.ExtendTopToPlane`/`ExtendBottomToPlane`),
-  so the wall gains a matching sloped top. Guards: parallel-plane and base/top-preservation fall back to
-  the scalar path (a diving plane never sweeps material past the wall's opposite extreme).
+  sloped plane (`SnappedPanel.ExtendTopToPlane`/`ExtendBottomToPlane`), so the wall gains a matching
+  sloped top. The extension is **column-wise within the wall's own plan extent and clamped at the cap's
+  real extreme + overshoot** (E2 review correction: the first implementation reused `Query.Extend`,
+  whose extreme-perpendicular-projection construction is horizontal-target-only — on an inclined line it
+  spilled sideways in plan past the wall's ends, the room-merge vector, and under-covered the high side
+  as pitch grew; the clamp stops a cap plane extrapolated beyond the cap's physical extent from dragging
+  the wall past what the cap can trim). The plane target uses the **small** wall overshoot — it meets
+  the surface itself, unlike E1's flat-at-ridge scalar target which needs `roofOvershoot` to clear the
+  pitch from below. Guards: parallel-plane, diving-plane (base/top preservation), wall-parallel slope
+  and failed-union all fall back to the scalar path — never a throw, never a silent no-grow swallow.
 
 **Key finding.** The tilted golden fixtures the phase originally named (two-level-tilted,
 whole-level-towers) are *rigidly tilted flat levels*, not sloped-roof models — the discriminator
@@ -1308,11 +1315,11 @@ report closure):
 | Fixture | Before E2 (cells/naked) | After E2 (cells/naked) | Mechanism |
 | --- | --- | --- | --- |
 | whole-level-flat / tilted-two-spaces / whole-level-tilted / two-level-tilted / whole-level-towers | golden pins | **byte-identical** | caps flat-relative to walls → scalar path (incl. tilted levels) |
-| Revit-home-panels | 12 / 4 | 18 / **0** | pitched roofs followed as planes → watertight, more cells (**naked 4 → 0**) |
-| AdjacencyCluster-home | 18 / **25** | 20 / **4** | pitched roofs followed as planes (**naked 25 → 4**) |
-| Face3D-home | 25 / 3 | 22 / **4** | coarser-but-clean managed decomposition; **+1 solver-internal naked** accepted as net-win (owner decision 2026-07-08) |
+| Revit-home-panels | 12 / 4 | 14 / **0** | pitched roofs followed as clamped column-wise planes → watertight (**naked 4 → 0**) |
+| AdjacencyCluster-home | 18 / **25** | 18 / **4** | same 18-cell decomposition, **naked 25 → 4** |
+| Face3D-home | 25 / 3 | 20 / **4** | coarser managed decomposition; **+1 solver-internal naked** accepted as net-win (owner decision 2026-07-08) |
 
-**Net across fixtures: −22 naked.** The one +1 (Face3D-home) is on the solver's internal closure metric
+**Net across fixtures: −24 naked.** The one +1 (Face3D-home) is on the solver's internal closure metric
 (that fixture has no golden pin); on the **workflow** metric every fixture stays parity-clean with zero
 orphans — E2 adds *no* workflow-level naked regression. The gate was relaxed from "no naked increase on
 any fixture" to "net non-increasing" by owner decision; the tradeoff is documented in the
@@ -1321,9 +1328,9 @@ any fixture" to "net non-increasing" by owner decision; the tradeoff is document
 ### Workflow parity re-pins (E2)
 
 `WorkflowParityIntegrationTests` rows changed by E2, each re-pinned with a mechanism note (no silent
-skips): Revit-home-panels A-solver-matched now closes cleanly 18/18 (was under-closing), B 11 vs 18;
-AdjacencyCluster-home A 17/20, B 19/20 (was 18/18 at 25 naked); Face3D-home B now closes cleanly 22/22,
-A 19/22. The tilted fixtures' rows (two-level-tilted, whole-level-towers) are unchanged from E1.
+skips): Revit-home-panels A-solver-matched closes cleanly 14/14, B 9 vs 14; AdjacencyCluster-home now
+closes 18/18 cleanly on BOTH workflows (was 25 naked upstream); Face3D-home B closes cleanly 20/20,
+A 19/20. The tilted fixtures' rows (two-level-tilted, whole-level-towers) are unchanged from E1.
 
 ```powershell
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~Extend3DPlaneTargetIntegrationTests"
