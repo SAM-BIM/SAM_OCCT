@@ -726,6 +726,42 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
+        /// E2 (docs/EXTEND3D_ROBUST_HANDOVER.md): lengthen this (vertical) panel UP so its top reaches the
+        /// ACTUAL cap plane <paramref name="capPlane"/> (a sloped roof or a flat ceiling/floor) offset by
+        /// <paramref name="overshoot"/>, so the native kernel trims the wall cleanly along the real surface.
+        /// Where the scalar <see cref="ExtendTopTo(double, double)"/> grows the wall to a FLAT top at a single
+        /// Z, this follows the cap's true (possibly sloped) surface: a wall under a pitched roof gains a sloped
+        /// top matching the roof. The extension is COLUMN-WISE within the wall's own plan extent (E2 review
+        /// finding: the generic <c>Query.Extend</c> extreme-projection construction is horizontal-target-only -
+        /// on an inclined line it spills sideways in plan, the room-merge vector, and under-covers the high
+        /// side as pitch grows), and the target is CLAMPED at <paramref name="capTopZ"/> +
+        /// <paramref name="overshoot"/> - the cap's real top - so a cap plane extrapolated far beyond the cap's
+        /// physical extent (a small angled shed clipping a long wall's bbox) can never drag the wall past what
+        /// the cap could actually trim (the pre-E2 scalar bound). A (near) horizontal cap routes to the scalar
+        /// path (byte-identical for a plain rectangle); a cap plane parallel to the wall, diving below the wall
+        /// base, or with no usable slope across the wall falls back to the scalar path - never a throw, never
+        /// material below the base.
+        /// </summary>
+        /// <returns>True when the panel was grown to a valid taller face; false on a no-op or a hard failure.</returns>
+        public bool ExtendTopToPlane(Plane capPlane, double capTopZ, double overshoot, double tolerance)
+        {
+            return ExtendToCapPlane(capPlane, capTopZ, overshoot, true, tolerance);
+        }
+
+        /// <summary>
+        /// The mirror of <see cref="ExtendTopToPlane"/>: lengthen this (vertical) panel DOWN so its base
+        /// reaches the cap plane below (a sloped or flat floor), offset by <paramref name="overshoot"/> and
+        /// clamped at <paramref name="capBottomZ"/> - <paramref name="overshoot"/> (the floor's real bottom).
+        /// Same construction (column-wise within the wall's plan extent) and the mirrored guards (parallel /
+        /// rising-above-the-top / no-slope fall back to the scalar path; never material above the top).
+        /// </summary>
+        /// <returns>True when the panel was grown to a valid lower face; false on a no-op or a hard failure.</returns>
+        public bool ExtendBottomToPlane(Plane capPlane, double capBottomZ, double overshoot, double tolerance)
+        {
+            return ExtendToCapPlane(capPlane, capBottomZ, overshoot, false, tolerance);
+        }
+
+        /// <summary>
         /// The plan foot of a (vertical) wall: a horizontal segment at the wall's base elevation whose
         /// direction is the wall's longest external edge projected into plan, and whose two endpoints are
         /// the FULL plan extent of the wall's boundary along that direction. Feeds the plan-loop solver
@@ -1016,6 +1052,281 @@ namespace SAM.Geometry.OCCT.Solver
             Adopt(extended);
             PlaneOpsExtendCount++;
             return true;
+        }
+
+        /// <summary>
+        /// E2 core (shared by <see cref="ExtendTopToPlane"/>/<see cref="ExtendBottomToPlane"/>).
+        /// <paramref name="up"/> selects the grow direction: true extends the top upward to a roof/ceiling,
+        /// false extends the base downward to a floor. <paramref name="capExtremeZ"/> is the cap's REAL
+        /// extreme elevation (bbox Max.Z above / Min.Z below), the clamp that bounds the sloped target.
+        /// </summary>
+        /// <remarks>
+        /// E2 review rewrite: the first implementation reused <c>Query.Extend</c> (extend to the offset
+        /// plane's intersection line via extreme perpendicular projections). That construction is correct
+        /// ONLY for a horizontal target line (E1's use): on an INCLINED line the perpendicular is oblique, so
+        /// the union (a) spills sideways in plan past the wall's ends - lengthening the wall into
+        /// neighbouring rooms, the room-merge vector - and (b) under-covers the high side as pitch grows (at
+        /// 70 degrees the "extension" barely rose above the original top while reporting success). This
+        /// version builds the extension explicitly COLUMN-WISE: a polygon spanning exactly the wall's own
+        /// plan extent [uMin, uMax], from the anchor edge to the intersection line, with the line CLAMPED at
+        /// the cap's real extreme +/- overshoot (so an extrapolated plane from a cap that only clips the
+        /// wall's bbox corner cannot drag the wall past what the cap can trim - the pre-E2 scalar bound).
+        /// No plan growth, full-span coverage at any pitch, holes preserved.
+        /// </remarks>
+        private bool ExtendToCapPlane(Plane capPlane, double capExtremeZ, double overshoot, bool up, double tolerance)
+        {
+            if (face3D == null || plane == null || capPlane == null)
+            {
+                return false;
+            }
+
+            Vector3D capNormal = capPlane.Normal?.Unit;
+            Point3D capOrigin = capPlane.Origin;
+            if (capNormal == null || capOrigin == null)
+            {
+                return false;
+            }
+
+            BoundingBox3D boundingBox3D = face3D.GetBoundingBox();
+            if (boundingBox3D == null)
+            {
+                return false;
+            }
+
+            // A (near) horizontal cap is a flat floor/ceiling: route to the scalar path so a plain rectangular
+            // wall keeps the byte-identical rectangular fast path (the golden fixtures' flat levels) and any
+            // other profile takes E1's extend-to-horizontal-plane. capOrigin.Z is the flat cap's elevation, so
+            // the scalar target reproduces E1 (nearestCap.Max.Z +/- overshoot) exactly.
+            double absNz = System.Math.Abs(capNormal.Z);
+            if (absNz >= 1.0 - 1e-6)
+            {
+                double horizontalTargetZ = up ? capOrigin.Z + overshoot : capOrigin.Z - overshoot;
+                return up ? ExtendTopTo(horizontalTargetZ, tolerance) : ExtendBottomTo(horizontalTargetZ, tolerance);
+            }
+
+            // A (near) vertical cap plane has no meaningful surface directly above/below the wall and gives a
+            // near-parallel, unstable intersection with a vertical wall: nothing to extend to.
+            if (absNz <= 1e-6)
+            {
+                return false;
+            }
+
+            // The wall's in-plane axes: u (horizontal, along the wall in plan) and w (in-plane up). Degenerate
+            // u (a horizontal wall - not a wall) or degenerate w falls back to the scalar path.
+            Vector3D wallNormal = plane.Normal?.Unit;
+            if (wallNormal == null)
+            {
+                return false;
+            }
+
+            Vector3D uAxis = new Vector3D(-wallNormal.Y, wallNormal.X, 0);
+            if (uAxis.Length <= 1e-9)
+            {
+                return ExtendToCapScalarFallback(capNormal, capOrigin, boundingBox3D, overshoot, up, tolerance);
+            }
+
+            uAxis = uAxis.Unit;
+            Vector3D wAxis = wallNormal.CrossProduct(uAxis).Unit;
+            if (System.Math.Abs(wAxis.Z) <= 1e-9)
+            {
+                return ExtendToCapScalarFallback(capNormal, capOrigin, boundingBox3D, overshoot, up, tolerance);
+            }
+
+            // Offset the cap plane along its own normal so its SURFACE moves in the grow direction (up in
+            // world Z for a roof, down for a floor); the vertical shift over a fixed plan point is
+            // overshoot/|normal.Z| - the wall overshoots the cap and the native kernel trims it back along
+            // the true surface. The clamp below caps the total reach at the cap's real extreme + overshoot.
+            double sign = capNormal.Z >= 0 ? 1.0 : -1.0;
+            double delta = (up ? overshoot : -overshoot) * sign;
+            Point3D offsetOrigin = capOrigin.GetMoved(capNormal * delta) as Point3D;
+            if (offsetOrigin == null)
+            {
+                return false;
+            }
+
+            Plane offsetPlane = new Plane(offsetOrigin, capPlane.Normal);
+
+            // Intersection line of the offset cap plane with the wall plane. Parallel (no line) -> scalar.
+            PlanarIntersectionResult planarIntersectionResult = Geometry.Spatial.Create.PlanarIntersectionResult(plane, offsetPlane);
+            Line3D line3D = planarIntersectionResult == null || !planarIntersectionResult.Intersecting ? null : planarIntersectionResult.GetGeometry3D<Line3D>();
+            if (line3D?.Origin == null || line3D.Direction == null)
+            {
+                return ExtendToCapScalarFallback(capNormal, capOrigin, boundingBox3D, overshoot, up, tolerance);
+            }
+
+            // z(u): the line's height over plan-parameter u (u = p . uAxis). A line (near) vertical in the
+            // wall plane (cap sloping along the wall's own direction ~ wall-parallel slope) has no usable
+            // z-per-u - scalar fallback.
+            Vector3D lineDirection = line3D.Direction.Unit;
+            double dU = lineDirection.DotProduct(uAxis);
+            if (System.Math.Abs(dU) <= 1e-9)
+            {
+                return ExtendToCapScalarFallback(capNormal, capOrigin, boundingBox3D, overshoot, up, tolerance);
+            }
+
+            Point3D lineOrigin = line3D.Origin;
+            double lineOriginU = lineOrigin.X * uAxis.X + lineOrigin.Y * uAxis.Y;
+            double slope = lineDirection.Z / dU;
+
+            List<Point3D> boundaryPoint3Ds = BoundaryPoints(face3D);
+            if (boundaryPoint3Ds == null || boundaryPoint3Ds.Count < 3)
+            {
+                return false;
+            }
+
+            double uMin = double.MaxValue, uMax = double.MinValue;
+            foreach (Point3D point3D in boundaryPoint3Ds)
+            {
+                double u = point3D.X * uAxis.X + point3D.Y * uAxis.Y;
+                if (u < uMin) uMin = u;
+                if (u > uMax) uMax = u;
+            }
+
+            if (uMax - uMin <= tolerance)
+            {
+                return false;
+            }
+
+            double zA = lineOrigin.Z + (uMin - lineOriginU) * slope;
+            double zB = lineOrigin.Z + (uMax - lineOriginU) * slope;
+
+            // Diving guard: a cap plane crossing past the wall's OPPOSITE extreme within the wall's own span
+            // (a steep roof passing below the base at one end, a floor rising above the top) cannot be a
+            // whole-wall sloped target - scalar fallback (grows in the intended direction only).
+            if (up ? System.Math.Min(zA, zB) < boundingBox3D.Min.Z + tolerance
+                   : System.Math.Max(zA, zB) > boundingBox3D.Max.Z - tolerance)
+            {
+                return ExtendToCapScalarFallback(capNormal, capOrigin, boundingBox3D, overshoot, up, tolerance);
+            }
+
+            // Clamp at the cap's REAL extreme + overshoot: beyond it there is no cap surface to trim against,
+            // so following the extrapolated plane further would build a phantom wall (E2 review finding A1).
+            double clampZ = up ? capExtremeZ + overshoot : capExtremeZ - overshoot;
+            double zAClamped = up ? System.Math.Min(zA, clampZ) : System.Math.Max(zA, clampZ);
+            double zBClamped = up ? System.Math.Min(zB, clampZ) : System.Math.Max(zB, clampZ);
+
+            // No-grow: the (clamped) target does not clear the wall's extreme anywhere on the span - the
+            // conforming case, or a failed/afield target. The scalar path decides (it no-ops when the cap
+            // surface over the wall centre does not clear the extreme either) - never a silent swallow.
+            if (up ? System.Math.Max(zAClamped, zBClamped) <= boundingBox3D.Max.Z + tolerance
+                   : System.Math.Min(zAClamped, zBClamped) >= boundingBox3D.Min.Z - tolerance)
+            {
+                return ExtendToCapScalarFallback(capNormal, capOrigin, boundingBox3D, overshoot, up, tolerance);
+            }
+
+            // The extension polygon, column-wise over exactly [uMin, uMax]: anchored at the wall's opposite
+            // extreme, rising (dropping) to the clamped line - with the clamp crossing vertex when the line
+            // pierces the clamp inside the span.
+            double anchorZ = up ? boundingBox3D.Min.Z : boundingBox3D.Max.Z;
+            List<Point3D> extension3Ds = new List<Point3D>
+            {
+                InPlanePoint(uAxis, wAxis, uMin, anchorZ),
+                InPlanePoint(uAxis, wAxis, uMax, anchorZ),
+                InPlanePoint(uAxis, wAxis, uMax, zBClamped)
+            };
+
+            bool crossesClamp = (zA - clampZ) * (zB - clampZ) < 0 && System.Math.Abs(zB - zA) > 1e-12;
+            if (crossesClamp)
+            {
+                double uStar = uMin + (clampZ - zA) * (uMax - uMin) / (zB - zA);
+                extension3Ds.Add(InPlanePoint(uAxis, wAxis, uStar, clampZ));
+            }
+
+            extension3Ds.Add(InPlanePoint(uAxis, wAxis, uMin, zAClamped));
+
+            // Union the extension with the existing boundary in the wall plane (holes carried through).
+            List<Geometry.Planar.Point2D> extension2Ds = extension3Ds.ConvertAll(x => plane.Convert(x));
+            Geometry.Planar.ISegmentable2D externalEdge2D = face3D.ExternalEdge2D as Geometry.Planar.ISegmentable2D;
+            if (externalEdge2D == null || extension2Ds.Any(x => x == null))
+            {
+                return ExtendToCapScalarFallback(capNormal, capOrigin, boundingBox3D, overshoot, up, tolerance);
+            }
+
+            List<Geometry.Planar.Polygon2D> polygon2Ds = Geometry.Planar.Query.Union(new List<Geometry.Planar.Polygon2D>
+            {
+                new Geometry.Planar.Polygon2D(externalEdge2D.GetPoints()),
+                new Geometry.Planar.Polygon2D(extension2Ds)
+            }, tolerance);
+
+            if (polygon2Ds == null || polygon2Ds.Count == 0)
+            {
+                return ExtendToCapScalarFallback(capNormal, capOrigin, boundingBox3D, overshoot, up, tolerance);
+            }
+
+            if (polygon2Ds.Count > 1)
+            {
+                polygon2Ds.Sort((x, y) => y.GetArea().CompareTo(x.GetArea()));
+            }
+
+            Geometry.Planar.Polygon2D polygon2D = polygon2Ds[0];
+            polygon2D.SetOrientation(Geometry.Planar.Query.Orientation(externalEdge2D.GetPoints()));
+
+            int holesBefore = face3D.GetInternalEdge3Ds()?.Count ?? 0;
+            Face3D extended = Face3D.Create(plane, polygon2D, face3D.InternalEdge2Ds);
+            if (extended == null || !extended.IsValid())
+            {
+                return ExtendToCapScalarFallback(capNormal, capOrigin, boundingBox3D, overshoot, up, tolerance);
+            }
+
+            BoundingBox3D extendedBox = extended.GetBoundingBox();
+            if (extendedBox == null)
+            {
+                return false;
+            }
+
+            // Belt-and-braces: by construction the extension spans only [uMin, uMax] from the anchor to the
+            // clamped line, so the opposite extreme and the plan extent are preserved; verify and refuse a
+            // degenerate union rather than adopting it.
+            if (up ? extendedBox.Min.Z < boundingBox3D.Min.Z - tolerance : extendedBox.Max.Z > boundingBox3D.Max.Z + tolerance)
+            {
+                return ExtendToCapScalarFallback(capNormal, capOrigin, boundingBox3D, overshoot, up, tolerance);
+            }
+
+            double grewTo = up ? extendedBox.Max.Z : extendedBox.Min.Z;
+            double from = up ? boundingBox3D.Max.Z : boundingBox3D.Min.Z;
+            if (up ? grewTo <= from + tolerance : grewTo >= from - tolerance)
+            {
+                return ExtendToCapScalarFallback(capNormal, capOrigin, boundingBox3D, overshoot, up, tolerance);
+            }
+
+            RecordHoleDrop(holesBefore, extended, up ? "extend to roof plane" : "extend to floor plane");
+            Adopt(extended);
+            PlaneOpsExtendCount++;
+            return true;
+        }
+
+        /// <summary>A point in this panel's plane with plan-parameter <paramref name="u"/> (its projection on
+        /// <paramref name="uAxis"/>) and world elevation <paramref name="z"/> - the column-wise coordinates
+        /// <see cref="ExtendToCapPlane"/> builds its extension polygon from. <paramref name="wAxis"/> is the
+        /// in-plane up axis (non-degenerate Z-component guaranteed by the caller).</summary>
+        private Point3D InPlanePoint(Vector3D uAxis, Vector3D wAxis, double u, double z)
+        {
+            Point3D origin = plane.Origin;
+            double a = u - (origin.X * uAxis.X + origin.Y * uAxis.Y);
+            double b = (z - origin.Z) / wAxis.Z;
+            return new Point3D(
+                origin.X + uAxis.X * a + wAxis.X * b,
+                origin.Y + uAxis.Y * a + wAxis.Y * b,
+                origin.Z + wAxis.Z * b);
+        }
+
+        /// <summary>Scalar-Z fallback shared by the parallel-cap and base/top-preservation guards of
+        /// <see cref="ExtendToCapPlane"/>: extend to the cap surface directly over the wall's plan centre
+        /// (offset by <paramref name="overshoot"/> in the grow direction), which grows the wall in that
+        /// direction only. Mirrors E1's flat-target behaviour for a cap that cannot be used as a sloped plane
+        /// target here. Returns false when the cap surface does not actually clear the wall's current extreme.</summary>
+        private bool ExtendToCapScalarFallback(Vector3D capNormal, Point3D capOrigin, BoundingBox3D boundingBox3D, double overshoot, bool up, double tolerance)
+        {
+            if (System.Math.Abs(capNormal.Z) <= 1e-9)
+            {
+                return false;
+            }
+
+            double centreX = 0.5 * (boundingBox3D.Min.X + boundingBox3D.Max.X);
+            double centreY = 0.5 * (boundingBox3D.Min.Y + boundingBox3D.Max.Y);
+            double capZ = capOrigin.Z - ((capNormal.X * (centreX - capOrigin.X)) + (capNormal.Y * (centreY - capOrigin.Y))) / capNormal.Z;
+            double targetZ = up ? capZ + overshoot : capZ - overshoot;
+            return up ? ExtendTopTo(targetZ, tolerance) : ExtendBottomTo(targetZ, tolerance);
         }
 
         private bool SetVerticalFootprintPlaneOps(Geometry.Planar.Point2D newStart, Geometry.Planar.Point2D newEnd, double tolerance)

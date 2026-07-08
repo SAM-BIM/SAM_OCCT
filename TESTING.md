@@ -1277,6 +1277,66 @@ two-level-tilted 230/107, whole-level-towers 183/37 (fast/plane-ops).
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~Extend3DCensusIntegrationTests"
 ```
 
+## Plane-target cap extension (docs/EXTEND3D_ROBUST_HANDOVER.md, Phase E2)
+
+E2 makes `Panel3DSnapSolver.Extend` grow each wall to the ACTUAL cap surface instead of a flat Z at the
+cap's ridge height. Cap SELECTION is the pre-E2 nearest-cap-over-the-wall-centre rule verbatim; what
+changes is the TARGET, gated by a discriminator (`IsCapFlatRelativeToWall`):
+
+- A cap **flat relative to its wall** (its normal aligned within 15° of the wall's own in-plane up-axis
+  — a level floor/ceiling, *including a rigidly tilted level* where wall and slab tilt together) keeps
+  the pre-E2 scalar extend to the cap elevation + overshoot. **Byte-identical.**
+- A cap **pitched relative to the wall** (a real sloped roof over a vertical wall) is followed as a
+  sloped plane (`SnappedPanel.ExtendTopToPlane`/`ExtendBottomToPlane`), so the wall gains a matching
+  sloped top. The extension is **column-wise within the wall's own plan extent and clamped at the cap's
+  real extreme + overshoot** (E2 review correction: the first implementation reused `Query.Extend`,
+  whose extreme-perpendicular-projection construction is horizontal-target-only — on an inclined line it
+  spilled sideways in plan past the wall's ends, the room-merge vector, and under-covered the high side
+  as pitch grew; the clamp stops a cap plane extrapolated beyond the cap's physical extent from dragging
+  the wall past what the cap can trim). The plane target uses the **small** wall overshoot — it meets
+  the surface itself, unlike E1's flat-at-ridge scalar target which needs `roofOvershoot` to clear the
+  pitch from below. Guards: parallel-plane, diving-plane (base/top preservation), wall-parallel slope
+  and failed-union all fall back to the scalar path — never a throw, never a silent no-grow swallow.
+
+**Key finding.** The tilted golden fixtures the phase originally named (two-level-tilted,
+whole-level-towers) are *rigidly tilted flat levels*, not sloped-roof models — the discriminator
+correctly routes their caps to the scalar path, so they are byte-identical. Improving those needs
+*frame-aware* extension (extend along the level's tilted up-axis), a larger change deferred out of E2.
+A naive world-Z plane target (tried in development) collapsed two-level-tilted to 3 cells / 254 dropped
+— the discriminator is what prevents that.
+
+### Managed golden re-baseline (E2)
+
+All five **managed** golden pins (`GoldenMasterIntegrationTests.ManagedFixtures`) and the **raw** pins
+are **byte-identical** under E2 (their caps are flat-relative). E2's improvement lands on the real-export
+fixtures (genuine pitched roofs), pinned by `Extend3DPlaneTargetIntegrationTests` (managed `Solve3D`
+report closure):
+
+| Fixture | Before E2 (cells/naked) | After E2 (cells/naked) | Mechanism |
+| --- | --- | --- | --- |
+| whole-level-flat / tilted-two-spaces / whole-level-tilted / two-level-tilted / whole-level-towers | golden pins | **byte-identical** | caps flat-relative to walls → scalar path (incl. tilted levels) |
+| Revit-home-panels | 12 / 4 | 14 / **0** | pitched roofs followed as clamped column-wise planes → watertight (**naked 4 → 0**) |
+| AdjacencyCluster-home | 18 / **25** | 18 / **4** | same 18-cell decomposition, **naked 25 → 4** |
+| Face3D-home | 25 / 3 | 20 / **4** | coarser managed decomposition; **+1 solver-internal naked** accepted as net-win (owner decision 2026-07-08) |
+
+**Net across fixtures: −24 naked.** The one +1 (Face3D-home) is on the solver's internal closure metric
+(that fixture has no golden pin); on the **workflow** metric every fixture stays parity-clean with zero
+orphans — E2 adds *no* workflow-level naked regression. The gate was relaxed from "no naked increase on
+any fixture" to "net non-increasing" by owner decision; the tradeoff is documented in the
+`Extend3DPlaneTargetIntegrationTests` pins and the `WorkflowParityIntegrationTests` tracking comments.
+
+### Workflow parity re-pins (E2)
+
+`WorkflowParityIntegrationTests` rows changed by E2, each re-pinned with a mechanism note (no silent
+skips): Revit-home-panels A-solver-matched closes cleanly 14/14, B 9 vs 14; AdjacencyCluster-home now
+closes 18/18 cleanly on BOTH workflows (was 25 naked upstream); Face3D-home B closes cleanly 20/20,
+A 19/20. The tilted fixtures' rows (two-level-tilted, whole-level-towers) are unchanged from E1.
+
+```powershell
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~Extend3DPlaneTargetIntegrationTests"
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~Panel3DSnapSolverTests"
+```
+
 ## ResolvedCellComplex product (docs/CELLCOMPLEX_FIRST_HANDOVER.md, Phase P2)
 
 P2 turns the cell complex the solver validated into a first-class, pure-managed, serializable product

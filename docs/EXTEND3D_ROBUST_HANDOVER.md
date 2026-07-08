@@ -335,6 +335,87 @@ ACCEPTANCE GATE: full suite green; re-baseline table complete; naked-count rule 
 fixtures; raw goldens byte-identical; P4 may branch only after this PR merges.
 ```
 
+**E2 outcome note (2026-07-08, Opus 4.8 impl):** implemented on branch `feat/extend3d-plane-targets`
+off the merged `sow/2026-Q3`. Two findings reshaped the phase:
+
+1. **The named target fixtures were misdiagnosed.** two-level-tilted and whole-level-towers are
+   *rigidly tilted flat levels*, not sloped-roof models. A naive world-Z plane target collapsed
+   two-level-tilted to **3 cells / 254 dropped** (walls extended to the wrong tilted cap in world-Z).
+   The fix is a discriminator (`IsCapFlatRelativeToWall`): a cap whose normal aligns (within 15°) with
+   the wall's own in-plane up-axis is "flat relative to the wall" — a level slab, *including a tilted
+   level* — and keeps the pre-E2 scalar target (**byte-identical**). Only a cap genuinely *pitched
+   relative to the wall* (a real roof over a vertical wall) takes the sloped plane. Cap SELECTION stays
+   the pre-E2 single-nearest-over-centre rule (the multi-sample/multi-cap covering test of task 1 was
+   implemented and **rejected** — it selected farther caps in world-Z and broke the tilted fixtures).
+   So all 5 golden pins (raw AND managed) are byte-identical; the tilted fixtures do **not** improve —
+   that needs *frame-aware* extension (extend along the level up-axis), deferred as a follow-up (call
+   it E4 or fold into a frame pass).
+
+2. **The improvement lands on the real-export fixtures**, which have genuine pitched roofs
+   (final numbers as corrected by the E2 review record below): Revit-home-panels naked 4 → **0**
+   (cells 12 → 14), AdjacencyCluster-home naked **25 → 4** (same 18-cell decomposition),
+   Face3D-home 25/3 → 20/**4** (+1 solver-internal naked). Net across fixtures **−24 naked**, but the
+   +1 on Face3D-home violated the literal "no naked increase on ANY fixture" gate. Exhaustive tuning
+   (flatness cone 8–90°, foot-sampling, plan-footprint guard, roofs-only) could not remove that +1
+   without regressing a *different* fixture — plane-targeting messy real geometry is intrinsically a
+   mixed bag. On the **workflow** metric every fixture stays parity-clean with zero orphans (no
+   workflow-level naked regression). **Owner decision (2026-07-08): ship the net-win, relax the gate
+   from "any fixture" to "net non-increasing."** The E2 review below should treat the naked-count check
+   as "net non-increasing + every workflow parity-clean," and confirm the discriminator keeps the
+   tilted/flat goldens byte-identical, rather than "no increase on any fixture."
+
+Re-baseline table: TESTING.md "E2" section (managed goldens byte-identical; real-export pins in
+`Extend3DPlaneTargetIntegrationTests`; harness rows re-pinned in `WorkflowParityIntegrationTests`).
+
+**E2 review record (2026-07-08, Fable 5 Max — §6 adversarial, amended per the outcome note):
+blocking findings found, fixed in-review, re-verified. Verdict: MERGE.**
+
+The review attacked the committed implementation (`92e8b9b`) with the §6 counterexamples as runnable
+fixtures. Findings, most severe first:
+
+1. **F1 (blocking, fixed): the plane-target application was geometrically wrong.** The primitive
+   reused SAM-core `Query.Extend` (`SnappedPanel.cs:1113@92e8b9b`), which extends a face by
+   projecting boundary points onto the target line PERPENDICULARLY. That construction is correct only
+   for a horizontal line (E1's exclusive use); on an inclined line the perpendicular is oblique, so
+   the union (a) **spilled sideways in plan** past the wall's ends — the room-merge vector — even for
+   a perfectly legitimate 26.6° gable (measured: 1.2 m past the wall end; 2.45 m for a shed clipping
+   a long wall's bbox corner), and (b) **under-covered the high side as pitch grew** — at 70°+ the
+   "extension" barely rose above the original top while returning success (wall left ~6 m short of
+   its roof; E1 would have closed it). (c) The target line was the cap plane **extrapolated without
+   bound** past the cap's physical extent (E1's scalar target was bounded by the cap bbox). The
+   fixture wins of `92e8b9b` were partly artifacts of (a). **Fix (in-review):** the extension is now
+   built column-wise over exactly the wall's own plan extent, clamped at the cap's real extreme ±
+   overshoot, with all degenerate cases (parallel, diving, wall-parallel slope, failed union) falling
+   back to the scalar path — never a silent no-grow swallow (`92e8b9b`'s no-op guard returned false
+   without the fallback).
+2. **F2 (fixed): the roof overshoot was wrong for a surface-following target.** `roofOvershoot`
+   (0.5 m) exists so E1's flat-at-ridge target clears the pitch from below; applied to a plane target
+   it pierced 0.5 m past the roof everywhere and shredded adjacent geometry into naked fragments
+   (AdjacencyCluster-home degraded to 46 cells/10 naked under the corrected geometry until the plane
+   target switched to the small wall overshoot).
+3. **F3 (fixed, docs): net-naked arithmetic** said −22 in TESTING.md/outcome note; the rows give −24.
+   Also the offset comment claimed the surface shifts "by exactly overshoot" (it is overshoot/|n·Z|,
+   now bounded by the clamp anyway).
+4. **F4 (recorded): policy-pin deviations, owner-approved by the outcome note** — task 1's
+   multi-sample covering test and task 2's multi-plane unions were implemented and rejected (tilted
+   fixtures); R8's "conforming gable no-op" is reinterpreted as "non-collapse + overshoot-then-trim"
+   (same in kind as E1, which also overshoot-extends conforming walls).
+5. **F5 (residual, accepted): single-nearest under multi-pitch caps** — a descending pitch A beside a
+   higher cap B leaves the wall short of B where E1's flat-at-ridge target incidentally covered it
+   (demonstrated at 31°). This is the mechanism class behind Face3D-home's +1 and is covered by the
+   owner's net rule; revisit under a future frame-aware/multi-cap phase.
+
+False-extension analysis (corrected build): shed-beside-wall (flat and sloped variants) → not
+selected / bounded at the cap's real extreme, zero plan growth; diving plane → scalar, base
+preserved; ridge-over-wall-end → covered by the single slope; stacked floors → nearest only;
+parallel cap → scalar fallback, no throw; pitch sweep 20–75° → full coverage, top = clamp exactly.
+
+Re-verified evidence: 5 raw + 5 managed golden pins byte-identical; 457 unit / 167 integration green;
+all 9 harness fixtures parity-clean, zero orphans; final managed matrix vs E1: Revit-home 12/4 →
+14/**0**, AdjacencyCluster-home 18/25 → 18/**4**, Face3D-home 25/3 → 20/4, net **−24**, tilted/flat
+byte-identical. **Verdict: MERGE — and merging E2 unblocks P4** (gate hardening branches off the
+post-E2 `sow/2026-Q3`).
+
 ## 6. E2 review prompt (Fable 5, Max — adversarial)
 
 ```
