@@ -1277,6 +1277,59 @@ two-level-tilted 230/107, whole-level-towers 183/37 (fast/plane-ops).
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~Extend3DCensusIntegrationTests"
 ```
 
+## Plane-target cap extension (docs/EXTEND3D_ROBUST_HANDOVER.md, Phase E2)
+
+E2 makes `Panel3DSnapSolver.Extend` grow each wall to the ACTUAL cap surface instead of a flat Z at the
+cap's ridge height. Cap SELECTION is the pre-E2 nearest-cap-over-the-wall-centre rule verbatim; what
+changes is the TARGET, gated by a discriminator (`IsCapFlatRelativeToWall`):
+
+- A cap **flat relative to its wall** (its normal aligned within 15° of the wall's own in-plane up-axis
+  — a level floor/ceiling, *including a rigidly tilted level* where wall and slab tilt together) keeps
+  the pre-E2 scalar extend to the cap elevation + overshoot. **Byte-identical.**
+- A cap **pitched relative to the wall** (a real sloped roof over a vertical wall) is followed as a
+  sloped plane via the E1 plane-ops mechanism (`SnappedPanel.ExtendTopToPlane`/`ExtendBottomToPlane`),
+  so the wall gains a matching sloped top. Guards: parallel-plane and base/top-preservation fall back to
+  the scalar path (a diving plane never sweeps material past the wall's opposite extreme).
+
+**Key finding.** The tilted golden fixtures the phase originally named (two-level-tilted,
+whole-level-towers) are *rigidly tilted flat levels*, not sloped-roof models — the discriminator
+correctly routes their caps to the scalar path, so they are byte-identical. Improving those needs
+*frame-aware* extension (extend along the level's tilted up-axis), a larger change deferred out of E2.
+A naive world-Z plane target (tried in development) collapsed two-level-tilted to 3 cells / 254 dropped
+— the discriminator is what prevents that.
+
+### Managed golden re-baseline (E2)
+
+All five **managed** golden pins (`GoldenMasterIntegrationTests.ManagedFixtures`) and the **raw** pins
+are **byte-identical** under E2 (their caps are flat-relative). E2's improvement lands on the real-export
+fixtures (genuine pitched roofs), pinned by `Extend3DPlaneTargetIntegrationTests` (managed `Solve3D`
+report closure):
+
+| Fixture | Before E2 (cells/naked) | After E2 (cells/naked) | Mechanism |
+| --- | --- | --- | --- |
+| whole-level-flat / tilted-two-spaces / whole-level-tilted / two-level-tilted / whole-level-towers | golden pins | **byte-identical** | caps flat-relative to walls → scalar path (incl. tilted levels) |
+| Revit-home-panels | 12 / 4 | 18 / **0** | pitched roofs followed as planes → watertight, more cells (**naked 4 → 0**) |
+| AdjacencyCluster-home | 18 / **25** | 20 / **4** | pitched roofs followed as planes (**naked 25 → 4**) |
+| Face3D-home | 25 / 3 | 22 / **4** | coarser-but-clean managed decomposition; **+1 solver-internal naked** accepted as net-win (owner decision 2026-07-08) |
+
+**Net across fixtures: −22 naked.** The one +1 (Face3D-home) is on the solver's internal closure metric
+(that fixture has no golden pin); on the **workflow** metric every fixture stays parity-clean with zero
+orphans — E2 adds *no* workflow-level naked regression. The gate was relaxed from "no naked increase on
+any fixture" to "net non-increasing" by owner decision; the tradeoff is documented in the
+`Extend3DPlaneTargetIntegrationTests` pins and the `WorkflowParityIntegrationTests` tracking comments.
+
+### Workflow parity re-pins (E2)
+
+`WorkflowParityIntegrationTests` rows changed by E2, each re-pinned with a mechanism note (no silent
+skips): Revit-home-panels A-solver-matched now closes cleanly 18/18 (was under-closing), B 11 vs 18;
+AdjacencyCluster-home A 17/20, B 19/20 (was 18/18 at 25 naked); Face3D-home B now closes cleanly 22/22,
+A 19/22. The tilted fixtures' rows (two-level-tilted, whole-level-towers) are unchanged from E1.
+
+```powershell
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~Extend3DPlaneTargetIntegrationTests"
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~Panel3DSnapSolverTests"
+```
+
 ## ResolvedCellComplex product (docs/CELLCOMPLEX_FIRST_HANDOVER.md, Phase P2)
 
 P2 turns the cell complex the solver validated into a first-class, pure-managed, serializable product

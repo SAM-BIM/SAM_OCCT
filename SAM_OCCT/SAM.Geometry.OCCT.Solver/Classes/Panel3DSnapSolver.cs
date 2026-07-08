@@ -1470,11 +1470,17 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
-        /// Managed extend: grow each (vertical) wall up to the nearest cap - the floor or roof that
-        /// sits above it and covers it in plan - so the native resolve can trim the wall against that
-        /// cap and close the volume. The cap a wall reaches defines its implicit upper level; a wall
-        /// under a pitched roof is over-extended past the ridge so the roof faces split it at the pitch.
-        /// Walls with no cap above (true parapets/outer tops) are left untouched.
+        /// Managed extend: grow each (vertical) wall up to the nearest cap - the floor or roof that sits above
+        /// it and covers it in plan - so the native resolve can trim the wall against that surface and close the
+        /// volume. E2 (docs/EXTEND3D_ROBUST_HANDOVER.md): the SELECTION is the pre-E2 nearest-cap-over-the-wall
+        /// -centre rule (so rigidly-tilted and flat levels stay byte-identical), but the TARGET is now the
+        /// cap's real surface. A cap that is flat relative to the wall (a level floor/ceiling, incl. a tilted
+        /// level) still uses the scalar extend to the cap elevation + overshoot; only a cap genuinely PITCHED
+        /// relative to the wall (a real sloped roof over a vertical wall) is followed as a sloped plane, so the
+        /// wall gains a matching sloped top instead of a flat one at the ridge height - the sloped-roof models
+        /// E2 targets. Walls with no cap above (true parapets/outer tops) are left untouched. Vertical reach
+        /// stays MaxExtension-UNCAPPED (as before E2 - MaxExtension governs the lateral wall-to-wall reach only;
+        /// changing that is out of E2 scope).
         /// </summary>
         public static void Extend(List<SnappedPanel> panels, double verticalAngleTolerance, double overshoot, double toleranceDistance, double roofOvershoot = 0.5, bool includeRoofs = true)
         {
@@ -1519,84 +1525,143 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
-                // Whether a cap sits above (or below) a wall is decided by the cap surface DIRECTLY ABOVE the
-                // wall - the cap plane evaluated at the wall's plan centre - not by the cap's bounding-box
-                // Min/Max Z. For a flat floor the two are identical; for a SLOPED roof they diverge: the roof's
-                // eave (bbox Min.Z) can sit below the wall top while the roof surface over the wall is well
-                // above it (a large space, where the slope spans a wide Z range). Gating on bbox Min.Z then
-                // wrongly rejects that roof as "not above the wall" and leaves the wall short of it - the
-                // reported tilted-roof gap. Evaluating the cap over the wall closes it.
-                double wallPlanX = 0.5 * (wallBox.Min.X + wallBox.Max.X);
-                double wallPlanY = 0.5 * (wallBox.Min.Y + wallBox.Max.Y);
-                double wallTopZ = wallBox.Max.Z;
+                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, overshoot, roofOvershoot, toleranceDistance, true);
+                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, overshoot, roofOvershoot, toleranceDistance, false);
+            }
+        }
 
-                // The nearest cap whose surface above the wall sits above the wall top and covers it in plan.
-                BoundingBox3D nearestCap = null;
-                double nearestCapZ = double.MaxValue;
-                for (int i = 0; i < capBoxes.Count; i++)
+        /// <summary>
+        /// Extends one wall in one direction (<paramref name="up"/> = to a roof/ceiling above; false = to a
+        /// floor below) to the single nearest covering cap over the wall centre. Cap SELECTION is the pre-E2
+        /// rule verbatim (nearest cap whose surface over the wall centre clears the wall extreme, whole-wall
+        /// plan overlap), so the accepted managed baselines do not move on the fixtures E1 already conditioned.
+        /// <para>What E2 changes is the TARGET: a cap that is flat RELATIVE TO THIS WALL (its normal aligned
+        /// with the wall's own up-axis - a level floor/ceiling, including a rigidly TILTED level where wall and
+        /// slab tilt together) takes the pre-E2 scalar extend to the cap's world extreme + overshoot
+        /// (byte-identical - a level cap has a single target elevation). Only a cap genuinely PITCHED relative
+        /// to the wall (a real sloped roof over a vertical wall - the case E2 exists for) takes the sloped plane
+        /// target, so the wall gains a matching sloped top instead of a flat one at the ridge.</para>
+        /// <para>A three-sample / multi-cap covering test (feet + centre, extend to every covering plane) was
+        /// implemented and REJECTED: on the rigidly-tilted golden fixtures it selected extra/farther caps in
+        /// world-Z and collapsed the managed solve (docs/EXTEND3D_ROBUST_HANDOVER.md E2 review notes). A wall
+        /// spanning two roof planes still receives its correct multi-slope top from the native kernel, which
+        /// trims it against every roof face in the cell complex.</para>
+        /// </summary>
+        private static void ExtendWallToNearestCap(SnappedPanel wall, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double overshoot, double roofOvershoot, double toleranceDistance, bool up)
+        {
+            double wallExtreme = up ? wallBox.Max.Z : wallBox.Min.Z;
+            double centreX = 0.5 * (wallBox.Min.X + wallBox.Max.X);
+            double centreY = 0.5 * (wallBox.Min.Y + wallBox.Max.Y);
+
+            int capIndex = NearestCoveringCap(wallBox, centreX, centreY, capBoxes, capPlanes, toleranceDistance, up, wallExtreme);
+            if (capIndex < 0)
+            {
+                return;
+            }
+
+            Plane capPlane = capPlanes[capIndex];
+            BoundingBox3D capBox = capBoxes[capIndex];
+            if (capPlane == null || capBox == null)
+            {
+                return;
+            }
+
+            // Overshoot selection identical to the pre-E2 rule: a thin (flat) cap keeps the small wall overshoot,
+            // a thick (sloped/roof) cap the larger roof overshoot so the under-roof wall clears the pitch.
+            bool capIsRoof = capBox.Max.Z - capBox.Min.Z > toleranceDistance + 0.1;
+            double os = capIsRoof ? roofOvershoot : overshoot;
+
+            bool flatRelative = IsCapFlatRelativeToWall(wall, capPlane);
+            if (up)
+            {
+                if (flatRelative)
                 {
-                    BoundingBox3D cap = capBoxes[i];
-                    if (!OverlapsInPlan(cap, wallBox, toleranceDistance))
-                    {
-                        continue;
-                    }
-
-                    double capZ = CapZAtPlan(capPlanes[i], wallPlanX, wallPlanY, cap.Max.Z);
-                    if (capZ < wallTopZ - toleranceDistance)
-                    {
-                        continue; // the cap surface above the wall is below the wall top - not a cap above
-                    }
-
-                    if (capZ < nearestCapZ)
-                    {
-                        nearestCapZ = capZ;
-                        nearestCap = cap;
-                    }
+                    wall.ExtendTopTo(capBox.Max.Z + os, toleranceDistance);
                 }
-
-                if (nearestCap != null)
+                else
                 {
-                    // Extend to the top of the covering cap (a roof slope's ridge, or a flat floor) plus an
-                    // overshoot so the kernel trims the wall cleanly along the cap. A roof gets a larger
-                    // overshoot so the under-roof wall clears the pitch.
-                    bool capIsRoof = nearestCap.Max.Z - nearestCap.Min.Z > toleranceDistance + 0.1;
-                    double os = capIsRoof ? roofOvershoot : overshoot;
-                    wall.ExtendTopTo(nearestCap.Max.Z + os, toleranceDistance);
-                }
-
-                // ...and down to the nearest cap below, so the wall reaches the floor of its level and the
-                // room can close at the bottom (the "between floors" case). Same surface-above-the-wall
-                // measure, mirrored: the cap whose surface directly under the wall is highest, yet still
-                // below the wall base.
-                double wallBottomZ = wallBox.Min.Z;
-                BoundingBox3D nearestBelow = null;
-                double nearestBelowZ = double.MinValue;
-                for (int i = 0; i < capBoxes.Count; i++)
-                {
-                    BoundingBox3D cap = capBoxes[i];
-                    if (!OverlapsInPlan(cap, wallBox, toleranceDistance))
-                    {
-                        continue;
-                    }
-
-                    double capZ = CapZAtPlan(capPlanes[i], wallPlanX, wallPlanY, cap.Min.Z);
-                    if (capZ > wallBottomZ + toleranceDistance)
-                    {
-                        continue; // the cap surface under the wall is above the wall base - not a cap below
-                    }
-
-                    if (capZ > nearestBelowZ)
-                    {
-                        nearestBelowZ = capZ;
-                        nearestBelow = cap;
-                    }
-                }
-
-                if (nearestBelow != null)
-                {
-                    wall.ExtendBottomTo(nearestBelow.Min.Z - overshoot, toleranceDistance);
+                    wall.ExtendTopToPlane(capPlane, os, toleranceDistance);
                 }
             }
+            else
+            {
+                if (flatRelative)
+                {
+                    wall.ExtendBottomTo(capBox.Min.Z - os, toleranceDistance);
+                }
+                else
+                {
+                    wall.ExtendBottomToPlane(capPlane, os, toleranceDistance);
+                }
+            }
+        }
+
+        /// <summary>
+        /// True when <paramref name="capPlane"/> is a level floor/ceiling FOR THIS WALL - its normal aligned
+        /// (within <see cref="CapFlatnessConeTolerance"/>) with the wall's own in-plane up-axis (world Z
+        /// projected onto the wall plane). A rigidly tilted level (wall and slab tilted together by the same
+        /// frame angle) is flat in this sense - the slab has one target elevation over the wall, so the pre-E2
+        /// scalar extend is correct and byte-identical. Only a cap genuinely pitched relative to the wall (a
+        /// sloped roof over a vertical wall) is NOT flat-relative and takes the E2 sloped plane target. Safe
+        /// default (true = scalar) when either normal is unavailable or the wall is degenerate.
+        /// </summary>
+        private static bool IsCapFlatRelativeToWall(SnappedPanel wall, Plane capPlane)
+        {
+            Vector3D wallNormal = wall?.Plane?.Normal?.Unit;
+            Vector3D capNormal = capPlane?.Normal?.Unit;
+            if (wallNormal == null || capNormal == null)
+            {
+                return true;
+            }
+
+            // The wall's in-plane up-axis: world +Z with its wall-normal component removed. Zero only for a
+            // (near) horizontal wall, which is not a wall - fall back to scalar.
+            Vector3D up = new Vector3D(0, 0, 1) - (wallNormal * (wallNormal.Z));
+            if (up.Length <= 1e-6)
+            {
+                return true;
+            }
+
+            return System.Math.Abs(capNormal.DotProduct(up.Unit)) >= System.Math.Cos(CapFlatnessConeTolerance);
+        }
+
+        /// <summary>Half-angle cone (radians) within which a cap normal counts as aligned with the wall's
+        /// up-axis - i.e. a level floor/ceiling for that wall rather than a pitched roof. 15 degrees: comfortably
+        /// admits rigidly tilted levels (the golden fixtures tilt ~13 degrees, plus modelling noise about the
+        /// frame) while a real roof pitch (typically &gt;=15-20 degrees) reads as pitched and takes the sloped
+        /// plane target.</summary>
+        private const double CapFlatnessConeTolerance = 15.0 * (System.Math.PI / 180.0);
+
+        /// <summary>The nearest cap over plan point (<paramref name="x"/>, <paramref name="y"/>) whose surface
+        /// is beyond the wall extreme in the grow direction (<paramref name="up"/> = above the wall top; false
+        /// = below the base), or -1 if none. Whole-wall plan overlap (the pre-E2 rule), so a slightly-inset cap
+        /// is still found; the surface is read from the cap PLANE at the point (sloped roofs evaluate correctly,
+        /// not by bounding-box Z).</summary>
+        private static int NearestCoveringCap(BoundingBox3D wallBox, double x, double y, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double toleranceDistance, bool up, double wallExtreme)
+        {
+            int best = -1;
+            double bestZ = up ? double.MaxValue : double.MinValue;
+            for (int i = 0; i < capBoxes.Count; i++)
+            {
+                if (!OverlapsInPlan(capBoxes[i], wallBox, toleranceDistance))
+                {
+                    continue;
+                }
+
+                double capZ = CapZAtPlan(capPlanes[i], x, y, up ? capBoxes[i].Max.Z : capBoxes[i].Min.Z);
+                if (up ? capZ < wallExtreme - toleranceDistance : capZ > wallExtreme + toleranceDistance)
+                {
+                    continue; // the cap surface here is beyond the wall extreme on the WRONG side - not a cap
+                }
+
+                if (up ? capZ < bestZ : capZ > bestZ)
+                {
+                    bestZ = capZ;
+                    best = i;
+                }
+            }
+
+            return best;
         }
 
         /// <summary>

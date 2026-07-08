@@ -335,6 +335,37 @@ ACCEPTANCE GATE: full suite green; re-baseline table complete; naked-count rule 
 fixtures; raw goldens byte-identical; P4 may branch only after this PR merges.
 ```
 
+**E2 outcome note (2026-07-08, Opus 4.8 impl):** implemented on branch `feat/extend3d-plane-targets`
+off the merged `sow/2026-Q3`. Two findings reshaped the phase:
+
+1. **The named target fixtures were misdiagnosed.** two-level-tilted and whole-level-towers are
+   *rigidly tilted flat levels*, not sloped-roof models. A naive world-Z plane target collapsed
+   two-level-tilted to **3 cells / 254 dropped** (walls extended to the wrong tilted cap in world-Z).
+   The fix is a discriminator (`IsCapFlatRelativeToWall`): a cap whose normal aligns (within 15°) with
+   the wall's own in-plane up-axis is "flat relative to the wall" — a level slab, *including a tilted
+   level* — and keeps the pre-E2 scalar target (**byte-identical**). Only a cap genuinely *pitched
+   relative to the wall* (a real roof over a vertical wall) takes the sloped plane. Cap SELECTION stays
+   the pre-E2 single-nearest-over-centre rule (the multi-sample/multi-cap covering test of task 1 was
+   implemented and **rejected** — it selected farther caps in world-Z and broke the tilted fixtures).
+   So all 5 golden pins (raw AND managed) are byte-identical; the tilted fixtures do **not** improve —
+   that needs *frame-aware* extension (extend along the level up-axis), deferred as a follow-up (call
+   it E4 or fold into a frame pass).
+
+2. **The improvement lands on the real-export fixtures**, which have genuine pitched roofs:
+   Revit-home-panels naked 4 → **0** (cells 12 → 18), AdjacencyCluster-home naked **25 → 4**,
+   Face3D-home 25/3 → 22/**4** (+1 solver-internal naked). Net across fixtures **−22 naked**, but the
+   +1 on Face3D-home violated the literal "no naked increase on ANY fixture" gate. Exhaustive tuning
+   (flatness cone 8–90°, foot-sampling, plan-footprint guard, roofs-only) could not remove that +1
+   without regressing a *different* fixture — plane-targeting messy real geometry is intrinsically a
+   mixed bag. On the **workflow** metric every fixture stays parity-clean with zero orphans (no
+   workflow-level naked regression). **Owner decision (2026-07-08): ship the net-win, relax the gate
+   from "any fixture" to "net non-increasing."** The E2 review below should treat the naked-count check
+   as "net non-increasing + every workflow parity-clean," and confirm the discriminator keeps the
+   tilted/flat goldens byte-identical, rather than "no increase on any fixture."
+
+Re-baseline table: TESTING.md "E2" section (managed goldens byte-identical; real-export pins in
+`Extend3DPlaneTargetIntegrationTests`; harness rows re-pinned in `WorkflowParityIntegrationTests`).
+
 ## 6. E2 review prompt (Fable 5, Max — adversarial)
 
 ```
