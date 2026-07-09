@@ -1295,7 +1295,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// Native-free (pure managed Shell/Face3D geometry); the pure decision stays in
         /// <see cref="EvaluateRawAdoption"/>, which just receives this count.</para>
         /// </summary>
-        private static int CountUnderSplitCells(List<Face3D> droppedFace3Ds, IReadOnlyList<SolverCell> cells, double verticalAngleTolerance, double fuzzyTolerance, double tolerance, out List<string> details)
+        private static int CountUnderSplitCells(List<Face3D> droppedFace3Ds, IReadOnlyList<SolverCell> cells, Vector3D up, double verticalAngleTolerance, double fuzzyTolerance, double tolerance, out List<string> details)
         {
             details = new List<string>();
             if (droppedFace3Ds == null || droppedFace3Ds.Count == 0 || cells == null || cells.Count == 0)
@@ -1303,15 +1303,21 @@ namespace SAM.Geometry.OCCT.Solver
                 return 0;
             }
 
-            double maxVerticalNormalZ = System.Math.Sin(verticalAngleTolerance); // |n.Z| at/below this => wall-like
+            // Measure wall-likeness and spans against the level's UP axis, not world Z: on a tilted-level solve
+            // Solve3D sets Up to the level normal, and a partition vertical RELATIVE to that level has a world
+            // normal well off horizontal (codex #7 review). For a flat level Up is (0,0,1) and every projection
+            // below reduces to the world-Z form. Height = extent along Up; plan width = extent along Up x normal
+            // (the horizontal-in-level tangent the divider runs along).
+            Vector3D upUnit = (up == null || up.Length <= tolerance) ? new Vector3D(0, 0, 1) : up.Unit;
+            double maxAlongUp = System.Math.Sin(verticalAngleTolerance); // |n.up| at/below this => wall-like
             HashSet<int> underSplitCells = new HashSet<int>();
 
             foreach (Face3D dropped in droppedFace3Ds)
             {
                 Vector3D normal = dropped?.GetPlane()?.Normal?.Unit;
-                if (normal == null || System.Math.Abs(normal.Z) > maxVerticalNormalZ)
+                if (normal == null || System.Math.Abs(normal.DotProduct(upUnit)) > maxAlongUp)
                 {
-                    continue; // only a vertical (wall-like) face can be a room-dividing partition
+                    continue; // only a face vertical relative to the level (wall-like) can be a room divider
                 }
 
                 Point3D internalPoint = dropped.GetInternalPoint3D(tolerance);
@@ -1321,11 +1327,15 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
-                // The horizontal tangent along the partition (perpendicular to its normal): the direction a
-                // room divider runs. Used to measure how much of the cell's plan width the partition spans.
-                double tx = -normal.Y;
-                double ty = normal.X;
-                double tLength = System.Math.Sqrt((tx * tx) + (ty * ty));
+                // The in-level horizontal tangent along the partition (perpendicular to both Up and the
+                // partition normal): the direction a room divider runs. Zero-length only if normal || Up, which
+                // the wall-like test above already excluded.
+                Vector3D tangent = upUnit.CrossProduct(normal);
+                if (tangent.Length <= tolerance)
+                {
+                    continue;
+                }
+                Vector3D tangentUnit = tangent.Unit;
 
                 for (int c = 0; c < cells.Count; c++)
                 {
@@ -1352,22 +1362,16 @@ namespace SAM.Geometry.OCCT.Solver
                         continue;
                     }
 
-                    double cellHeight = cellBox.Max.Z - cellBox.Min.Z;
-                    double faceHeight = faceBox.Max.Z - faceBox.Min.Z;
+                    double cellHeight = ProjectedExtent(cellBox, upUnit);
+                    double faceHeight = ProjectedExtent(faceBox, upUnit);
                     if (cellHeight <= tolerance || faceHeight < UNDER_SPLIT_MIN_HEIGHT_RATIO * cellHeight)
                     {
                         continue; // a partial-height fin, not a room-height partition
                     }
 
-                    // Plan span: the extent of each axis-aligned bbox projected onto the partition's horizontal
-                    // tangent (|dx*tx| + |dy*ty|). A real divider runs wall-to-wall; a fragment does not.
-                    if (tLength <= tolerance)
-                    {
-                        continue; // degenerate (near-horizontal normal already excluded, but guard the division)
-                    }
-
-                    double facePlan = (System.Math.Abs((faceBox.Max.X - faceBox.Min.X) * tx) + System.Math.Abs((faceBox.Max.Y - faceBox.Min.Y) * ty)) / tLength;
-                    double cellPlan = (System.Math.Abs((cellBox.Max.X - cellBox.Min.X) * tx) + System.Math.Abs((cellBox.Max.Y - cellBox.Min.Y) * ty)) / tLength;
+                    // Plan span along the divider's run: a real divider reaches wall-to-wall, a fragment does not.
+                    double facePlan = ProjectedExtent(faceBox, tangentUnit);
+                    double cellPlan = ProjectedExtent(cellBox, tangentUnit);
                     if (cellPlan <= tolerance || facePlan < UNDER_SPLIT_MIN_PLAN_RATIO * cellPlan)
                     {
                         continue; // does not span the cell wall-to-wall - a partial element, not a divider
@@ -1382,6 +1386,16 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return underSplitCells.Count;
+        }
+
+        /// <summary>The extent of an axis-aligned <paramref name="boundingBox3D"/> projected onto unit vector
+        /// <paramref name="unit"/>: the sum of each dimension times the corresponding component magnitude. For
+        /// <paramref name="unit"/> = (0,0,1) this is just the box's Z height.</summary>
+        private static double ProjectedExtent(BoundingBox3D boundingBox3D, Vector3D unit)
+        {
+            return (System.Math.Abs((boundingBox3D.Max.X - boundingBox3D.Min.X) * unit.X)
+                + System.Math.Abs((boundingBox3D.Max.Y - boundingBox3D.Min.Y) * unit.Y)
+                + System.Math.Abs((boundingBox3D.Max.Z - boundingBox3D.Min.Z) * unit.Z));
         }
 
         /// <summary>
@@ -2707,7 +2721,7 @@ namespace SAM.Geometry.OCCT.Solver
                 // Codex #7: the finer "watertight-but-wrong" net the dropped-RATIO check misses - a dropped
                 // wall-like face sitting strictly inside an adopted cell is a partition that failed to split its
                 // room, so two rooms merged into one cell (droppedRatio stays low because only one face dropped).
-                underSplitCellCount = CountUnderSplitCells(droppedFace3Ds, solverCells, VerticalAngleTolerance, rawOptions.FuzzyTolerance, rawOptions.Tolerance, out underSplitDetails);
+                underSplitCellCount = CountUnderSplitCells(droppedFace3Ds, solverCells, Up, VerticalAngleTolerance, rawOptions.FuzzyTolerance, rawOptions.Tolerance, out underSplitDetails);
             }
 
             RawAdoptionOutcome outcome = EvaluateRawAdoption(cells, resolved.Count, nakedEdgeCount, sliverCellCount, droppedRatio, MaxDroppedRatio, underSplitCellCount);
