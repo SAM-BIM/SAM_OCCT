@@ -78,6 +78,13 @@ namespace SAM.Analytical.OCCT.Solver
         /// <see cref="ExtendPreviewSegment3Ds"/> for the moved-edge preview geometry.</summary>
         public IReadOnlyList<ExtendRecord> ExtendRecords { get; }
 
+        /// <summary>Already-formatted per-panel extend diagnostics carried on the conditioned panels
+        /// themselves (currently <c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c>, emitted when a footprint trim clips an
+        /// opening - E1/R6). Kept on the report so the dedicated extend observability output
+        /// (<see cref="FormatExtendReport"/>) surfaces a dropped opening, not only the general diagnostics
+        /// list. Empty when no trim dropped a hole.</summary>
+        public IReadOnlyList<string> ExtendPanelDiagnostics { get; }
+
         public Solve3DReport(
             bool rawAdopted,
             ClosureSignature3D signature,
@@ -95,7 +102,8 @@ namespace SAM.Analytical.OCCT.Solver
             int rounds = 0,
             int roundsAccepted = 0,
             ResolvedCellComplex resolvedCellComplex = null,
-            IReadOnlyList<ExtendRecord> extendRecords = null)
+            IReadOnlyList<ExtendRecord> extendRecords = null,
+            IReadOnlyList<string> extendPanelDiagnostics = null)
         {
             RawAdopted = rawAdopted;
             Signature = signature;
@@ -114,6 +122,7 @@ namespace SAM.Analytical.OCCT.Solver
             RoundsAccepted = roundsAccepted;
             ResolvedCellComplex = resolvedCellComplex;
             ExtendRecords = extendRecords ?? new List<ExtendRecord>();
+            ExtendPanelDiagnostics = extendPanelDiagnostics ?? new List<string>();
 
             ClosureReportText = ClosureReport.Format(rawAdopted, signature, rawAttemptSignature, Diagnostics, rounds, roundsAccepted, LevelFrames);
         }
@@ -136,6 +145,17 @@ namespace SAM.Analytical.OCCT.Solver
         public List<string> FormatExtendRecords()
         {
             return SolverReportFormat.FormatExtendRecords(ExtendRecords, Sources);
+        }
+
+        /// <summary>The full extend observability report: the per-op <c>SAM_OCCT_EXTEND3D_PANEL:</c> lines
+        /// (<see cref="FormatExtendRecords"/>) FOLLOWED by any <c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c> a footprint
+        /// trim recorded (<see cref="ExtendPanelDiagnostics"/>) - so a dropped opening is never missing from the
+        /// dedicated observability output, only from the general diagnostics list (E3).</summary>
+        public List<string> FormatExtendReport()
+        {
+            List<string> result = FormatExtendRecords();
+            result.AddRange(ExtendPanelDiagnostics);
+            return result;
         }
 
         /// <summary>The moved-edge preview segments for this report's <see cref="ExtendRecords"/> (E3).</summary>

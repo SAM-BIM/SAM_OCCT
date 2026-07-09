@@ -548,6 +548,13 @@ namespace SAM.Geometry.OCCT.Solver
                 }
             }
 
+            // E3 source attribution: the records carry CLEAN-face ordinals (Register stamps the clean ordinal
+            // as each SnappedPanel's source index, and conditioning never merges panels). Map them back to the
+            // ORIGINAL input source index via the snap stage's per-clean-face attribution, so the analytical
+            // layer resolves the right source Guid even when Stage A merged/reordered faces (before this the
+            // SAM_OCCT_EXTEND3D_PANEL line could name the wrong panel). Recording-only - geometry untouched.
+            RemapExtendRecordSourceIndices(extendRecords, snapResult.SourceIndicesPerFace);
+
             ExtendRecords = extendRecords;
             ResolvedFace3Ds = snappedFace3Ds;
 
@@ -1447,12 +1454,52 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>The panel's representative source-face index (its first <see cref="SnappedPanel.SourceIndices"/>)
-        /// for an <see cref="ExtendRecord"/>; -1 when it carries none. The analytical layer maps this to the
-        /// source panel's Guid (the geometry solver has no Guids).</summary>
+        /// for an <see cref="ExtendRecord"/>; -1 when it carries none. On the managed path this is the CLEAN-face
+        /// ordinal (see <see cref="Register"/>); <see cref="RemapExtendRecordSourceIndices"/> converts it to the
+        /// original input source index once conditioning is done.</summary>
         private static int RepresentativeSource(SnappedPanel panel)
         {
             List<int> sourceIndices = panel?.SourceIndices;
             return sourceIndices != null && sourceIndices.Count > 0 ? sourceIndices[0] : -1;
+        }
+
+        /// <summary>Remaps every record's <see cref="ExtendRecord.SourceIndex"/>/<see cref="ExtendRecord.TargetSourceIndex"/>
+        /// from the CLEAN-face ordinal it was emitted with to the ORIGINAL input source index, via the snap
+        /// stage's per-clean-face attribution (<c>SnapStage.Result.SourceIndicesPerFace</c>, index-aligned to the
+        /// clean faces the panels were registered from). A clean face is dropped/merged from one or more input
+        /// sources; the representative is the first. Leaves an index untouched when there is no attribution to
+        /// map it through (keeps -1 as -1). Recording-only.</summary>
+        private static void RemapExtendRecordSourceIndices(List<ExtendRecord> records, List<List<int>> sourceIndicesPerFace)
+        {
+            if (records == null)
+            {
+                return;
+            }
+
+            foreach (ExtendRecord record in records)
+            {
+                if (record == null)
+                {
+                    continue;
+                }
+
+                record.SourceIndex = MapCleanOrdinalToSource(record.SourceIndex, sourceIndicesPerFace);
+                record.TargetSourceIndex = MapCleanOrdinalToSource(record.TargetSourceIndex, sourceIndicesPerFace);
+            }
+        }
+
+        /// <summary>The representative original input source index for a clean-face ordinal (first of its
+        /// <c>SourceIndicesPerFace</c> entry); -1 when the ordinal is -1, out of range, or has no recorded
+        /// source.</summary>
+        private static int MapCleanOrdinalToSource(int cleanOrdinal, List<List<int>> sourceIndicesPerFace)
+        {
+            if (cleanOrdinal < 0 || sourceIndicesPerFace == null || cleanOrdinal >= sourceIndicesPerFace.Count)
+            {
+                return -1;
+            }
+
+            List<int> sources = sourceIndicesPerFace[cleanOrdinal];
+            return sources != null && sources.Count > 0 ? sources[0] : -1;
         }
 
         /// <summary>
