@@ -112,5 +112,62 @@ namespace SAM.OCCT.UnitTests
 
             Assert.Equal(expected, outcome);
         }
+
+        // ── Under-split gate (codex #7, P4): the finer watertight-but-wrong net ────────────────────
+
+        [Fact]
+        public void EvaluateRawAdoption_UnderSplitWithLowDroppedRatio_ReturnsRejectedUnderSplit()
+        {
+            // The door-cut partition case: only one partition face is dropped (ratio well under the max, so the
+            // dropped-ratio check passes) but it sits inside a cell - two rooms merged. The under-split net catches it.
+            RawAdoptionOutcome outcome = Panel3DSnapSolver.EvaluateRawAdoption(
+                cellCount: 1, resolvedFaceCount: 11, nakedEdgeCount: 0, sliverCellCount: 0, droppedRatio: 0.09, maxDroppedRatio: MaxDroppedRatio, underSplitCellCount: 1);
+
+            Assert.Equal(RawAdoptionOutcome.RejectedUnderSplit, outcome);
+        }
+
+        [Fact]
+        public void EvaluateRawAdoption_NoUnderSplit_ReturnsAdopted()
+        {
+            // Zero under-split cells (the default) is the calibrated golden-master behaviour: a clean raw solve
+            // with a few naturally-dropped faces (none interior to a cell) is still adopted.
+            RawAdoptionOutcome outcome = Panel3DSnapSolver.EvaluateRawAdoption(
+                cellCount: 22, resolvedFaceCount: 148, nakedEdgeCount: 0, sliverCellCount: 0, droppedRatio: 0.05, maxDroppedRatio: MaxDroppedRatio, underSplitCellCount: 0);
+
+            Assert.Equal(RawAdoptionOutcome.Adopted, outcome);
+        }
+
+        [Fact]
+        public void EvaluateRawAdoption_UnderSplitOmitted_DefaultsToNotRejecting()
+        {
+            // The new gate input is an optional trailing parameter, so every pre-P4 call site (and this 6-arg
+            // form) behaves exactly as before - the under-split check defaults off.
+            RawAdoptionOutcome outcome = Panel3DSnapSolver.EvaluateRawAdoption(
+                cellCount: 3, resolvedFaceCount: 18, nakedEdgeCount: 0, sliverCellCount: 0, droppedRatio: 0.0, maxDroppedRatio: MaxDroppedRatio);
+
+            Assert.Equal(RawAdoptionOutcome.Adopted, outcome);
+        }
+
+        [Fact]
+        public void EvaluateRawAdoption_NakedEdgesAndUnderSplitBothPresent_NakedEdgesTakePrecedence()
+        {
+            // A gappy solve is reported as gappy first; under-split (a watertight-but-wrong check) only matters
+            // once the envelope is closed - matching TryRawResolve, which measures under-split only when naked==0.
+            RawAdoptionOutcome outcome = Panel3DSnapSolver.EvaluateRawAdoption(
+                cellCount: 1, resolvedFaceCount: 11, nakedEdgeCount: 3, sliverCellCount: 0, droppedRatio: 0.09, maxDroppedRatio: MaxDroppedRatio, underSplitCellCount: 2);
+
+            Assert.Equal(RawAdoptionOutcome.RejectedNakedEdges, outcome);
+        }
+
+        [Fact]
+        public void EvaluateRawAdoption_DroppedRatioAndUnderSplitBothPresent_DroppedRatioTakesPrecedence()
+        {
+            // When the coarse dropped-ratio ceiling is already exceeded, that (grosser) reason is reported; the
+            // under-split net is specifically for the case the ratio check misses (few faces dropped).
+            RawAdoptionOutcome outcome = Panel3DSnapSolver.EvaluateRawAdoption(
+                cellCount: 1, resolvedFaceCount: 11, nakedEdgeCount: 0, sliverCellCount: 0, droppedRatio: 0.5, maxDroppedRatio: MaxDroppedRatio, underSplitCellCount: 1);
+
+            Assert.Equal(RawAdoptionOutcome.RejectedDroppedRatio, outcome);
+        }
     }
 }

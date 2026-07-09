@@ -42,6 +42,10 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>An input face has no surviving representation in the resolved output.</summary>
         DroppedFace,
 
+        /// <summary>Raw adoption rejected because a dropped room-dividing partition sits strictly inside an
+        /// adopted cell (rooms merged watertight-but-wrong) - the under-split gate (codex #7, P4).</summary>
+        UnderSplit,
+
         /// <summary>
         /// A native-history composition gap: an input face that the history neither mapped to an
         /// output nor recorded as deleted, or an output face no input maps to (reverse gap). The

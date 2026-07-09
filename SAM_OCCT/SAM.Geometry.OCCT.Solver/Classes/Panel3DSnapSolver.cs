@@ -46,6 +46,21 @@ namespace SAM.Geometry.OCCT.Solver
         /// stub cannot extend unrealistically far. Mirrors the 2D <c>SnappedWall.ExtensionLimitLengthRatio</c>.</summary>
         public const double EXTENSION_LIMIT_LENGTH_RATIO = 0.49;
 
+        /// <summary>Under-split gate (codex #7): a dropped wall-like face counts as a room-dividing partition
+        /// only when its vertical extent spans at least this fraction of the cell it sits inside AND its plan
+        /// width (perpendicular to its own normal) spans at least <see cref="UNDER_SPLIT_MIN_PLAN_RATIO"/> of the
+        /// cell - i.e. it very nearly fills the cell's cross-section, the way a wall that genuinely divides a
+        /// room into two must. A partial-height fin, a short balcony upstand, or a fragment interior to a large
+        /// real room all fall short of one bound and are ignored. Deliberately high (conservative): a false
+        /// positive pushes a well-modelled input onto the weaker managed pipeline.</summary>
+        public const double UNDER_SPLIT_MIN_HEIGHT_RATIO = 0.8;
+
+        /// <summary>Under-split gate (codex #7): the minimum fraction of the containing cell's plan width - in
+        /// the horizontal direction perpendicular to the dropped partition's own normal - the partition must
+        /// span to count as a room divider (a real partition reaches wall-to-wall). Paired with
+        /// <see cref="UNDER_SPLIT_MIN_HEIGHT_RATIO"/>; both must hold.</summary>
+        public const double UNDER_SPLIT_MIN_PLAN_RATIO = 0.7;
+
         private readonly List<Face3D> face3Ds;
         private readonly List<double> bucketSizes;
         private readonly List<double> weights;
@@ -739,7 +754,24 @@ namespace SAM.Geometry.OCCT.Solver
             ResolvedCellComplex managedComplex = null;
 
             bool tryRebuild = ConsolidateRebuild && (patchFace3Ds.Count + retainedFace3Ds.Count) > 0;
-            int appendedNaked = tryRebuild ? ResolveStage.NakedEdgeCount(appended, occtOptions) : 0;
+
+            // The APPENDED (unimprinted) set is the fallback kept if the consolidation rebuild is rejected, so
+            // its OWN decoded cell/naked counts are the correct no-regress baseline - NOT the pre-append
+            // resolveCellCount (codex #3). resolveCellCount is measured before patches/retained were appended
+            // and is typically LOWER, which let a rebuild that DISSOLVED a separator (fewer cells than the
+            // appended fallback = two rooms merged into one) still pass rebuiltCells >= resolveCellCount and be
+            // wrongly adopted. Decode the appended set ONCE here (only when a rebuild is attempted) and reuse it
+            // in the reject path below, so the reject path adds no second decode.
+            int appendedNaked = 0;
+            int appendedCells = resolveCellCount;
+            List<double> appendedVolumes = new List<double>();
+            List<SolverCell> appendedSolverCells = new List<SolverCell>();
+            ResolvedCellComplex appendedComplex = null;
+            if (tryRebuild)
+            {
+                appendedNaked = ResolveStage.NakedEdgeCount(appended, occtOptions);
+                appendedVolumes = DecodeCellVolumes(appended, occtOptions, SolveId, out appendedCells, out appendedSolverCells, out appendedComplex);
+            }
 
             if (tryRebuild)
             {
@@ -765,9 +797,9 @@ namespace SAM.Geometry.OCCT.Solver
                     OcctHistory rebuildHistory = rebuildResult.History;
                     int rebuiltNaked = ResolveStage.NakedEdgeCount(rebuiltFaces, occtOptions);
 
-                    // Accept iff the rebuild does not regress: cells not reduced AND naked not increased
-                    // versus the appended-unimprinted alternative (§H / §I acceptance rule).
-                    if (rebuiltFaces.Count != 0 && rebuiltCells >= resolveCellCount && rebuiltNaked <= appendedNaked)
+                    // Accept iff the rebuild does not regress versus the appended-unimprinted fallback it would
+                    // replace (§H / §I acceptance rule); baseline is the appended set's OWN counts (codex #3).
+                    if (AcceptConsolidationRebuild(rebuiltFaces.Count, rebuiltCells, rebuiltNaked, appendedCells, appendedNaked))
                     {
                         finalFaces = rebuiltFaces;
                         cellCount = rebuiltCells;
@@ -782,7 +814,7 @@ namespace SAM.Geometry.OCCT.Solver
                     else
                     {
                         Diagnostics.Add(SolverStage.Heal, DiagnosticCode.RejectedSew, OcctDiagnosticSeverity.Warning,
-                            string.Format("Consolidation rebuild regressed (cells {0} vs pre {1}; naked {2} vs appended {3}); patches/retained appended unimprinted.", rebuiltCells, resolveCellCount, rebuiltNaked, appendedNaked));
+                            string.Format("Consolidation rebuild regressed (cells {0} vs appended {1}; naked {2} vs appended {3}); patches/retained appended unimprinted.", rebuiltCells, appendedCells, rebuiltNaked, appendedNaked));
                     }
                 }
 
@@ -802,7 +834,19 @@ namespace SAM.Geometry.OCCT.Solver
 
                 RecordRetainedProvenance(finalMap, retainedStart, retainedFace3Ds.Count, retainedSourceIndices);
 
-                cellVolumes = DecodeCellVolumes(appended, occtOptions, SolveId, out cellCount, out solverCells, out managedComplex);
+                if (tryRebuild)
+                {
+                    // Reuse the up-front appended decode (codex #3) - the fallback geometry is exactly `appended`,
+                    // already decoded for the acceptance baseline, so do not decode it a second time.
+                    cellVolumes = appendedVolumes;
+                    cellCount = appendedCells;
+                    solverCells = appendedSolverCells;
+                    managedComplex = appendedComplex;
+                }
+                else
+                {
+                    cellVolumes = DecodeCellVolumes(appended, occtOptions, SolveId, out cellCount, out solverCells, out managedComplex);
+                }
             }
 
             // Publish the adopted geometry + provenance. HoleFillFace3Ds stays the patch set (the air-panel
@@ -1232,6 +1276,112 @@ namespace SAM.Geometry.OCCT.Solver
             return point3D.X >= min.X - tolerance && point3D.X <= max.X + tolerance
                 && point3D.Y >= min.Y - tolerance && point3D.Y <= max.Y + tolerance
                 && point3D.Z >= min.Z - tolerance && point3D.Z <= max.Z + tolerance;
+        }
+
+        /// <summary>
+        /// Counts adopted cells that harbour a dropped room-dividing partition - the under-split gate's
+        /// geometric measurement (codex #7, P4). A cell is under-split when some dropped (unrepresented)
+        /// input face is: (1) wall-like (its normal is within <see cref="VerticalAngleTolerance"/> of
+        /// horizontal - only a wall divides rooms in plan); (2) strictly INTERIOR to that one cell (its
+        /// interior point is inside the cell and not merely on its boundary - a face used AS a separator sits
+        /// on the boundary and is represented, so is never a dropped face); and (3) spanning at least
+        /// <see cref="UNDER_SPLIT_MIN_HEIGHT_RATIO"/> of the cell's height (a real partition, even one stopping
+        /// short of the ceiling - not a short decorative fin). Such a face is a partition the raw build failed
+        /// to imprint, so the rooms it should have separated merged into one watertight cell.
+        /// <para>Deliberately conservative (errs toward NOT rejecting, since a false positive pushes a
+        /// well-modelled input onto the weaker managed pipeline): a horizontal cap sliver, a stray face outside
+        /// every cell, a boundary-coincident face, and a short fin are all excluded - so atria, courtyard rings
+        /// and double-height rooms (none of which contain a dropped full-height interior wall) do not trip it.
+        /// Native-free (pure managed Shell/Face3D geometry); the pure decision stays in
+        /// <see cref="EvaluateRawAdoption"/>, which just receives this count.</para>
+        /// </summary>
+        private static int CountUnderSplitCells(List<Face3D> droppedFace3Ds, IReadOnlyList<SolverCell> cells, double verticalAngleTolerance, double fuzzyTolerance, double tolerance, out List<string> details)
+        {
+            details = new List<string>();
+            if (droppedFace3Ds == null || droppedFace3Ds.Count == 0 || cells == null || cells.Count == 0)
+            {
+                return 0;
+            }
+
+            double maxVerticalNormalZ = System.Math.Sin(verticalAngleTolerance); // |n.Z| at/below this => wall-like
+            HashSet<int> underSplitCells = new HashSet<int>();
+
+            foreach (Face3D dropped in droppedFace3Ds)
+            {
+                Vector3D normal = dropped?.GetPlane()?.Normal?.Unit;
+                if (normal == null || System.Math.Abs(normal.Z) > maxVerticalNormalZ)
+                {
+                    continue; // only a vertical (wall-like) face can be a room-dividing partition
+                }
+
+                Point3D internalPoint = dropped.GetInternalPoint3D(tolerance);
+                BoundingBox3D faceBox = dropped.GetBoundingBox();
+                if (internalPoint == null || faceBox == null)
+                {
+                    continue;
+                }
+
+                // The horizontal tangent along the partition (perpendicular to its normal): the direction a
+                // room divider runs. Used to measure how much of the cell's plan width the partition spans.
+                double tx = -normal.Y;
+                double ty = normal.X;
+                double tLength = System.Math.Sqrt((tx * tx) + (ty * ty));
+
+                for (int c = 0; c < cells.Count; c++)
+                {
+                    if (underSplitCells.Contains(c))
+                    {
+                        continue; // this cell is already counted
+                    }
+
+                    Shell shell = cells[c]?.Shell;
+                    if (shell == null)
+                    {
+                        continue;
+                    }
+
+                    // Strictly interior: inside the cell AND not merely on its boundary.
+                    if (!shell.Inside(internalPoint, fuzzyTolerance, tolerance) || shell.On(internalPoint, tolerance))
+                    {
+                        continue;
+                    }
+
+                    BoundingBox3D cellBox = shell.GetBoundingBox();
+                    if (cellBox == null)
+                    {
+                        continue;
+                    }
+
+                    double cellHeight = cellBox.Max.Z - cellBox.Min.Z;
+                    double faceHeight = faceBox.Max.Z - faceBox.Min.Z;
+                    if (cellHeight <= tolerance || faceHeight < UNDER_SPLIT_MIN_HEIGHT_RATIO * cellHeight)
+                    {
+                        continue; // a partial-height fin, not a room-height partition
+                    }
+
+                    // Plan span: the extent of each axis-aligned bbox projected onto the partition's horizontal
+                    // tangent (|dx*tx| + |dy*ty|). A real divider runs wall-to-wall; a fragment does not.
+                    if (tLength <= tolerance)
+                    {
+                        continue; // degenerate (near-horizontal normal already excluded, but guard the division)
+                    }
+
+                    double facePlan = (System.Math.Abs((faceBox.Max.X - faceBox.Min.X) * tx) + System.Math.Abs((faceBox.Max.Y - faceBox.Min.Y) * ty)) / tLength;
+                    double cellPlan = (System.Math.Abs((cellBox.Max.X - cellBox.Min.X) * tx) + System.Math.Abs((cellBox.Max.Y - cellBox.Min.Y) * ty)) / tLength;
+                    if (cellPlan <= tolerance || facePlan < UNDER_SPLIT_MIN_PLAN_RATIO * cellPlan)
+                    {
+                        continue; // does not span the cell wall-to-wall - a partial element, not a divider
+                    }
+
+                    underSplitCells.Add(c);
+                    details.Add(string.Format(
+                        "cell {0} (vol {1:0.###} m3, height {2:0.###} m) harbours a dropped partition spanning {3:P0} of its height and {4:P0} of its plan width at ({5:0.##}, {6:0.##}, {7:0.##})",
+                        c, cells[c].Volume, cellHeight, faceHeight / cellHeight, facePlan / cellPlan, internalPoint.X, internalPoint.Y, internalPoint.Z));
+                    break;
+                }
+            }
+
+            return underSplitCells.Count;
         }
 
         /// <summary>
@@ -2515,6 +2665,8 @@ namespace SAM.Geometry.OCCT.Solver
             List<Face3D> droppedFace3Ds = new List<Face3D>();
             List<int> droppedSourceIndices = new List<int>();
             double droppedRatio = 0;
+            int underSplitCellCount = 0;
+            List<string> underSplitDetails = new List<string>();
 
             if (nakedEdgeCount == 0)
             {
@@ -2551,9 +2703,14 @@ namespace SAM.Geometry.OCCT.Solver
                 }
 
                 droppedRatio = rawFace3Ds.Count == 0 ? 0 : (double)droppedFace3Ds.Count / rawFace3Ds.Count;
+
+                // Codex #7: the finer "watertight-but-wrong" net the dropped-RATIO check misses - a dropped
+                // wall-like face sitting strictly inside an adopted cell is a partition that failed to split its
+                // room, so two rooms merged into one cell (droppedRatio stays low because only one face dropped).
+                underSplitCellCount = CountUnderSplitCells(droppedFace3Ds, solverCells, VerticalAngleTolerance, rawOptions.FuzzyTolerance, rawOptions.Tolerance, out underSplitDetails);
             }
 
-            RawAdoptionOutcome outcome = EvaluateRawAdoption(cells, resolved.Count, nakedEdgeCount, sliverCellCount, droppedRatio, MaxDroppedRatio);
+            RawAdoptionOutcome outcome = EvaluateRawAdoption(cells, resolved.Count, nakedEdgeCount, sliverCellCount, droppedRatio, MaxDroppedRatio, underSplitCellCount);
             switch (outcome)
             {
                 case RawAdoptionOutcome.RejectedNakedEdges:
@@ -2572,6 +2729,12 @@ namespace SAM.Geometry.OCCT.Solver
                     Diagnostics.Add(SolverStage.Resolve, DiagnosticCode.DroppedFace, OcctDiagnosticSeverity.Warning,
                         string.Format("Raw (L0) resolve dropped {0} of {1} input face(s) ({2:P0} > {3:P0} max); not adopted.",
                             droppedFace3Ds.Count, rawFace3Ds.Count, droppedRatio, MaxDroppedRatio));
+                    return false;
+
+                case RawAdoptionOutcome.RejectedUnderSplit:
+                    Diagnostics.Add(SolverStage.Resolve, DiagnosticCode.UnderSplit, OcctDiagnosticSeverity.Warning,
+                        string.Format("Raw (L0) resolve under-split: {0} adopted cell(s) harbour a dropped room-dividing partition (a watertight-but-wrong merge the {1:P0}-max dropped-ratio check did not catch at {2:P0}); not adopted. {3}",
+                            underSplitCellCount, MaxDroppedRatio, droppedRatio, string.Join("; ", underSplitDetails)));
                     return false;
 
                 case RawAdoptionOutcome.RejectedNoCells:
@@ -2629,9 +2792,12 @@ namespace SAM.Geometry.OCCT.Solver
         /// (naked edges), then the two "watertight-but-wrong" cases a naked-edge check alone cannot see (a
         /// sliver artifact cell, or too many input faces silently dropped because they bound no closed cell) -
         /// each closes a distinct failure mode found on real fixtures
-        /// (docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md §C, Phase 1).
+        /// (docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md §C, Phase 1). <paramref name="underSplitCellCount"/>
+        /// (codex #7, P4) is the count of adopted cells found to harbour a dropped room-dividing partition -
+        /// the caller computes it geometrically (<see cref="CountUnderSplitCells"/>) and passes it here so this
+        /// rule stays pure and unit-testable across every branch.
         /// </summary>
-        public static RawAdoptionOutcome EvaluateRawAdoption(int cellCount, int resolvedFaceCount, int nakedEdgeCount, int sliverCellCount, double droppedRatio, double maxDroppedRatio)
+        public static RawAdoptionOutcome EvaluateRawAdoption(int cellCount, int resolvedFaceCount, int nakedEdgeCount, int sliverCellCount, double droppedRatio, double maxDroppedRatio, int underSplitCellCount = 0)
         {
             if (cellCount < 1 || resolvedFaceCount == 0)
             {
@@ -2653,7 +2819,28 @@ namespace SAM.Geometry.OCCT.Solver
                 return RawAdoptionOutcome.RejectedDroppedRatio;
             }
 
+            // The finer net after the coarse dropped-RATIO check: even when only a few faces are dropped (ratio
+            // under the max), a single dropped partition sitting strictly inside a cell means rooms merged.
+            if (underSplitCellCount > 0)
+            {
+                return RawAdoptionOutcome.RejectedUnderSplit;
+            }
+
             return RawAdoptionOutcome.Adopted;
+        }
+
+        /// <summary>
+        /// The consolidation-rebuild acceptance rule (codex #3, P4), pure and native-free so it is unit-testable:
+        /// the direct (history-capturing) rebuild of the appended set is adopted only when it does NOT regress
+        /// versus the appended-unimprinted fallback it would replace - it produced faces, kept AT LEAST as many
+        /// cells (a rebuild that DISSOLVED a room-dividing separator would form fewer, silently merging rooms),
+        /// and did not open new naked edges. The baseline is the appended set's OWN decoded cell count
+        /// (<paramref name="appendedCellCount"/>), never the pre-append resolve count - which, being measured
+        /// before patches/retained were added, was typically lower and let a separator-dissolving rebuild through.
+        /// </summary>
+        public static bool AcceptConsolidationRebuild(int rebuiltFaceCount, int rebuiltCellCount, int rebuiltNakedEdgeCount, int appendedCellCount, int appendedNakedEdgeCount)
+        {
+            return rebuiltFaceCount != 0 && rebuiltCellCount >= appendedCellCount && rebuiltNakedEdgeCount <= appendedNakedEdgeCount;
         }
 
         private static List<SnappedPanel> Register(List<Face3D> face3Ds, List<double> bucketSizes, List<double> weights, List<double> maxExtensions)
