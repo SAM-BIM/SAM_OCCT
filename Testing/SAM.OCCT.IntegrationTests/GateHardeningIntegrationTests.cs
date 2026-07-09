@@ -121,5 +121,49 @@ namespace SAM.OCCT.IntegrationTests
             Assert.Equal(2, report.ResolvedCellCount);
             Assert.Empty(report.NakedWires);
         }
+
+        /// <summary>The door-cut room rotated <paramref name="yawDegrees"/> about world Z (plan yaw only - the
+        /// level stays flat, Up stays world Z). Distinct from <see cref="DoorCutPartitionTwoRoom"/>'s
+        /// <c>tiltDegrees</c> (which rotates about a HORIZONTAL axis, tilting Up itself): a pure yaw leaves Up
+        /// untouched but rotates the room's footprint away from the world/level X/Y axes, which inflates any
+        /// AXIS-ALIGNED bounding box (world OR level-frame) even though Up needs no correction at all - the
+        /// codex #7 review, round 3 scenario.</summary>
+        private static List<Panel> DoorCutPartitionTwoRoomYawed(double yawDegrees)
+        {
+            double angle = yawDegrees * System.Math.PI / 180.0;
+            double c = System.Math.Cos(angle);
+            double s = System.Math.Sin(angle);
+            Point3D P(double x, double y, double z) => new Point3D((x * c) - (y * s), (x * s) + (y * c), z);
+
+            return new List<Panel>
+            {
+                Slab(Rect(P(0, 0, 0), P(8, 0, 0), P(8, 4, 0), P(0, 4, 0)), PanelType.Floor),
+                Slab(Rect(P(0, 0, 3), P(8, 0, 3), P(8, 4, 3), P(0, 4, 3)), PanelType.Roof),
+                Wall(Rect(P(0, 0, 0), P(8, 0, 0), P(8, 0, 3), P(0, 0, 3))),
+                Wall(Rect(P(0, 4, 0), P(8, 4, 0), P(8, 4, 3), P(0, 4, 3))),
+                Wall(Rect(P(0, 0, 0), P(0, 4, 0), P(0, 4, 3), P(0, 0, 3))),
+                Wall(Rect(P(8, 0, 0), P(8, 4, 0), P(8, 4, 3), P(8, 0, 3))),
+                Wall(Rect(P(4, 0, 0), P(4, 4, 0), P(4, 4, 2.5), P(4, 0, 2.5))),
+            };
+        }
+
+        [SkippableFact]
+        public void Solve3D_YawedDoorCutPartition_RejectsRawUnderSplitAndManagedSeparatesRooms()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Codex #7 review, round 3: the door-cut room rotated 45 deg in PLAN (about world Z - Up stays
+            // world Z, untilted). An axis-aligned bounding box of the rotated 8x4 footprint is inflated toward
+            // its diagonal (~8.9 m) versus the room's true 8 m/4 m dimensions, which understates the dropped
+            // partition's plan-width RATIO against that inflated box and can hide the under-split even though
+            // Up itself needed no correction. Exercises the vertex-projection fix (no bounding box anywhere).
+            List<Panel> panels = DoorCutPartitionTwoRoomYawed(yawDegrees: 45);
+            panels.Solve3D(out List<Point3D> _, out List<string> diagnostics, out _, out Solve3DReport report);
+
+            Assert.False(report.RawAdopted);
+            Assert.Contains(diagnostics, d => d.Contains("UnderSplit") && d.Contains("under-split"));
+            Assert.Equal(2, report.ResolvedCellCount);
+            Assert.Empty(report.NakedWires);
+        }
     }
 }

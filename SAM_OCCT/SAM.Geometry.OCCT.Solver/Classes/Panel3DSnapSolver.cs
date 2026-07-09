@@ -1290,15 +1290,16 @@ namespace SAM.Geometry.OCCT.Solver
         /// of the ceiling - not a short decorative fin or a fragment interior to a large room). Such a face is
         /// a partition the raw build failed to imprint, so the rooms it should have separated merged into one
         /// watertight cell.
-        /// <para><b>Level-frame measurement (codex #7 review, round 2).</b> A cell/face's WORLD axis-aligned
-        /// bounding box is inflated whenever the level is tilted (an 8x4x3 room tilted 30 deg about Y has a
-        /// world-Z AABB extent far larger than its true 3 m height) - projecting that inflated world box, even
-        /// onto the correct <c>Up</c> axis, still overstates height/plan and can hide a real under-split. So the
-        /// dropped face and each candidate cell's shell are transformed into the canonical LEVEL frame (Up -&gt;
-        /// local Z) before any bounding box is taken - mirroring the same <c>toCanonical</c> the managed
-        /// conditioning path already builds (<see cref="Execute"/>) - so every box is tight and every height/
-        /// plan number is physically meaningful. For a flat level (Up parallel to world Z) no transform is
-        /// built and this is exactly the pre-existing world-Z arithmetic (byte-identical).</para>
+        /// <para><b>Vertex-projected measurement (codex #7 review, rounds 2 and 3).</b> Height/plan-width are
+        /// measured by projecting the ACTUAL boundary vertices of the face/shell onto a direction (<see cref="Up"/>
+        /// for height, the in-level tangent for plan-width) and taking max-min - never a bounding box's extent.
+        /// A bounding box (world-axis-aligned, or even one built in a level-tilted frame) is only tight when the
+        /// room happens to be aligned with that box's own axes; a room tilted out of the world/level plane OR
+        /// merely rotated in plan (yaw, about <see cref="Up"/> itself) inflates any axis-aligned box, which can
+        /// silently understate a real partition's height/plan RATIO (the box's own extent grows, while the
+        /// partition's does not) and mask a genuine under-split. Direct vertex projection is exact and immune to
+        /// both failure modes - and needs no canonical-frame transform at all, since a dot product with a fixed
+        /// world direction is frame-invariant by construction.</para>
         /// <para>Deliberately conservative (errs toward NOT rejecting, since a false positive pushes a
         /// well-modelled input onto the weaker managed pipeline): a horizontal cap sliver, a stray face outside
         /// every cell, a boundary-coincident face, and a short fin are all excluded - so atria, courtyard rings
@@ -1306,7 +1307,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// Native-free (pure managed Shell/Face3D geometry); the pure decision stays in
         /// <see cref="EvaluateRawAdoption"/>, which just receives this count.</para>
         /// </summary>
-        private static int CountUnderSplitCells(List<Face3D> droppedFace3Ds, IReadOnlyList<SolverCell> cells, Vector3D up, double verticalAngleTolerance, double toleranceAngle, double fuzzyTolerance, double tolerance, out List<string> details)
+        private static int CountUnderSplitCells(List<Face3D> droppedFace3Ds, IReadOnlyList<SolverCell> cells, Vector3D up, double verticalAngleTolerance, double fuzzyTolerance, double tolerance, out List<string> details)
         {
             details = new List<string>();
             if (droppedFace3Ds == null || droppedFace3Ds.Count == 0 || cells == null || cells.Count == 0)
@@ -1315,55 +1316,40 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             Vector3D upUnit = (up == null || up.Length <= tolerance) ? new Vector3D(0, 0, 1) : up.Unit;
-            if (upUnit.Z < 0)
-            {
-                upUnit = upUnit.GetNegated(); // axis only: pick the +Z hemisphere, mirrors Execute's own convention
-            }
-
-            // The same canonical (level -> Z-up) transform Execute builds for the managed conditioning path,
-            // rebuilt here so the under-split measurement operates in the SAME tight frame. Null (no transform)
-            // on a flat level, so the flat arithmetic below never pays a rotation and stays byte-identical.
-            Transform3D toCanonical = null;
-            double tiltAngle = upUnit.SmallestAngle(new Vector3D(0, 0, 1));
-            if (tiltAngle > toleranceAngle)
-            {
-                Plane levelPlane = new Plane(new Point3D(0, 0, 0), upUnit);
-                toCanonical = Transform3D.GetOriginToPlane(levelPlane);
-            }
-
-            double maxVerticalNormalZ = System.Math.Sin(verticalAngleTolerance); // |n.Z| at/below this => wall-like
+            double maxVerticalNormalZ = System.Math.Sin(verticalAngleTolerance); // |n.Up| at/below this => wall-like
             HashSet<int> underSplitCells = new HashSet<int>();
 
             foreach (Face3D dropped in droppedFace3Ds)
             {
-                // Computed in WORLD frame once, purely for the diagnostic text; transformed (not recomputed) into
-                // the canonical frame for the geometric tests, so both frames agree on exactly the same point.
-                Point3D internalPoint = dropped?.GetInternalPoint3D(tolerance);
+                Vector3D normal = dropped?.GetPlane()?.Normal?.Unit;
+                if (normal == null || System.Math.Abs(normal.DotProduct(upUnit)) > maxVerticalNormalZ)
+                {
+                    continue; // only a face vertical relative to the level (wall-like) can be a room divider
+                }
+
+                Point3D internalPoint = dropped.GetInternalPoint3D(tolerance);
                 if (internalPoint == null)
                 {
                     continue;
                 }
 
-                Face3D droppedLocal = toCanonical == null ? dropped : dropped.Transform(toCanonical);
-                Point3D internalPointLocal = toCanonical == null ? internalPoint : internalPoint.Transform(toCanonical);
-                BoundingBox3D faceBoxLocal = droppedLocal?.GetBoundingBox();
-                Vector3D normalLocal = droppedLocal?.GetPlane()?.Normal?.Unit;
-                if (faceBoxLocal == null || normalLocal == null || System.Math.Abs(normalLocal.Z) > maxVerticalNormalZ)
-                {
-                    continue; // only a face vertical relative to the level (wall-like) can be a room divider
-                }
-
-                // The in-level horizontal tangent along the partition (perpendicular to the local normal, in the
-                // local XY plane): the direction a room divider runs. Zero-length only if normalLocal is itself
-                // vertical in-plane (normal.X == normal.Y == 0), which cannot happen once |normal.Z| has already
-                // been bounded away from 1 by the wall-like test above.
-                double tx = -normalLocal.Y;
-                double ty = normalLocal.X;
-                double tLength = System.Math.Sqrt((tx * tx) + (ty * ty));
-                if (tLength <= tolerance)
+                // The in-level horizontal tangent along the partition (perpendicular to both Up and the
+                // partition normal): the direction a room divider runs. Zero-length only if normal || Up, which
+                // the wall-like test above already excluded.
+                Vector3D tangent = upUnit.CrossProduct(normal);
+                if (tangent.Length <= tolerance)
                 {
                     continue;
                 }
+                Vector3D tangentUnit = tangent.Unit;
+
+                if (!TryVertexExtent(dropped, upUnit, out double faceHeightMin, out double faceHeightMax)
+                    || !TryVertexExtent(dropped, tangentUnit, out double facePlanMin, out double facePlanMax))
+                {
+                    continue;
+                }
+                double faceHeight = faceHeightMax - faceHeightMin;
+                double facePlan = facePlanMax - facePlanMin;
 
                 for (int c = 0; c < cells.Count; c++)
                 {
@@ -1378,31 +1364,25 @@ namespace SAM.Geometry.OCCT.Solver
                         continue;
                     }
 
-                    Shell shellLocal = toCanonical == null ? shell : shell.Transform(toCanonical);
-
                     // Strictly interior: inside the cell AND not merely on its boundary.
-                    if (!shellLocal.Inside(internalPointLocal, fuzzyTolerance, tolerance) || shellLocal.On(internalPointLocal, tolerance))
+                    if (!shell.Inside(internalPoint, fuzzyTolerance, tolerance) || shell.On(internalPoint, tolerance))
                     {
                         continue;
                     }
 
-                    BoundingBox3D cellBoxLocal = shellLocal.GetBoundingBox();
-                    if (cellBoxLocal == null)
+                    if (!TryVertexExtent(shell, upUnit, out double cellHeightMin, out double cellHeightMax)
+                        || !TryVertexExtent(shell, tangentUnit, out double cellPlanMin, out double cellPlanMax))
                     {
                         continue;
                     }
+                    double cellHeight = cellHeightMax - cellHeightMin;
+                    double cellPlan = cellPlanMax - cellPlanMin;
 
-                    double cellHeight = cellBoxLocal.Max.Z - cellBoxLocal.Min.Z;
-                    double faceHeight = faceBoxLocal.Max.Z - faceBoxLocal.Min.Z;
                     if (cellHeight <= tolerance || faceHeight < UNDER_SPLIT_MIN_HEIGHT_RATIO * cellHeight)
                     {
                         continue; // a partial-height fin, not a room-height partition
                     }
 
-                    // Plan span along the divider's run, in the local XY plane: a real divider reaches
-                    // wall-to-wall, a fragment does not.
-                    double facePlan = (System.Math.Abs((faceBoxLocal.Max.X - faceBoxLocal.Min.X) * tx) + System.Math.Abs((faceBoxLocal.Max.Y - faceBoxLocal.Min.Y) * ty)) / tLength;
-                    double cellPlan = (System.Math.Abs((cellBoxLocal.Max.X - cellBoxLocal.Min.X) * tx) + System.Math.Abs((cellBoxLocal.Max.Y - cellBoxLocal.Min.Y) * ty)) / tLength;
                     if (cellPlan <= tolerance || facePlan < UNDER_SPLIT_MIN_PLAN_RATIO * cellPlan)
                     {
                         continue; // does not span the cell wall-to-wall - a partial element, not a divider
@@ -1417,6 +1397,49 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return underSplitCells.Count;
+        }
+
+        /// <summary>The min/max of every boundary vertex of <paramref name="face3D"/> dotted with
+        /// <paramref name="direction"/> - the exact support of the face's actual shape along that direction
+        /// (never a bounding box's, which is only tight when the shape happens to be axis-aligned to it).</summary>
+        private static bool TryVertexExtent(Face3D face3D, Vector3D direction, out double min, out double max)
+        {
+            min = double.PositiveInfinity;
+            max = double.NegativeInfinity;
+            List<Point3D> point3Ds = (face3D?.GetExternalEdge3D() as ISegmentable3D)?.GetPoints();
+            if (point3Ds == null || point3Ds.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (Point3D point3D in point3Ds)
+            {
+                double d = (point3D.X * direction.X) + (point3D.Y * direction.Y) + (point3D.Z * direction.Z);
+                min = System.Math.Min(min, d);
+                max = System.Math.Max(max, d);
+            }
+
+            return true;
+        }
+
+        /// <summary>The min/max of every boundary vertex across all of <paramref name="shell"/>'s faces dotted
+        /// with <paramref name="direction"/> - the cell's true extent along that direction.</summary>
+        private static bool TryVertexExtent(Shell shell, Vector3D direction, out double min, out double max)
+        {
+            min = double.PositiveInfinity;
+            max = double.NegativeInfinity;
+            bool any = false;
+            foreach (Face3D face3D in shell?.Face3Ds ?? new List<Face3D>())
+            {
+                if (TryVertexExtent(face3D, direction, out double faceMin, out double faceMax))
+                {
+                    any = true;
+                    min = System.Math.Min(min, faceMin);
+                    max = System.Math.Max(max, faceMax);
+                }
+            }
+
+            return any;
         }
 
         /// <summary>
@@ -2742,7 +2765,7 @@ namespace SAM.Geometry.OCCT.Solver
                 // Codex #7: the finer "watertight-but-wrong" net the dropped-RATIO check misses - a dropped
                 // wall-like face sitting strictly inside an adopted cell is a partition that failed to split its
                 // room, so two rooms merged into one cell (droppedRatio stays low because only one face dropped).
-                underSplitCellCount = CountUnderSplitCells(droppedFace3Ds, solverCells, Up, VerticalAngleTolerance, ToleranceAngle, rawOptions.FuzzyTolerance, rawOptions.Tolerance, out underSplitDetails);
+                underSplitCellCount = CountUnderSplitCells(droppedFace3Ds, solverCells, Up, VerticalAngleTolerance, rawOptions.FuzzyTolerance, rawOptions.Tolerance, out underSplitDetails);
             }
 
             RawAdoptionOutcome outcome = EvaluateRawAdoption(cells, resolved.Count, nakedEdgeCount, sliverCellCount, droppedRatio, MaxDroppedRatio, underSplitCellCount);
