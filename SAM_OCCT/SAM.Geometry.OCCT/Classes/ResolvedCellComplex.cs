@@ -59,13 +59,25 @@ namespace SAM.Geometry.OCCT
         /// accounting (they would otherwise be silent relation gaps downstream).</summary>
         public int TopologyKeyZeroFaceCount { get; private set; }
 
+        /// <summary>
+        /// The Guids of the resolved OUTPUT panels this solve produced (docs/CELLCOMPLEX_FIRST_HANDOVER.md,
+        /// Phase P3) - the roster a downstream <c>CreateAdjacencyCluster</c> caller's incoming panel set must
+        /// match (count + Guid set) before consuming this complex directly, instead of rebuilding. Empty on a
+        /// complex captured before the roster was known (e.g. still inside the solver, which has no Panel/Guid
+        /// concept) - <see cref="WithPanelGuids"/> attaches it once the analytical layer has built the output
+        /// panels. An empty roster is a safe "unknown" default: the P3 roster gate never consumes a complex
+        /// with no recorded roster, so this is never a silent bypass.
+        /// </summary>
+        public IReadOnlyList<Guid> PanelGuids { get; private set; }
+
         public ResolvedCellComplex(
             Guid solveId,
             IEnumerable<ResolvedCell> cells,
             IEnumerable<ResolvedCellFace> faces,
             IEnumerable<ResolvedFaceAdjacency> adjacencies,
             IEnumerable<OcctNakedWire> nakedWires,
-            int topologyKeyZeroFaceCount)
+            int topologyKeyZeroFaceCount,
+            IEnumerable<Guid> panelGuids = null)
         {
             SolveId = solveId;
             Cells = (cells ?? Enumerable.Empty<ResolvedCell>()).Where(x => x != null).ToList();
@@ -73,6 +85,7 @@ namespace SAM.Geometry.OCCT
             Adjacencies = (adjacencies ?? Enumerable.Empty<ResolvedFaceAdjacency>()).Where(x => x != null).ToList();
             NakedWires = (nakedWires ?? Enumerable.Empty<OcctNakedWire>()).Where(x => x != null).ToList();
             TopologyKeyZeroFaceCount = topologyKeyZeroFaceCount;
+            PanelGuids = (panelGuids ?? Enumerable.Empty<Guid>()).ToList();
         }
 
         public ResolvedCellComplex(JsonObject jsonObject)
@@ -158,7 +171,15 @@ namespace SAM.Geometry.OCCT
         /// they are shared, not copied.</summary>
         public ResolvedCellComplex WithNakedWires(IEnumerable<OcctNakedWire> nakedWires)
         {
-            return new ResolvedCellComplex(SolveId, Cells, Faces, Adjacencies, nakedWires, TopologyKeyZeroFaceCount);
+            return new ResolvedCellComplex(SolveId, Cells, Faces, Adjacencies, nakedWires, TopologyKeyZeroFaceCount, PanelGuids);
+        }
+
+        /// <summary>Returns a copy of this complex with its <see cref="PanelGuids"/> roster set - the
+        /// analytical layer's job (P3), once it has built the resolved output panels the solver itself has no
+        /// concept of. Cells/faces/adjacencies/naked wires are immutable, so they are shared, not copied.</summary>
+        public ResolvedCellComplex WithPanelGuids(IEnumerable<Guid> panelGuids)
+        {
+            return new ResolvedCellComplex(SolveId, Cells, Faces, Adjacencies, NakedWires, TopologyKeyZeroFaceCount, panelGuids);
         }
 
         public JsonObject ToJsonObject()
@@ -197,6 +218,13 @@ namespace SAM.Geometry.OCCT
                 nakedWiresArray.Add(NakedWireToJson(nakedWire));
             }
             jsonObject["NakedWires"] = nakedWiresArray;
+
+            JsonArray panelGuidsArray = new JsonArray();
+            foreach (Guid panelGuid in PanelGuids)
+            {
+                panelGuidsArray.Add(panelGuid.ToString());
+            }
+            jsonObject["PanelGuids"] = panelGuidsArray;
 
             return jsonObject;
         }
@@ -266,6 +294,19 @@ namespace SAM.Geometry.OCCT
                 }
             }
             NakedWires = nakedWires;
+
+            List<Guid> panelGuids = new List<Guid>();
+            if (jsonObject["PanelGuids"] is JsonArray panelGuidsArray)
+            {
+                foreach (JsonNode node in panelGuidsArray)
+                {
+                    if (node is JsonValue guidValue && Guid.TryParse(guidValue.ToString(), out Guid panelGuid))
+                    {
+                        panelGuids.Add(panelGuid);
+                    }
+                }
+            }
+            PanelGuids = panelGuids;
 
             return true;
         }
