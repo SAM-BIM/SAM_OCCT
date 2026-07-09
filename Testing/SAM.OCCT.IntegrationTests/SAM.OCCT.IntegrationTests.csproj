@@ -41,6 +41,11 @@
     <!-- Pathological models kept out of the top-level scan (which asserts a clean
          build) - exercised explicitly by robustness tests that only require no crash. -->
     <None Update="Fixtures\Robustness\*.sam" CopyToOutputDirectory="PreserveNewest" />
+    <!-- PR #49 sample models (the original "walls disappear after Extend3D" bug reports) - kept
+         out of the top-level scan for the same reason as Robustness above: these panels are
+         deliberately gappy/disconnected and will NOT raw-build watertight without the managed
+         conditioning pipeline. Exercised by Extend3DRegressionIntegrationTests. -->
+    <None Update="Fixtures\Extend3D-Regression\*.sam" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- P1 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): disables xUnit's default cross-class test-collection
