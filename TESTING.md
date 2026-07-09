@@ -1374,3 +1374,37 @@ identity inheritance; index-based exclusion), and the updated `CreateSpacesInteg
 dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~ResolvedCellComplexTests"
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~ResolvedCellComplexIntegrationTests"
 ```
+
+## PR #49 regression fixtures (Extend3D "walls disappear" bug)
+
+PR #49 (`feature/extend3D`, closed as superseded by the E-track - `docs/EXTEND3D_ROBUST_HANDOVER.md`
+§9) attached four real sample models reproducing the original bug ("walls disappear after
+`SAMOCCT.Extend3D`"). These were never captured into the repo; they only existed as GitHub
+user-attachment links in the PR description. Downloaded and converted from raw JSON to the
+compressed `.sam` fixture format (`SAM.Core.Convert`'s existing zip writer/reader) - **~80%
+smaller** (1.73 MB raw JSON -> 353 KB total) - and added under
+`Testing/SAM.OCCT.IntegrationTests/Fixtures/Extend3D-Regression/` (a subfolder, like `Robustness/`,
+kept OUT of `OcctFixtureIntegrationTests.Shells_UploadedSamFixtures_BuildCells`'s top-level scan:
+these panels are deliberately gappy/disconnected, so a naive raw build is not expected to succeed).
+
+`Extend3DRegressionIntegrationTests` runs each through production `Solve3D` and pins the CURRENT
+result (first coverage these fixtures ever got, measured post-E1/E2 - not a priori targets):
+
+| Fixture | Walls in | Raw adopted | Cells | Naked | Walls out |
+| --- | --- | --- | --- | --- | --- |
+| PR49-Test0-3spaces.sam | 12 | yes | 3 | 0 | 12 (all survive) |
+| PR49-Test1.sam | 4 | yes | 2 | 0 | 4 (all survive) |
+| PR49-Test2.sam | 88 | yes | 43 | 0 | 88 (all survive) |
+| PR49-Test0a-3spaces.sam | 12 | no (managed) | 1 | 0 | **4** (partial) |
+
+Three of the four are clean, watertight raw-first adopts today - the literal PR #49 bug (walls
+silently reaching zero) does not reproduce. `Test0a` (a harder variant with a larger real gap)
+still only partially resolves under default settings: not the zero-walls bug (some walls survive,
+nothing crashes, no naked edges), but a genuine residual gap-size limit worth tracking honestly
+rather than either failing the suite or silently declaring victory. A future MaxExtend/bucket tune
+or frame-aware extension may close it further; the pin should move only with a stated mechanism,
+per this repo's golden-master convention.
+
+```powershell
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~Extend3DRegressionIntegrationTests"
+```
