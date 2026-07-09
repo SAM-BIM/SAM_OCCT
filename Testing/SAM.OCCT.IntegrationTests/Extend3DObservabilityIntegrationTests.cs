@@ -41,6 +41,62 @@ namespace SAM.OCCT.IntegrationTests
             };
         }
 
+        /// <summary>The same 4-wall room, but the y=0 wall is supplied as TWO coplanar halves (x[0,2] and
+        /// x[2,4]) with DISTINCT source panels. Stage A coplanar-merges them into one clean face, so the clean
+        /// ordinal of every later wall shifts by one relative to its original input index - the exact condition
+        /// under which a record's source index (a clean ordinal) would resolve to the WRONG input panel unless
+        /// it is mapped back through the snap stage's per-clean-face attribution.</summary>
+        private static List<Panel> SplitWallRoom()
+        {
+            Construction wall = new Construction("Wall");
+            return new List<Panel>
+            {
+                global::SAM.Analytical.Create.Panel(new Construction("Floor"), PanelType.Floor, Rect(new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 4, 0), new Point3D(0, 4, 0))),
+                global::SAM.Analytical.Create.Panel(new Construction("Roof"), PanelType.Roof, Rect(new Point3D(0, 0, 3), new Point3D(4, 0, 3), new Point3D(4, 4, 3), new Point3D(0, 4, 3))),
+                global::SAM.Analytical.Create.Panel(wall, PanelType.Wall, Rect(new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 2.5), new Point3D(0, 0, 2.5))), // y=0 half A
+                global::SAM.Analytical.Create.Panel(wall, PanelType.Wall, Rect(new Point3D(2, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 2.5), new Point3D(2, 0, 2.5))), // y=0 half B
+                global::SAM.Analytical.Create.Panel(wall, PanelType.Wall, Rect(new Point3D(0, 4, 0), new Point3D(4, 4, 0), new Point3D(4, 4, 2.5), new Point3D(0, 4, 2.5))), // y=4
+                global::SAM.Analytical.Create.Panel(wall, PanelType.Wall, Rect(new Point3D(0, 0, 0), new Point3D(0, 4, 0), new Point3D(0, 4, 2.5), new Point3D(0, 0, 2.5))), // x=0
+                global::SAM.Analytical.Create.Panel(wall, PanelType.Wall, Rect(new Point3D(4, 0, 0), new Point3D(4, 4, 0), new Point3D(4, 4, 2.5), new Point3D(4, 0, 2.5))), // x=4
+            };
+        }
+
+        [Fact]
+        public void Extend3D_CoplanarMergeShiftsCleanOrdinals_RecordsResolveToCorrectSourcePanel()
+        {
+            // Act
+            List<Panel> panels = SplitWallRoom();
+            panels.Extend3D(out List<string> _, out Solve3DReport report);
+
+            Assert.NotNull(report);
+            Assert.NotEmpty(report.ExtendRecords);
+
+            // Honesty of source attribution: each record's SourceIndex must resolve (in the SAME report.Sources
+            // the formatter uses) to a panel whose plane actually contains the moved edge. Before the clean-
+            // ordinal -> original-source remap, a wall AFTER the merged pair resolved to the wrong panel (a
+            // different plane), so SAM_OCCT_EXTEND3D_PANEL named the wrong Guid.
+            IReadOnlyList<Panel> sources = report.Sources;
+            foreach (ExtendRecord record in report.ExtendRecords)
+            {
+                if (record.From == null)
+                {
+                    continue; // cap-grow: no single moved edge
+                }
+
+                Assert.InRange(record.SourceIndex, 0, sources.Count - 1);
+                Plane plane = sources[record.SourceIndex]?.GetFace3D()?.GetPlane();
+                Assert.NotNull(plane);
+                Assert.True(System.Math.Abs(plane.Distance(record.From)) <= 0.02,
+                    string.Format("record {0} resolved to source #{1} whose plane is {2:0.###} m from the moved edge at {3}",
+                        record.Kind, record.SourceIndex, System.Math.Abs(plane.Distance(record.From)), record.From));
+            }
+
+            // And the coded lines name real input Guids (never n/a for a resolved move).
+            List<string> lines = report.FormatExtendReport();
+            Assert.All(lines.FindAll(l => l.StartsWith("SAM_OCCT_EXTEND3D_PANEL:")),
+                l => Assert.DoesNotContain("panel n/a", l));
+        }
+
         [Fact]
         public void Extend3D_ShortWalledRoom_RecordsMatchActualMovesAndSurfaceCodedLines()
         {

@@ -243,7 +243,8 @@ namespace SAM.Analytical.OCCT.Solver
                 solver.NativeResolved,
                 solver.ResolvedCellCount,
                 resolvedCellComplex: solver.ResolvedCellComplex,
-                extendRecords: solver.ExtendRecords);
+                extendRecords: solver.ExtendRecords,
+                extendPanelDiagnostics: SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels));
         }
 
         /// <summary>
@@ -464,7 +465,8 @@ namespace SAM.Analytical.OCCT.Solver
                 solver.LevelFrames,
                 solver.NativeResolved,
                 solver.ResolvedCellCount,
-                extendRecords: solver.ExtendRecords);
+                extendRecords: solver.ExtendRecords,
+                extendPanelDiagnostics: SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels));
         }
 
         /// <summary>

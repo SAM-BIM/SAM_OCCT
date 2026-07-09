@@ -131,6 +131,36 @@ namespace SAM.OCCT.UnitTests
             Assert.Single(preview); // one moved-edge segment
         }
 
+        [Fact]
+        public void FormatExtendReport_HoleDropRecorded_SurfacesInReportButNotInRecordsOnly()
+        {
+            // Arrange - a footprint trim dropped an opening (the E1/R6 diagnostic lives on the panel, carried to
+            // the report as ExtendPanelDiagnostics). One extend record too, so both streams are present.
+            Panel wall = MakeWallPanel();
+            List<ExtendRecord> records = new List<ExtendRecord>
+            {
+                new ExtendRecord(0, 0, ExtendOperationKind.Top, 2.5, 3.05, "elevation",
+                    new Point3D(2, 0, 2.5), new Point3D(2, 0, 3.05), 1, 1, "cap-scalar", "cap z=3", 0.05, false)
+            };
+            const string holeDrop = "SAM_OCCT_EXTEND3D_HOLE_DROPPED: 1 of 1 internal opening(s) dropped or clipped to the boundary during SetVerticalFootprint.";
+            Solve3DReport report = new Solve3DReport(
+                rawAdopted: false, signature: null, rawAttemptSignature: null, diagnostics: null,
+                sourceMap: null, sources: new List<Panel> { wall }, cells: null, cellRoles: null, nakedWires: null,
+                cleanFace3Ds: null, levelFrames: null, nativeResolved: false, resolvedCellCount: 0,
+                extendRecords: records, extendPanelDiagnostics: new List<string> { holeDrop });
+
+            // Act
+            List<string> recordsOnly = report.FormatExtendRecords();
+            List<string> fullReport = report.FormatExtendReport();
+
+            // Assert - the dedicated observability output (FormatExtendReport) carries the hole-drop line; the
+            // records-only stream does not (that was the gap: the GH ExtendReport output missed dropped holes).
+            Assert.DoesNotContain(recordsOnly, x => x.Contains("HOLE_DROPPED"));
+            Assert.Contains(fullReport, x => x == holeDrop);
+            Assert.Contains(fullReport, x => x.StartsWith("SAM_OCCT_EXTEND3D_PANEL:")); // the per-op line is still there
+            Assert.Equal(recordsOnly.Count + 1, fullReport.Count);
+        }
+
         /// <summary>Axis-aligned wall rectangle in the z = 0 plane, for a source panel with a Guid.</summary>
         private static Panel MakeWallPanel()
         {

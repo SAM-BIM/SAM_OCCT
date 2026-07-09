@@ -264,11 +264,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.SetDataList(index, report == null ? null : SolverReportFormat.FormatLevelFrames(report.LevelFrames));
             }
 
-            // E3 observability: per-panel extend summary + moved-edge preview from the pre-resolve report.
+            // E3 observability: per-panel extend summary (incl. any HOLE_DROPPED) + moved-edge preview.
             index = Params.IndexOfOutputParam("ExtendReport");
             if (index != -1)
             {
-                dataAccess.SetDataList(index, report?.FormatExtendRecords());
+                dataAccess.SetDataList(index, report?.FormatExtendReport());
             }
 
             index = Params.IndexOfOutputParam("ExtendPreview");

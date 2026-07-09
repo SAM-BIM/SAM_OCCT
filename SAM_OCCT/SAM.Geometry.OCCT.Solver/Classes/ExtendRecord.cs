@@ -22,9 +22,11 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Position of the mutated panel in the conditioned <see cref="Panel3DSnapSolver.SnappedPanels"/> list.</summary>
         public int PanelIndex { get; }
 
-        /// <summary>Representative source-face index of the mutated panel (its first <see cref="SnappedPanel.SourceIndices"/>);
-        /// -1 when the panel carries no source. The analytical layer maps this to the source panel's Guid.</summary>
-        public int SourceIndex { get; }
+        /// <summary>Representative source-face index of the mutated panel. Emitted as the panel's clean-face
+        /// ordinal (its first <see cref="SnappedPanel.SourceIndices"/>), then remapped by the solver to the
+        /// ORIGINAL input source index (via the snap stage's per-clean-face attribution) before the analytical
+        /// layer resolves it to a source panel's Guid; -1 when the panel carries no source.</summary>
+        public int SourceIndex { get; internal set; }
 
         /// <summary>Which primitive was applied.</summary>
         public ExtendOperationKind Kind { get; }
@@ -50,8 +52,10 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Position of the target cap in the conditioned panel list (-1 for a wall-to-wall or fixed-margin move).</summary>
         public int TargetPanelIndex { get; }
 
-        /// <summary>Representative source-face index of the target cap (-1 when there is no cap target).</summary>
-        public int TargetSourceIndex { get; }
+        /// <summary>Representative source-face index of the target cap (-1 when there is no cap target).
+        /// Emitted as the cap's clean-face ordinal, then remapped by the solver to the ORIGINAL input source
+        /// index, exactly like <see cref="SourceIndex"/>.</summary>
+        public int TargetSourceIndex { get; internal set; }
 
         /// <summary>Which target rule was taken: <c>cap-scalar</c> (E1 flat-Z), <c>cap-plane</c> (E2 sloped plane),
         /// <c>walls</c> (the 2D plan-loop solver), <c>walls-measured</c> or <c>fixed-margin</c> (cap grow).</summary>
