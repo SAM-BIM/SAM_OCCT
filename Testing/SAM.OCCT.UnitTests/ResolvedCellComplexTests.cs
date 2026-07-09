@@ -138,5 +138,56 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(originalShared.Face3D.GetArea(), roundTrippedShared.Face3D.GetArea(), 6);
             Assert.Equal(10.5, roundTripped.Cells[0].Volume, 6);
         }
+
+        // ── P3: PanelGuids roster (docs/CELLCOMPLEX_FIRST_HANDOVER.md) ─────────────────────────
+
+        [Fact]
+        public void Project_Always_PanelGuidsEmptyUntilAttached()
+        {
+            // The solver has no Panel/Guid concept - a freshly projected complex carries no roster until the
+            // analytical layer attaches one via WithPanelGuids.
+            OcctCellComplexResult result = new OcctCellComplexResult();
+            result.AddCell(Cell(10, new Point3D(0, 0, 0), new OcctCellFace(Quad(0), 1)));
+            result.BuildFaceAdjacencies();
+
+            ResolvedCellComplex complex = ResolvedCellComplex.Project(result, null, Guid.NewGuid());
+
+            Assert.NotNull(complex.PanelGuids);
+            Assert.Empty(complex.PanelGuids);
+        }
+
+        [Fact]
+        public void WithPanelGuids_Always_ReturnsCopyWithRosterSetAndEverythingElsePreserved()
+        {
+            OcctCellComplexResult result = new OcctCellComplexResult();
+            result.AddCell(Cell(10, new Point3D(0, 0, 0), new OcctCellFace(Quad(0), 100), new OcctCellFace(Quad(2), 1)));
+            result.AddCell(Cell(20, new Point3D(5, 0, 0), new OcctCellFace(Quad(4), 100)));
+            result.BuildFaceAdjacencies();
+            ResolvedCellComplex original = ResolvedCellComplex.Project(result, null, Guid.NewGuid());
+            List<Guid> roster = new List<Guid> { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() };
+
+            ResolvedCellComplex withRoster = original.WithPanelGuids(roster);
+
+            Assert.Equal(roster, withRoster.PanelGuids);
+            Assert.Empty(original.PanelGuids); // the original is untouched (a new copy carries the roster)
+            Assert.Equal(original.SolveId, withRoster.SolveId);
+            Assert.Equal(original.Cells.Count, withRoster.Cells.Count);
+            Assert.Equal(original.Faces.Select(f => f.TopologyKey), withRoster.Faces.Select(f => f.TopologyKey));
+            Assert.Equal(original.Adjacencies.Count, withRoster.Adjacencies.Count);
+        }
+
+        [Fact]
+        public void ToJsonObject_RoundTrip_PreservesPanelGuids()
+        {
+            OcctCellComplexResult result = new OcctCellComplexResult();
+            result.AddCell(Cell(10, new Point3D(0, 0, 0), new OcctCellFace(Quad(0), 1)));
+            result.BuildFaceAdjacencies();
+            List<Guid> roster = new List<Guid> { Guid.NewGuid(), Guid.NewGuid() };
+            ResolvedCellComplex original = ResolvedCellComplex.Project(result, null, Guid.NewGuid()).WithPanelGuids(roster);
+
+            ResolvedCellComplex roundTripped = new ResolvedCellComplex(original.ToJsonObject());
+
+            Assert.Equal(roster.OrderBy(x => x), roundTripped.PanelGuids.OrderBy(x => x));
+        }
     }
 }

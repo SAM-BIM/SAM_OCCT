@@ -71,6 +71,7 @@ Analytical:
 - `SAMOCCT.MergeCoplanarPanels`
 - `SAMOCCT.MergeCoplanarAdjacencyCluster`
 - `SAMOCCT.PanelsFromShells`
+- `SAMOCCT.Solve3D`
 
 `SAMOCCT.TriangulateSurface` takes possibly non-planar surfaces and
 triangulates them into planar SAM `Face3D`s ready for panelling, using OCCT for
@@ -109,6 +110,19 @@ relations were decoded before SAM creates spaces, panels, and relations.
 directly from this OCCT topology first. If successful, diagnostics include
 `SAM_OCCT_ANALYTICAL_DIRECT_SUCCESS`; if not, the component falls back to the
 older SAM geometric rebuild and reports `SAM_OCCT_ANALYTICAL_DIRECT_FALLBACK`.
+
+`SAMOCCT.Solve3D` also outputs the `CellComplex` it adopted (cells, unique
+faces, adjacency pairs, naked wires, a per-solve `SolveId`) and stamps that
+`SolveId` onto every resolved output panel. Wire `CellComplex` into
+`SAMOCCT.CreateAdjacencyCluster`'s optional `cellComplex_` input for a
+**direct handoff** that skips the native rebuild entirely - it is honoured
+only when every incoming panel's `SolveId` stamp and the panel roster (same
+count, same Guid set) still match that solve's output exactly; any edit
+downstream (a deleted, added, or swapped panel, or a panel from a different
+solve) falls back to the same rebuild path as today, with a diagnostic naming
+why. Unwired, both components behave exactly as before this feature - see
+`docs/CELLCOMPLEX_FIRST_HANDOVER.md` (Phase P3) and `TESTING.md`'s "CellComplex
+Grasshopper handoff" section for the full contract.
 
 `SAMOCCT.MergeSmallSpaces` is a clean-up step that runs on an existing
 `AdjacencyCluster`. It finds spaces whose floor area is below `minArea_` (or

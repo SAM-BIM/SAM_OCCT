@@ -32,6 +32,16 @@ namespace SAM.Analytical.OCCT.Solver
 
         /// <summary>Free-form provenance tag, e.g. "GapFill" on an air panel built from a closed naked-boundary loop.</summary>
         [ParameterProperties("Provenance", "How this panel came to exist (e.g. GapFill for a closed-gap air panel).")]
-        Provenance
+        Provenance,
+
+        /// <summary>
+        /// The <see cref="Geometry.OCCT.ResolvedCellComplex.SolveId"/> (GUID, as a string) of the solve that
+        /// produced this panel (docs/CELLCOMPLEX_FIRST_HANDOVER.md, Phase P3). Stamped by
+        /// <c>SAMOCCT.Solve3D</c> on every output panel so a downstream <c>CreateAdjacencyCluster</c> caller
+        /// can prove a supplied panel set actually came from a given solve's <c>ResolvedCellComplex</c> - the
+        /// P3 roster gate - before consuming it directly instead of rebuilding.
+        /// </summary>
+        [ParameterProperties("Solve Id", "The GUID of the Solve3D run that produced this panel, for the CellComplex direct-handoff roster gate.")]
+        SolveId
     }
 }
