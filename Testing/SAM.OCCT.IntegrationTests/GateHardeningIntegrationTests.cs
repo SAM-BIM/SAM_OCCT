@@ -75,7 +75,7 @@ namespace SAM.OCCT.IntegrationTests
             // adopted cell), emitting a coded diagnostic with the measured values.
             Assert.False(report.RawAdopted);
             Assert.Contains(diagnostics, d => d.Contains("UnderSplit") && d.Contains("under-split"));
-            Assert.Contains(diagnostics, d => d.Contains("harbours a dropped") && d.Contains("partition"));
+            Assert.Contains(diagnostics, d => d.Contains("harbours") && d.Contains("dropped fragment"));
 
             // And the managed pipeline recovers the correct topology: the two rooms are separated (2 cells),
             // watertight. This is the "must reject raw, managed separates" acceptance (§9 task 3a).
@@ -164,6 +164,82 @@ namespace SAM.OCCT.IntegrationTests
             Assert.Contains(diagnostics, d => d.Contains("UnderSplit") && d.Contains("under-split"));
             Assert.Equal(2, report.ResolvedCellCount);
             Assert.Empty(report.NakedWires);
+        }
+
+        /// <summary>The SAME door-cut divider, but exported as TWO coplanar fragments side by side (e.g. split
+        /// at a door head) instead of one panel - each fragment alone spans only half the room's plan width.
+        /// Codex #7 review, round 4: without grouping, each fragment independently fails the plan-width ratio
+        /// even though together they reconstruct the full-size divider.</summary>
+        private static List<Panel> DoorCutPartitionTwoRoomFragmentedDivider()
+        {
+            return new List<Panel>
+            {
+                Slab(Rect(new Point3D(0, 0, 0), new Point3D(8, 0, 0), new Point3D(8, 4, 0), new Point3D(0, 4, 0)), PanelType.Floor),
+                Slab(Rect(new Point3D(0, 0, 3), new Point3D(8, 0, 3), new Point3D(8, 4, 3), new Point3D(0, 4, 3)), PanelType.Roof),
+                Wall(Rect(new Point3D(0, 0, 0), new Point3D(8, 0, 0), new Point3D(8, 0, 3), new Point3D(0, 0, 3))),
+                Wall(Rect(new Point3D(0, 4, 0), new Point3D(8, 4, 0), new Point3D(8, 4, 3), new Point3D(0, 4, 3))),
+                Wall(Rect(new Point3D(0, 0, 0), new Point3D(0, 4, 0), new Point3D(0, 4, 3), new Point3D(0, 0, 3))),
+                Wall(Rect(new Point3D(8, 0, 0), new Point3D(8, 4, 0), new Point3D(8, 4, 3), new Point3D(8, 0, 3))),
+                Wall(Rect(new Point3D(4, 0, 0), new Point3D(4, 2, 0), new Point3D(4, 2, 2.5), new Point3D(4, 0, 2.5))), // fragment 1, y:[0,2]
+                Wall(Rect(new Point3D(4, 2, 0), new Point3D(4, 4, 0), new Point3D(4, 4, 2.5), new Point3D(4, 2, 2.5))), // fragment 2, y:[2,4]
+            };
+        }
+
+        [SkippableFact]
+        public void Solve3D_FragmentedDividerDoorCutPartition_RejectsRawUnderSplitAndManagedSeparatesRooms()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Codex #7 review, round 4: 2 dropped fragments of 8 total faces (25%, under the 30% dropped-ratio
+            // ceiling), each spanning only 50% of the room's plan width alone - below the 70% threshold without
+            // grouping. Exercises GroupCoplanarFaces: the two fragments are pooled into one 4 m-wide measurement
+            // (100% of the room's plan width), correctly recognised as the single divider they represent.
+            List<Panel> panels = DoorCutPartitionTwoRoomFragmentedDivider();
+            panels.Solve3D(out List<Point3D> _, out List<string> diagnostics, out _, out Solve3DReport report);
+
+            Assert.False(report.RawAdopted);
+            Assert.Contains(diagnostics, d => d.Contains("UnderSplit") && d.Contains("under-split"));
+            Assert.Contains(diagnostics, d => d.Contains("2 dropped fragment(s)"));
+            Assert.Equal(2, report.ResolvedCellCount);
+            Assert.Empty(report.NakedWires);
+        }
+
+        /// <summary>The SAME 8x4x3 box with NO partition (one legitimate room), plus an internal triangular
+        /// brace panel at x=4 whose vertices touch the floor, ceiling and both side walls - a right triangle
+        /// spanning the FULL height and plan width by extrema alone, but filling only 50% of that bounding
+        /// rectangle's area. Codex #7 review, round 4: a sparse/triangular fragment (a brace, gusset, stair
+        /// stringer) must not be mistaken for a room-dividing wall just because it touches every extreme.</summary>
+        private static List<Panel> SingleRoomWithInteriorTriangularBrace()
+        {
+            return new List<Panel>
+            {
+                Slab(Rect(new Point3D(0, 0, 0), new Point3D(8, 0, 0), new Point3D(8, 4, 0), new Point3D(0, 4, 0)), PanelType.Floor),
+                Slab(Rect(new Point3D(0, 0, 3), new Point3D(8, 0, 3), new Point3D(8, 4, 3), new Point3D(0, 4, 3)), PanelType.Roof),
+                Wall(Rect(new Point3D(0, 0, 0), new Point3D(8, 0, 0), new Point3D(8, 0, 3), new Point3D(0, 0, 3))),
+                Wall(Rect(new Point3D(0, 4, 0), new Point3D(8, 4, 0), new Point3D(8, 4, 3), new Point3D(0, 4, 3))),
+                Wall(Rect(new Point3D(0, 0, 0), new Point3D(0, 4, 0), new Point3D(0, 4, 3), new Point3D(0, 0, 3))),
+                Wall(Rect(new Point3D(8, 0, 0), new Point3D(8, 4, 0), new Point3D(8, 4, 3), new Point3D(8, 0, 3))),
+                // Right-triangle brace: touches y=0..4 (full plan width) and z=0..3 (full height) at its
+                // extremes, but its area (0.5*4*3=6) is only 50% of the 4x3=12 bounding rectangle.
+                Wall(Rect(new Point3D(4, 0, 0), new Point3D(4, 4, 0), new Point3D(4, 0, 3))),
+            };
+        }
+
+        [SkippableFact]
+        public void Solve3D_SingleRoomWithInteriorTriangularBrace_AdoptsRawAndGateStaysSilent()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Coverage false-positive control (codex #7 review, round 4): the triangular brace touches every
+            // height/plan extreme (would satisfy both ratio checks on extrema alone) but covers only 50% of its
+            // own bounding rectangle - below the 60% coverage floor - so it must NOT be mistaken for a divider.
+            // This is a single legitimate room; a false rejection here pushes it onto the weaker managed path.
+            List<Panel> panels = SingleRoomWithInteriorTriangularBrace();
+            panels.Solve3D(out List<Point3D> _, out List<string> diagnostics, out _, out Solve3DReport report);
+
+            Assert.True(report.RawAdopted);
+            Assert.Equal(1, report.ResolvedCellCount);
+            Assert.DoesNotContain(diagnostics, d => d.Contains("UnderSplit"));
         }
     }
 }

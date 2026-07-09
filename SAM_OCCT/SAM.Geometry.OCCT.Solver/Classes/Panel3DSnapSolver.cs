@@ -61,6 +61,15 @@ namespace SAM.Geometry.OCCT.Solver
         /// <see cref="UNDER_SPLIT_MIN_HEIGHT_RATIO"/>; both must hold.</summary>
         public const double UNDER_SPLIT_MIN_PLAN_RATIO = 0.7;
 
+        /// <summary>Under-split gate (codex #7): the minimum fraction of its own (height x plan) bounding
+        /// rectangle a dropped partition's actual area must fill to count as a room divider. Height/plan alone
+        /// are just extrema (max-min of the vertex projections), so a sparse or triangular face (a brace, gusset,
+        /// stair stringer, or small triangular infill panel) can touch all four extremes of its bounding
+        /// rectangle - satisfying both ratio checks - without nearly FILLING the cross-section a real partition
+        /// would. A right triangle covers exactly 50% of its bounding rectangle; 0.6 excludes that and any
+        /// sparser shape while comfortably admitting a genuine partition even with a header/sill cut removed.</summary>
+        public const double UNDER_SPLIT_MIN_COVERAGE_RATIO = 0.6;
+
         private readonly List<Face3D> face3Ds;
         private readonly List<double> bucketSizes;
         private readonly List<double> weights;
@@ -1280,30 +1289,30 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>
         /// Counts adopted cells that harbour a dropped room-dividing partition - the under-split gate's
-        /// geometric measurement (codex #7, P4). A cell is under-split when some dropped (unrepresented)
-        /// input face is: (1) wall-like (its normal is within <see cref="VerticalAngleTolerance"/> of
-        /// horizontal, measured relative to the LEVEL - only a wall divides rooms in plan); (2) strictly
-        /// INTERIOR to that one cell (its interior point is inside the cell and not merely on its boundary -
-        /// a face used AS a separator sits on the boundary and is represented, so is never a dropped face); and
-        /// (3) spanning at least <see cref="UNDER_SPLIT_MIN_HEIGHT_RATIO"/> of the cell's height AND
-        /// <see cref="UNDER_SPLIT_MIN_PLAN_RATIO"/> of its plan width (a real partition, even one stopping short
-        /// of the ceiling - not a short decorative fin or a fragment interior to a large room). Such a face is
-        /// a partition the raw build failed to imprint, so the rooms it should have separated merged into one
-        /// watertight cell.
+        /// geometric measurement (codex #7, P4). A GROUP of dropped (unrepresented) faces sharing one infinite
+        /// plane (see <see cref="GroupCoplanarFaces"/> - a missing divider is sometimes exported as several
+        /// coplanar fragments, e.g. split at a door head) counts as a room-dividing partition when the group is:
+        /// (1) wall-like (its normal is within <see cref="VerticalAngleTolerance"/> of horizontal, measured
+        /// relative to the LEVEL - only a wall divides rooms in plan); (2) strictly INTERIOR to one cell (some
+        /// member's interior point is inside the cell and not merely on its boundary - a face used AS a
+        /// separator sits on the boundary and is represented, so is never a dropped face); (3) spanning at least
+        /// <see cref="UNDER_SPLIT_MIN_HEIGHT_RATIO"/> of the cell's height AND <see cref="UNDER_SPLIT_MIN_PLAN_RATIO"/>
+        /// of its plan width, pooled across every fragment (a real partition, even one stopping short of the
+        /// ceiling or split into pieces - not a short decorative fin or a fragment interior to a large room); and
+        /// (4) filling at least <see cref="UNDER_SPLIT_MIN_COVERAGE_RATIO"/> of that pooled (height x plan)
+        /// bounding rectangle with actual area (excludes a sparse/triangular brace or gusset that merely touches
+        /// all four extremes without filling the cross-section). Such a group is a partition the raw build
+        /// failed to imprint, so the rooms it should have separated merged into one watertight cell.
         /// <para><b>Vertex-projected measurement (codex #7 review, rounds 2 and 3).</b> Height/plan-width are
         /// measured by projecting the ACTUAL boundary vertices of the face/shell onto a direction (<see cref="Up"/>
-        /// for height, the in-level tangent for plan-width) and taking max-min - never a bounding box's extent.
-        /// A bounding box (world-axis-aligned, or even one built in a level-tilted frame) is only tight when the
-        /// room happens to be aligned with that box's own axes; a room tilted out of the world/level plane OR
-        /// merely rotated in plan (yaw, about <see cref="Up"/> itself) inflates any axis-aligned box, which can
-        /// silently understate a real partition's height/plan RATIO (the box's own extent grows, while the
-        /// partition's does not) and mask a genuine under-split. Direct vertex projection is exact and immune to
-        /// both failure modes - and needs no canonical-frame transform at all, since a dot product with a fixed
-        /// world direction is frame-invariant by construction.</para>
+        /// for height, the in-level tangent for plan-width) and taking max-min - never a bounding box's extent,
+        /// which is only tight when the room happens to be axis-aligned to it (a tilted OR merely plan-yawed room
+        /// inflates any axis-aligned box and can understate the ratio). A dot product with a fixed world
+        /// direction is frame-invariant by construction, so no canonical-frame transform is needed at all.</para>
         /// <para>Deliberately conservative (errs toward NOT rejecting, since a false positive pushes a
         /// well-modelled input onto the weaker managed pipeline): a horizontal cap sliver, a stray face outside
-        /// every cell, a boundary-coincident face, and a short fin are all excluded - so atria, courtyard rings
-        /// and double-height rooms (none of which contain a dropped full-height interior wall) do not trip it.
+        /// every cell, a boundary-coincident face, a short fin, and a sparse/triangular brace are all excluded -
+        /// so atria, courtyard rings, double-height rooms and legitimate diagonal bracing do not trip it.
         /// Native-free (pure managed Shell/Face3D geometry); the pure decision stays in
         /// <see cref="EvaluateRawAdoption"/>, which just receives this count.</para>
         /// </summary>
@@ -1319,18 +1328,12 @@ namespace SAM.Geometry.OCCT.Solver
             double maxVerticalNormalZ = System.Math.Sin(verticalAngleTolerance); // |n.Up| at/below this => wall-like
             HashSet<int> underSplitCells = new HashSet<int>();
 
-            foreach (Face3D dropped in droppedFace3Ds)
+            foreach (List<Face3D> group in GroupCoplanarFaces(droppedFace3Ds))
             {
-                Vector3D normal = dropped?.GetPlane()?.Normal?.Unit;
+                Vector3D normal = group[0]?.GetPlane()?.Normal?.Unit;
                 if (normal == null || System.Math.Abs(normal.DotProduct(upUnit)) > maxVerticalNormalZ)
                 {
-                    continue; // only a face vertical relative to the level (wall-like) can be a room divider
-                }
-
-                Point3D internalPoint = dropped.GetInternalPoint3D(tolerance);
-                if (internalPoint == null)
-                {
-                    continue;
+                    continue; // only a group vertical relative to the level (wall-like) can be a room divider
                 }
 
                 // The in-level horizontal tangent along the partition (perpendicular to both Up and the
@@ -1343,13 +1346,54 @@ namespace SAM.Geometry.OCCT.Solver
                 }
                 Vector3D tangentUnit = tangent.Unit;
 
-                if (!TryVertexExtent(dropped, upUnit, out double faceHeightMin, out double faceHeightMax)
-                    || !TryVertexExtent(dropped, tangentUnit, out double facePlanMin, out double facePlanMax))
+                // Pool every fragment's vertices/area - a divider split into pieces is measured as the one
+                // physical element it represents (codex #7 review, round 4), not each piece independently.
+                double faceHeightMin = double.PositiveInfinity, faceHeightMax = double.NegativeInfinity;
+                double facePlanMin = double.PositiveInfinity, facePlanMax = double.NegativeInfinity;
+                double totalArea = 0;
+                List<Point3D> internalPoints = new List<Point3D>();
+                foreach (Face3D member in group)
+                {
+                    if (TryVertexExtent(member, upUnit, out double hMin, out double hMax))
+                    {
+                        faceHeightMin = System.Math.Min(faceHeightMin, hMin);
+                        faceHeightMax = System.Math.Max(faceHeightMax, hMax);
+                    }
+
+                    if (TryVertexExtent(member, tangentUnit, out double pMin, out double pMax))
+                    {
+                        facePlanMin = System.Math.Min(facePlanMin, pMin);
+                        facePlanMax = System.Math.Max(facePlanMax, pMax);
+                    }
+
+                    double area = member.GetArea();
+                    if (!double.IsNaN(area))
+                    {
+                        totalArea += area;
+                    }
+
+                    Point3D internalPoint = member.GetInternalPoint3D(tolerance);
+                    if (internalPoint != null)
+                    {
+                        internalPoints.Add(internalPoint);
+                    }
+                }
+
+                if (internalPoints.Count == 0 || double.IsInfinity(faceHeightMin) || double.IsInfinity(facePlanMin))
                 {
                     continue;
                 }
+
                 double faceHeight = faceHeightMax - faceHeightMin;
                 double facePlan = facePlanMax - facePlanMin;
+
+                // Coverage: a sparse/triangular fragment (a brace, gusset, stair stringer) can touch all four
+                // extrema of its bounding rectangle without nearly FILLING it - codex #7 review, round 4.
+                double boundingArea = faceHeight * facePlan;
+                if (boundingArea <= tolerance || totalArea < UNDER_SPLIT_MIN_COVERAGE_RATIO * boundingArea)
+                {
+                    continue; // does not fill its own footprint - not a real divider, even if it spans it
+                }
 
                 for (int c = 0; c < cells.Count; c++)
                 {
@@ -1364,8 +1408,11 @@ namespace SAM.Geometry.OCCT.Solver
                         continue;
                     }
 
-                    // Strictly interior: inside the cell AND not merely on its boundary.
-                    if (!shell.Inside(internalPoint, fuzzyTolerance, tolerance) || shell.On(internalPoint, tolerance))
+                    // Strictly interior: some fragment's interior point is inside the cell AND not merely on its
+                    // boundary. Per-fragment (not pooled) so two UNRELATED but coincidentally coplanar dividers in
+                    // two different rooms are never credited to the wrong cell.
+                    Point3D interiorHit = internalPoints.Find(p => shell.Inside(p, fuzzyTolerance, tolerance) && !shell.On(p, tolerance));
+                    if (interiorHit == null)
                     {
                         continue;
                     }
@@ -1390,13 +1437,67 @@ namespace SAM.Geometry.OCCT.Solver
 
                     underSplitCells.Add(c);
                     details.Add(string.Format(
-                        "cell {0} (vol {1:0.###} m3, height {2:0.###} m) harbours a dropped partition spanning {3:P0} of its height and {4:P0} of its plan width at ({5:0.##}, {6:0.##}, {7:0.##})",
-                        c, cells[c].Volume, cellHeight, faceHeight / cellHeight, facePlan / cellPlan, internalPoint.X, internalPoint.Y, internalPoint.Z));
+                        "cell {0} (vol {1:0.###} m3, height {2:0.###} m) harbours {3} dropped fragment(s) spanning {4:P0} of its height and {5:P0} of its plan width at ({6:0.##}, {7:0.##}, {8:0.##})",
+                        c, cells[c].Volume, cellHeight, group.Count, faceHeight / cellHeight, facePlan / cellPlan, interiorHit.X, interiorHit.Y, interiorHit.Z));
                     break;
                 }
             }
 
             return underSplitCells.Count;
+        }
+
+        /// <summary>Groups <paramref name="face3Ds"/> by shared infinite plane (parallel normal within 0.99 dot
+        /// product, and within 0.05 m of the same plane offset - the same "same plane" tolerances
+        /// <see cref="IsRepresented"/> already uses) - so a single physical partition exported as several
+        /// coplanar fragments (e.g. split at a door head) is measured as ONE element (codex #7 review, round 4)
+        /// rather than each fragment independently. A face with no plane starts its own singleton group.</summary>
+        private static List<List<Face3D>> GroupCoplanarFaces(List<Face3D> face3Ds)
+        {
+            List<List<Face3D>> groups = new List<List<Face3D>>();
+            List<Plane> groupPlanes = new List<Plane>();
+
+            foreach (Face3D face3D in face3Ds ?? new List<Face3D>())
+            {
+                Plane plane = face3D?.GetPlane();
+                Vector3D normal = plane?.Normal?.Unit;
+                if (normal == null)
+                {
+                    groups.Add(new List<Face3D> { face3D });
+                    groupPlanes.Add(null);
+                    continue;
+                }
+
+                int matchIndex = -1;
+                for (int i = 0; i < groupPlanes.Count; i++)
+                {
+                    Plane groupPlane = groupPlanes[i];
+                    Vector3D groupNormal = groupPlane?.Normal?.Unit;
+                    if (groupNormal == null || System.Math.Abs(normal.DotProduct(groupNormal)) < 0.99)
+                    {
+                        continue; // not parallel - a different orientation
+                    }
+
+                    if (System.Math.Abs(plane.Distance(groupPlane.Origin)) > 0.05)
+                    {
+                        continue; // parallel but a different (offset) plane
+                    }
+
+                    matchIndex = i;
+                    break;
+                }
+
+                if (matchIndex >= 0)
+                {
+                    groups[matchIndex].Add(face3D);
+                }
+                else
+                {
+                    groups.Add(new List<Face3D> { face3D });
+                    groupPlanes.Add(plane);
+                }
+            }
+
+            return groups;
         }
 
         /// <summary>The min/max of every boundary vertex of <paramref name="face3D"/> dotted with
