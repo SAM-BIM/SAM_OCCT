@@ -25,7 +25,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("a7e4c92f-1b53-4d8a-9f26-3c70e1b8d4a5");
 
-        public override string LatestComponentVersion => "0.5.0";
+        public override string LatestComponentVersion => "0.6.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -100,6 +100,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 // Phase 8: pre-resolve reporting, append-only and Voluntary - existing saved definitions keep working.
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "SourceMap", NickName = "SourceMap", Description = "One line per input source: which filled/extended output face(s) it contributed to.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelFrames", NickName = "LevelFrames", Description = "One line per clustered level datum (elevation, tilt, cap count) cap normalization conditioned onto. Empty when the model formed no frames.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+
+                // E3 (docs/EXTEND3D_ROBUST_HANDOVER.md): per-panel extend observability, append-only and Voluntary.
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "ExtendReport", NickName = "ExtendReport", Description = "One SAM_OCCT_EXTEND3D_PANEL line per applied extend/fill op: which panel (source Guid + solver index), which edge (top / bottom / plan-start / plan-end / cap-grow), measured from -> to, toward what target (cap index + scalar or sloped-plane branch, or the 2D plan-loop), the overshoot and the lateral-cap flag. Also carries any SAM_OCCT_EXTEND3D_HOLE_DROPPED a footprint trim recorded.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new GooSAMGeometryParam() { Name = "ExtendPreview", NickName = "ExtendPreview", Description = "Moved-edge preview: a Segment3D from -> to for each wall edge the extend moved (top/base raised/lowered at the wall centre, plan ends grown). Cap grows are in-plane offsets with no single edge and contribute none. Drop alongside the panels to see what moved and how far.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
 
                 return result.ToArray();
             }
@@ -258,6 +262,19 @@ namespace SAM.Analytical.Grasshopper.OCCT
             if (index != -1)
             {
                 dataAccess.SetDataList(index, report == null ? null : SolverReportFormat.FormatLevelFrames(report.LevelFrames));
+            }
+
+            // E3 observability: per-panel extend summary + moved-edge preview from the pre-resolve report.
+            index = Params.IndexOfOutputParam("ExtendReport");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, report?.FormatExtendRecords());
+            }
+
+            index = Params.IndexOfOutputParam("ExtendPreview");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, report?.ExtendPreviewSegment3Ds()?.Where(x => x != null).Select(x => new GooSAMGeometry(x)));
             }
         }
 

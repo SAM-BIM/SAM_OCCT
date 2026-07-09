@@ -475,6 +475,42 @@ ACCEPTANCE GATE: all goldens AND E2 pins byte-identical (this phase moves nothin
 current; TESTING.md section committed.
 ```
 
+**E3 outcome note (2026-07-09, Opus 4.8 impl):** implemented on branch `feat/extend3d-observability`
+off the post-E2 `sow/2026-Q3` (HEAD `1713a5d`). Zero geometry change, as specified. (Plan assigned
+Sonnet 5 High; owner ran it on Opus 4.8.)
+
+- **Recording (task 1).** New `ExtendRecord` + `ExtendOperationKind` (`SAM.Geometry.OCCT.Solver`); the
+  extend statics (`ExtendWalls`/`Extend`/`Fill` → `ExtendWallToNearestCap`) gain an optional
+  `List<ExtendRecord>` sink threaded via `ConditionStage.Condition`. A **null sink is byte-identical**
+  to the pre-E3 path (asserted). Records are captured in the canonical frame during conditioning and
+  back-transformed with the faces (`fromCanonical`) so preview points land in the world frame. Each
+  record carries panel Guid (resolved analytically — the solver has no Guids) + solver index, op kind,
+  measured from→to, target (cap index + `cap-scalar`/`cap-plane` branch, or `walls`/`fixed-margin`),
+  overshoot and the lateral-cap flag. Only **actual** moves are recorded (bbox/area delta > tol); no
+  record on a no-op.
+- **Carrier decision.** Records ride a new `Panel3DSnapSolver.ExtendRecords` / `Solve3DReport.ExtendRecords`
+  (trailing optional ctor param) rather than `SolverDiagnostics`, so `solver.Diagnostics`,
+  `ClosureReportText` and the shared `FormatDiagnostics` stay **byte-identical** (protecting the report
+  golden tests). Coded `SAM_OCCT_EXTEND3D_PANEL:` lines are emitted via a new
+  `SolverReportFormat.FormatExtendRecords(records, sources)` into the same `diagnostics` list on
+  `Extend3D`/`OpenPanels3D`/managed `Solve3D`.
+- **Hole-drop surfaced.** The E1-deferred `SAM_OCCT_EXTEND3D_HOLE_DROPPED` (recorded on the panel, never
+  surfaced) now flows out via `SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels)` on
+  the same runs.
+- **GH (task 2).** `SAMOCCTExtend3D` gains two append-only Voluntary outputs — `ExtendReport` (text) and
+  `ExtendPreview` (moved-edge `Segment3D`s) — sourced from `report.FormatExtendRecords()` /
+  `report.ExtendPreviewSegment3Ds()`. Component `0.5.0 → 0.6.0`; existing canvases load unchanged.
+- **Baselines (task 3).** The `WorkflowParityIntegrationTests` `Expectations` were **verified consistent**
+  with the post-E2 status (all 9 fixtures green, no re-baseline needed). TESTING.md's per-fixture table
+  (stale at 2026-07-07) was refreshed to the current harness output and the E-track summary + diagnostics
+  code list added.
+- **Verification.** Raw + managed goldens and E2 real-export pins **byte-identical**; full blast radius
+  green with native present — **467 unit / 168 integration** (+1 native-missing skip). New tests:
+  `SolverReportFormatTests`, `Solve3DReportTests` (format + round-trip), `Panel3DSnapSolverTests` (records
+  match moves; null recorder byte-identical), `Extend3DObservabilityIntegrationTests` (native-free
+  end-to-end). Note for P4: judge false-positives against the **post-E2** managed baselines (Revit 14/0,
+  AdjacencyCluster-home 18/4, Face3D-home 20/4), not the plan's original snapshot.
+
 ## 8. E3 review prompt (Opus 4.8, xhigh)
 
 ```

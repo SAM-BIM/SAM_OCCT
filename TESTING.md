@@ -1182,32 +1182,38 @@ for the first time** (previously zero, per the CellComplex handover's diagnosed 
 invariant holds on all 9 fixtures for both solver-matched workflows today. The gaps this harness
 found are all in workflow closure (space count), not in the merge.
 
-### Per-fixture table (2026-07-07, native present)
+### Per-fixture table (2026-07-09, post-E2, native present)
+
+Verbatim `WorkflowParityIntegrationTests` output (its `FormatWorkflow` rows). Refreshed after E2 landed
+(the 2026-07-07 snapshot predated it); **E3 verified this is byte-identical** — the observability phase
+changes no geometry, so re-running the harness reproduces these rows exactly.
 
 | Fixture | Input panels | Solver `ResolvedCellCount` (naked) | Workflow A (old defaults) | Workflow A (solver-matched) | Workflow B (Clean3D→Extend3D) | Dropped/Retained (solve) | Verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| whole-level-flat.sam | 148 | 22 (0) | cells=22 faces=134 adj=2; spaces=22 panels=134 (int=2 ext=132 orphan=0) parity=clean merged=134 | cells=22 faces=134 adj=2; spaces=22 panels=134 (int=2 ext=132 orphan=0) parity=clean merged=134 | cells=22 faces=237 adj=22; spaces=22 panels=237 (int=22 ext=215 orphan=0) parity=clean merged=142 | 16/0 | OK |
-| tilted-two-spaces.sam | 16 | 2 (0) | cells=2 faces=12 adj=0; spaces=2 panels=12 (int=0 ext=12 orphan=0) parity=clean merged=12 | cells=2 faces=12 adj=0; spaces=2 panels=12 (int=0 ext=12 orphan=0) parity=clean merged=12 | cells=2 faces=19 adj=1; spaces=2 panels=19 (int=1 ext=18 orphan=0) parity=clean merged=12 | 4/0 | OK |
-| whole-level-tilted.sam | 148 | 22 (0) | cells=22 faces=199 adj=22; spaces=22 panels=199 (int=22 ext=177 orphan=0) parity=clean merged=146 | cells=22 faces=165 adj=22; spaces=22 panels=165 (int=22 ext=143 orphan=0) parity=clean merged=142 | cells=22 faces=234 adj=22; spaces=22 panels=234 (int=22 ext=212 orphan=0) parity=clean merged=146 | 30/0 | OK |
-| two-level-tilted.sam | 287 | 44 (0) | cells=44 faces=266 adj=2; spaces=44 panels=266 (int=2 ext=264 orphan=0) parity=clean merged=266 | cells=43 faces=261 adj=1; spaces=43 panels=261 (int=1 ext=260 orphan=0) parity=clean merged=259 | cells=26 faces=421 adj=49; spaces=26 panels=417 (int=47 ext=370 orphan=0) parity=**WARN** merged=181 | 22/0 | both workflows diverge from solver cell count |
-| whole-level-towers.sam | 215 | 32 (0) | cells=32 faces=192 adj=0; spaces=32 panels=192 (int=0 ext=192 orphan=0) parity=clean merged=192 | cells=32 faces=192 adj=0; spaces=32 panels=192 (int=0 ext=192 orphan=0) parity=clean merged=192 | cells=26 faces=291 adj=24; spaces=26 panels=291 (int=24 ext=267 orphan=0) parity=clean merged=169 | 23/0 | workflow B under/over-closes |
-| AdjacencyCluster-home.sam | 106 | 19 (13) | cells=16 faces=105 adj=36; spaces=16 panels=105 (int=36 ext=69 orphan=0) parity=clean merged=94 | cells=8 faces=52 adj=4; spaces=8 panels=52 (int=4 ext=48 orphan=0) parity=clean merged=48 | cells=16 faces=100 adj=36; spaces=16 panels=100 (int=36 ext=64 orphan=0) parity=clean merged=94 | 0/0 | both workflows diverge from solver cell count |
-| Face3D-home.sam | 124 | 13 (8) | cells=13 faces=79 adj=21; spaces=13 panels=79 (int=21 ext=58 orphan=0) parity=clean merged=75 | cells=11 faces=70 adj=17; spaces=11 panels=70 (int=17 ext=53 orphan=0) parity=**WARN** merged=66 | cells=13 faces=77 adj=21; spaces=13 panels=77 (int=21 ext=56 orphan=0) parity=clean merged=75 | 4/0 | workflow A under/over-closes |
-| Revit-home-panels.sam | 39 | 13 (11) | cells=10 faces=65 adj=18; spaces=10 panels=65 (int=18 ext=47 orphan=0) parity=clean merged=57 | cells=7 faces=48 adj=11; spaces=7 panels=48 (int=11 ext=37 orphan=0) parity=clean merged=45 | cells=6 faces=42 adj=11; spaces=6 panels=42 (int=11 ext=31 orphan=0) parity=clean merged=39 | 12/0 | both workflows diverge from solver cell count |
-| three-spaces.sam | 19 | 3 (0) | cells=3 faces=18 adj=0; spaces=3 panels=18 (int=0 ext=18 orphan=0) parity=clean merged=18 | cells=3 faces=18 adj=0; spaces=3 panels=18 (int=0 ext=18 orphan=0) parity=clean merged=18 | cells=3 faces=28 adj=2; spaces=3 panels=28 (int=2 ext=26 orphan=0) parity=clean merged=19 | 1/0 | OK |
+| whole-level-flat.sam | 148 | 22 (naked=0) | OCCT cells=22 faces=134 adj=2; SAM spaces=22 panels=134 (int=2 ext=132 orphan=0) parity=clean merged=134 | OCCT cells=22 faces=134 adj=2; SAM spaces=22 panels=134 (int=2 ext=132 orphan=0) parity=clean merged=134 | OCCT cells=22 faces=237 adj=22; SAM spaces=22 panels=237 (int=22 ext=215 orphan=0) parity=clean merged=142 | 16/0 | OK |
+| tilted-two-spaces.sam | 16 | 2 (naked=0) | OCCT cells=2 faces=12 adj=0; SAM spaces=2 panels=12 (int=0 ext=12 orphan=0) parity=clean merged=12 | OCCT cells=2 faces=12 adj=0; SAM spaces=2 panels=12 (int=0 ext=12 orphan=0) parity=clean merged=12 | OCCT cells=2 faces=19 adj=1; SAM spaces=2 panels=19 (int=1 ext=18 orphan=0) parity=clean merged=12 | 4/0 | OK |
+| whole-level-tilted.sam | 148 | 22 (naked=0) | OCCT cells=22 faces=199 adj=22; SAM spaces=22 panels=199 (int=22 ext=177 orphan=0) parity=clean merged=146 | OCCT cells=22 faces=173 adj=22; SAM spaces=22 panels=173 (int=22 ext=151 orphan=0) parity=clean merged=143 | OCCT cells=22 faces=234 adj=22; SAM spaces=22 panels=234 (int=22 ext=212 orphan=0) parity=clean merged=146 | 30/0 | OK |
+| two-level-tilted.sam | 287 | 44 (naked=0) | OCCT cells=44 faces=266 adj=2; SAM spaces=44 panels=266 (int=2 ext=264 orphan=0) parity=clean merged=266 | OCCT cells=43 faces=261 adj=1; SAM spaces=43 panels=261 (int=1 ext=260 orphan=0) parity=clean merged=259 | OCCT cells=25 faces=402 adj=46; SAM spaces=25 panels=398 (int=44 ext=354 orphan=0) parity=WARN merged=174 | 22/0 | both workflows diverge from solver cell count |
+| whole-level-towers.sam | 215 | 32 (naked=0) | OCCT cells=32 faces=192 adj=0; SAM spaces=32 panels=192 (int=0 ext=192 orphan=0) parity=clean merged=192 | OCCT cells=32 faces=192 adj=0; SAM spaces=32 panels=192 (int=0 ext=192 orphan=0) parity=clean merged=192 | OCCT cells=28 faces=320 adj=27; SAM spaces=28 panels=320 (int=27 ext=293 orphan=0) parity=clean merged=184 | 23/0 | workflow B under/over-closes |
+| AdjacencyCluster-home.sam | 106 | 18 (naked=4) | OCCT cells=18 faces=115 adj=47; SAM spaces=18 panels=115 (int=47 ext=68 orphan=0) parity=clean merged=106 | OCCT cells=18 faces=115 adj=47; SAM spaces=18 panels=115 (int=47 ext=68 orphan=0) parity=clean merged=106 | OCCT cells=18 faces=112 adj=49; SAM spaces=18 panels=112 (int=49 ext=63 orphan=0) parity=clean merged=106 | 0/0 | OK |
+| Face3D-home.sam | 124 | 20 (naked=4) | OCCT cells=20 faces=113 adj=47; SAM spaces=20 panels=113 (int=47 ext=66 orphan=0) parity=clean merged=113 | OCCT cells=19 faces=108 adj=46; SAM spaces=19 panels=108 (int=46 ext=62 orphan=0) parity=clean merged=108 | OCCT cells=20 faces=115 adj=47; SAM spaces=20 panels=115 (int=47 ext=68 orphan=0) parity=clean merged=114 | 0/0 | workflow A under/over-closes |
+| Revit-home-panels.sam | 39 | 14 (naked=0) | OCCT cells=14 faces=75 adj=30; SAM spaces=14 panels=75 (int=30 ext=45 orphan=0) parity=clean merged=69 | OCCT cells=14 faces=74 adj=29; SAM spaces=14 panels=74 (int=29 ext=45 orphan=0) parity=clean merged=69 | OCCT cells=9 faces=49 adj=17; SAM spaces=9 panels=49 (int=17 ext=32 orphan=0) parity=clean merged=47 | 12/0 | workflow B under/over-closes |
+| three-spaces.sam | 19 | 3 (naked=0) | OCCT cells=3 faces=18 adj=0; SAM spaces=3 panels=18 (int=0 ext=18 orphan=0) parity=clean merged=18 | OCCT cells=3 faces=18 adj=0; SAM spaces=3 panels=18 (int=0 ext=18 orphan=0) parity=clean merged=18 | OCCT cells=3 faces=28 adj=2; SAM spaces=3 panels=28 (int=2 ext=26 orphan=0) parity=clean merged=19 | 1/0 | OK |
 
-Four fixtures had **no prior baseline at all** (`AdjacencyCluster-home`, `Face3D-home`,
-`Revit-home-panels`, `three-spaces` - Appendix B of the CellComplex handover); this table is their
-first workflow-level measurement. Known-broken cells are tracked with a tracking comment in the
-harness's `Expectations` table, not silently skipped:
+The solver `ResolvedCellCount (naked)` column is production `Solve3D` (raw-first); the managed
+`Extend3DPlaneTargetIntegrationTests` pins (Revit 14/0, AdjacencyCluster-home 18/4, Face3D-home 20/4,
+two-level-tilted 32/32, `forceManagedPipeline`) are a *different* pipeline — consistent, not the same
+number. Known-not-yet-closing rows are pinned in the harness's `Expectations` table with a tracking
+comment (E2-current), never silently skipped:
 
-- **two-level-tilted / whole-level-towers, workflow B:** matches the already-pinned
-  `GoldenMasterIntegrationTests.ManagedFixtures` finding that the managed pipeline under-closes
-  these two multi-storey fixtures. This is the E-track's (`docs/EXTEND3D_ROBUST_HANDOVER.md`) target
-  - E2 (plane-intersection cap targets) is expected to move these rows; P4 gate hardening is
-  blocked until E2 merges for exactly this reason.
-- **AdjacencyCluster-home, Face3D-home, Revit-home-panels:** new findings with no prior baseline,
-  not yet triaged - tracked in the harness, not a regression against anything previously measured.
+- **E2's real-export wins.** `AdjacencyCluster-home` now closes 18/18 cleanly on **both** solver-matched
+  workflows (was 25 naked upstream); `Revit-home-panels` closes production 14/0 (A-matched 14/14, B still
+  9 vs 14); `Face3D-home` closes B 20/20 (A-matched 19 vs 20). Pitched roofs followed as clamped
+  column-wise planes — see the E2 re-baseline table below.
+- **two-level-tilted / whole-level-towers, workflow B:** still under-close (25 vs 44; 28 vs 32) —
+  *rigidly tilted flat levels*, **byte-identical under E2** (their caps are flat-relative to their walls).
+  Closing the residual needs *frame-aware* extension (extend along the level's tilted up-axis), deferred
+  as a follow-up; this is not E2's plane-targeting nor E3's observability.
 
 ### Running the P1 harness
 
@@ -1336,6 +1342,75 @@ A 19/20. The tilted fixtures' rows (two-level-tilted, whole-level-towers) are un
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~Extend3DPlaneTargetIntegrationTests"
 dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~Panel3DSnapSolverTests"
 ```
+
+## Extend3D observability (docs/EXTEND3D_ROBUST_HANDOVER.md, Phase E3)
+
+E3 makes every managed extend/fill mutation **observable**, with **zero geometry change**. The E1/E2
+primitives are untouched; the solver merely *measures* each applied operation and hands it to the
+report/Grasshopper layer. The recorder threads through the extend statics as an optional sink (a null
+sink is byte-identical to a run without it — asserted by `Panel3DSnapSolverTests`).
+
+**What is recorded** — one `ExtendRecord` (`SAM.Geometry.OCCT.Solver`) per *applied* operation (never a
+no-op call), surfaced on `Panel3DSnapSolver.ExtendRecords` and `Solve3DReport.ExtendRecords`:
+
+- panel identity: source Guid (resolved at the analytical layer — the geometry solver has no Guids) +
+  solver index;
+- operation kind: `top` / `bottom` (cap extend), `plan-start` / `plan-end` (lateral foot move),
+  `cap-grow`;
+- measured **from → to**: elevation / distance-to-plane for a cap extend, plan parameter for a foot
+  move, area for a cap grow — each cross-checked in tests against the actual post-op geometry;
+- target identity: the cap's solver index plus whether it took the **scalar** (E1 flat-Z, `cap-scalar`)
+  or the **E2 sloped-plane** (`cap-plane`) branch, or the 2D `walls` plan-loop, or `fixed-margin`;
+- overshoot applied, and the **lateral-cap flag** (set only when an *extended* foot end reached
+  `min(MaxExtend, 0.49·length)` — vertical reach is MaxExtend-uncapped, so top/bottom are always false).
+
+**Surfacing** — through the existing diagnostics/report path, so nothing new to plumb:
+
+- coded `SAM_OCCT_EXTEND3D_PANEL:` lines (one per record, Guid-resolved) join the `diagnostics` list on
+  `Extend3D`, `OpenPanels3D` and managed `Solve3D` runs (empty on a raw-adopted solve);
+- `Solve3DReport.FormatExtendRecords()` and `Solve3DReport.ExtendPreviewSegment3Ds()` (moved-edge
+  `Segment3D` from → to; cap grows have no single edge and contribute none);
+- the E1-deferred `SAM_OCCT_EXTEND3D_HOLE_DROPPED` (a footprint trim clipping an opening, R6) is now
+  flowed out of the panel to the same list — previously recorded but never surfaced;
+- Grasshopper `SAMOCCT.Extend3D` gains two **append-only Voluntary** outputs — `ExtendReport` (the text
+  lines) and `ExtendPreview` (the segments). Existing canvases load unchanged (component `0.5.0 → 0.6.0`).
+
+**Diagnostics codes (extend track):** `SAM_OCCT_EXTEND3D_PANEL:` (per-op summary, E3),
+`SAM_OCCT_EXTEND3D_HOLE_DROPPED:` (opening clipped by a trim, E1 — surfaced E3),
+`SAM_OCCT_EXTEND3D_RESULT:` / `SAM_OCCT_EXTEND3D_OPEN_ENDS:` (pre-existing pass summaries).
+
+**Acceptance (zero geometry change).** All raw + managed golden pins and the E2 real-export pins are
+**byte-identical**; the full blast-radius suite is green with native present (**467 unit / 168
+integration**, +1 native-missing skip). The per-fixture table above was refreshed and re-verified
+against a fresh harness run. This phase moves nothing.
+
+**Tests.** `SolverReportFormatTests` / `Solve3DReportTests` (the `SAM_OCCT_EXTEND3D_PANEL:` line format
++ Guid resolution + preview segments + the report round-trip); `Panel3DSnapSolverTests` (the extend
+statics record moves that match the geometry, and a null recorder is byte-identical);
+`Extend3DObservabilityIntegrationTests` (native-free end-to-end via `Extend3D` on a short-walled room —
+every record matches an actual move and the coded lines surface).
+
+```powershell
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~SolverReportFormatTests|FullyQualifiedName~Solve3DReportTests"
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~Extend3DObservabilityIntegrationTests"
+```
+
+### E-track summary (E1 · E2 · E3)
+
+The robust-Extend3D track (`docs/EXTEND3D_ROBUST_HANDOVER.md`), interleaved with the CellComplex-first
+program:
+
+| Phase | One line | Managed re-baseline | Geometry |
+| --- | --- | --- | --- |
+| **E1** | Profile/hole-preserving plane-ops rebuild of the extend/trim primitives (no more flat-rectangle re-extrude) | [Managed golden re-baseline (E1)](#managed-golden-re-baseline-e1) — 3 pins moved, mechanism table | raw byte-identical; managed changed (necessary — same walls/code) |
+| **E2** | Walls extend to the ACTUAL cap surface (sloped-plane branch, discriminator keeps tilted/flat levels scalar) | [Managed golden re-baseline (E2)](#managed-golden-re-baseline-e2) — real-export pins, **net −24 naked** | raw + managed goldens byte-identical; wins on pitched-roof exports |
+| **E3** | Per-op observability (`ExtendRecord` → `SAM_OCCT_EXTEND3D_PANEL:` + GH outputs); hole-drop surfaced | none — verification pass | **byte-identical (moves nothing)** |
+
+Raw golden signatures are byte-identical across **all three** phases; managed movement is confined to
+the E1 and E2 re-baseline tables above (each row justified by mechanism), and E3 adds none. P4 gate
+hardening branches off the post-E2 baseline — its false-positive judgements must use the current
+post-E2 managed baselines (Revit 14/0, AdjacencyCluster-home 18/4, Face3D-home 20/4), not the plan's
+original snapshot.
 
 ## ResolvedCellComplex product (docs/CELLCOMPLEX_FIRST_HANDOVER.md, Phase P2)
 

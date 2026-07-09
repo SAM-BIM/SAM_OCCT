@@ -265,6 +265,13 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>The registered panels after the managed snap stage. Carries source mapping.</summary>
         public List<SnappedPanel> SnappedPanels { get; private set; } = new List<SnappedPanel>();
 
+        /// <summary>Per-operation observability for the managed conditioning passes (E3,
+        /// docs/EXTEND3D_ROBUST_HANDOVER.md): one <see cref="ExtendRecord"/> per applied extend/fill
+        /// mutation (which panel, which edge, from where to where, toward what target). Populated only on
+        /// the managed path (empty when the raw solve is adopted, and on <c>StopAfterClean</c>). Points are
+        /// in the world frame. Recording only - the geometry is byte-identical to a run without it.</summary>
+        public IReadOnlyList<ExtendRecord> ExtendRecords { get; private set; } = new List<ExtendRecord>();
+
         /// <summary>The resolved faces. After native resolve these are split/merged; otherwise the snapped faces.</summary>
         public List<Face3D> ResolvedFace3Ds { get; private set; } = new List<Face3D>();
 
@@ -386,6 +393,7 @@ namespace SAM.Geometry.OCCT.Solver
             ResolvedCellCount = 0;
             Cells = new List<SolverCell>();
             LevelFrames = new List<LevelFrame>();
+            ExtendRecords = new List<ExtendRecord>();
             Diagnostics = new SolverDiagnostics();
             Signature = null;
             RawAttemptSignature = null;
@@ -496,6 +504,9 @@ namespace SAM.Geometry.OCCT.Solver
                 AdjustListLength(null, step2Face3Ds.Count, DEFAULT_Weight),
                 AdjustListLength(snapResult.CleanMaxExtensions, step2Face3Ds.Count, DEFAULT_MaxExtension));
 
+            // E3: collect one observability record per applied extend/fill mutation (recording only - the
+            // geometry is byte-identical to a run with a null recorder).
+            List<ExtendRecord> extendRecords = new List<ExtendRecord>();
             ConditionStage.Condition(
                 SnappedPanels,
                 new ConditionStage.Settings
@@ -510,7 +521,8 @@ namespace SAM.Geometry.OCCT.Solver
                     FillMargin = FillMargin,
                     FillOvershoot = FillOvershoot
                 },
-                tolerances);
+                tolerances,
+                extendRecords);
 
             // Plan-closure diagnostic: which wall ends are STILL open after conditioning? These are the panels
             // to upgrade (raise MaxExtend / bucket) before the floors/roofs can fill a closed polysurface.
@@ -526,8 +538,17 @@ namespace SAM.Geometry.OCCT.Solver
                 snappedFace3Ds = snappedFace3Ds.Select(x => x.Transform(fromCanonical)).Where(x => x != null && x.IsValid()).ToList();
                 OpenWallEndPoint3Ds = OpenWallEndPoint3Ds?.Where(x => x != null).Select(x => x.Transform(fromCanonical)).ToList() ?? new List<Point3D>();
                 OpenWallFace3Ds = OpenWallFace3Ds?.Where(x => x != null && x.IsValid()).Select(x => x.Transform(fromCanonical)).Where(x => x != null && x.IsValid()).ToList() ?? new List<Face3D>();
+
+                // The extend records' preview points were captured in the canonical frame - rotate them too so
+                // the moved-edge preview segments land where the world-frame geometry does.
+                foreach (ExtendRecord extendRecord in extendRecords)
+                {
+                    extendRecord.From = extendRecord.From?.Transform(fromCanonical);
+                    extendRecord.To = extendRecord.To?.Transform(fromCanonical);
+                }
             }
 
+            ExtendRecords = extendRecords;
             ResolvedFace3Ds = snappedFace3Ds;
 
             // Stop before the native resolve: the split (MakerVolume trim) stays in Solve3D. The output here
@@ -1248,7 +1269,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// wall parallel to its neighbour, are left where they are. Walls are matched in plan (XY) only -
         /// their elevations are irrelevant to whether they meet at a corner.
         /// </summary>
-        public static void ExtendWalls(List<SnappedPanel> panels, double verticalAngleTolerance, double overshoot, double toleranceDistance)
+        public static void ExtendWalls(List<SnappedPanel> panels, double verticalAngleTolerance, double overshoot, double toleranceDistance, List<ExtendRecord> records = null)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -1259,8 +1280,10 @@ namespace SAM.Geometry.OCCT.Solver
             // reach is measured against the original wall lines (deterministic, order-independent).
             List<SnappedPanel> walls = new List<SnappedPanel>();
             List<Segment3D> feet = new List<Segment3D>();
-            foreach (SnappedPanel panel in panels)
+            List<int> wallPanelIndices = new List<int>(); // position in `panels` (= SnappedPanels), for E3 records
+            for (int panelIndex = 0; panelIndex < panels.Count; panelIndex++)
             {
+                SnappedPanel panel = panels[panelIndex];
                 if (!panel.IsVertical(verticalAngleTolerance))
                 {
                     continue; // only walls run along the plan; floors/roofs are the caps
@@ -1274,6 +1297,7 @@ namespace SAM.Geometry.OCCT.Solver
 
                 walls.Add(panel);
                 feet.Add(foot);
+                wallPanelIndices.Add(panelIndex);
             }
 
             if (walls.Count < 2)
@@ -1362,8 +1386,73 @@ namespace SAM.Geometry.OCCT.Solver
                     neY += uy * overshoot;
                 }
 
-                walls[i].SetVerticalFootprint(new Geometry.Planar.Point2D(nsX, nsY), new Geometry.Planar.Point2D(neX, neY), toleranceDistance);
+                bool changed = walls[i].SetVerticalFootprint(new Geometry.Planar.Point2D(nsX, nsY), new Geometry.Planar.Point2D(neX, neY), toleranceDistance);
+
+                if (records != null && changed)
+                {
+                    RecordPlanFootprintMoves(records, walls[i], wallPanelIndices[i], oStart, oEnd, ux, uy, length,
+                        nsX, nsY, neX, neY, startParam, endParam, feet[i].GetStart().Z, overshoot, toleranceDistance);
+                }
             }
+        }
+
+        /// <summary>E3 observability for a lateral foot move (<see cref="SnappedPanel.SetVerticalFootprint"/>):
+        /// emits one <see cref="ExtendRecord"/> per plan end that actually moved (start and/or end), measured as
+        /// the plan parameter along the wall axis relative to the original start. The lateral-capped flag is set
+        /// when an EXTENDED end reached the wall's extension cap <c>min(MaxExtend, 0.49 * length)</c> (the same
+        /// cap the 2D <c>ExtensionSolver</c> enforces); a trimmed (inward) end is never capped and carries no
+        /// overshoot. Recording only.</summary>
+        private static void RecordPlanFootprintMoves(
+            List<ExtendRecord> records, SnappedPanel wall, int panelIndex,
+            Geometry.Planar.Point2D oStart, Geometry.Planar.Point2D oEnd,
+            double ux, double uy, double length,
+            double nsX, double nsY, double neX, double neY,
+            double startParam, double endParam, double baseZ,
+            double overshoot, double toleranceDistance)
+        {
+            int sourceIndex = RepresentativeSource(wall);
+            double cap = System.Math.Min(System.Math.Max(0, wall.MaxExtension), length * EXTENSION_LIMIT_LENGTH_RATIO);
+
+            // Applied plan parameters (post-overshoot), relative to the original start along the wall axis.
+            double nsParam = (nsX - oStart.X) * ux + (nsY - oStart.Y) * uy;
+            double neParam = (neX - oStart.X) * ux + (neY - oStart.Y) * uy;
+
+            // START end (original plan parameter 0). Extended when the resolved start moved past the original.
+            if (System.Math.Abs(nsParam) > toleranceDistance)
+            {
+                bool extended = startParam < -toleranceDistance;
+                double extensionDistance = extended ? -startParam : 0;
+                records.Add(new ExtendRecord(
+                    panelIndex, sourceIndex, ExtendOperationKind.PlanStart,
+                    0, nsParam, "plan",
+                    new Point3D(oStart.X, oStart.Y, baseZ), new Point3D(nsX, nsY, baseZ),
+                    -1, -1, "walls", "2D plan-loop junction",
+                    extended ? overshoot : 0,
+                    extended && cap > toleranceDistance && extensionDistance >= cap - toleranceDistance));
+            }
+
+            // END end (original plan parameter == length).
+            if (System.Math.Abs(neParam - length) > toleranceDistance)
+            {
+                bool extended = endParam > length + toleranceDistance;
+                double extensionDistance = extended ? endParam - length : 0;
+                records.Add(new ExtendRecord(
+                    panelIndex, sourceIndex, ExtendOperationKind.PlanEnd,
+                    length, neParam, "plan",
+                    new Point3D(oEnd.X, oEnd.Y, baseZ), new Point3D(neX, neY, baseZ),
+                    -1, -1, "walls", "2D plan-loop junction",
+                    extended ? overshoot : 0,
+                    extended && cap > toleranceDistance && extensionDistance >= cap - toleranceDistance));
+            }
+        }
+
+        /// <summary>The panel's representative source-face index (its first <see cref="SnappedPanel.SourceIndices"/>)
+        /// for an <see cref="ExtendRecord"/>; -1 when it carries none. The analytical layer maps this to the
+        /// source panel's Guid (the geometry solver has no Guids).</summary>
+        private static int RepresentativeSource(SnappedPanel panel)
+        {
+            List<int> sourceIndices = panel?.SourceIndices;
+            return sourceIndices != null && sourceIndices.Count > 0 ? sourceIndices[0] : -1;
         }
 
         /// <summary>
@@ -1482,7 +1571,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// stays MaxExtension-UNCAPPED (as before E2 - MaxExtension governs the lateral wall-to-wall reach only;
         /// changing that is out of E2 scope).
         /// </summary>
-        public static void Extend(List<SnappedPanel> panels, double verticalAngleTolerance, double overshoot, double toleranceDistance, double roofOvershoot = 0.5, bool includeRoofs = true)
+        public static void Extend(List<SnappedPanel> panels, double verticalAngleTolerance, double overshoot, double toleranceDistance, double roofOvershoot = 0.5, bool includeRoofs = true, List<ExtendRecord> records = null)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -1490,10 +1579,14 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             List<SnappedPanel> walls = new List<SnappedPanel>();
+            List<int> wallPanelIndices = new List<int>();      // position in `panels` per wall, for E3 records
             List<BoundingBox3D> capBoxes = new List<BoundingBox3D>();
             List<Plane> capPlanes = new List<Plane>();
-            foreach (SnappedPanel panel in panels)
+            List<int> capPanelIndices = new List<int>();        // position in `panels` per cap, for E3 records
+            List<int> capSourceIndices = new List<int>();       // representative source per cap, for E3 records
+            for (int panelIndex = 0; panelIndex < panels.Count; panelIndex++)
             {
+                SnappedPanel panel = panels[panelIndex];
                 BoundingBox3D boundingBox3D = panel.GetBoundingBox();
                 if (boundingBox3D == null)
                 {
@@ -1503,6 +1596,7 @@ namespace SAM.Geometry.OCCT.Solver
                 if (panel.IsVertical(verticalAngleTolerance))
                 {
                     walls.Add(panel);
+                    wallPanelIndices.Add(panelIndex);
                     continue;
                 }
 
@@ -1514,19 +1608,22 @@ namespace SAM.Geometry.OCCT.Solver
                 {
                     capBoxes.Add(boundingBox3D);
                     capPlanes.Add(panel.Plane);
+                    capPanelIndices.Add(panelIndex);
+                    capSourceIndices.Add(RepresentativeSource(panel));
                 }
             }
 
-            foreach (SnappedPanel wall in walls)
+            for (int w = 0; w < walls.Count; w++)
             {
+                SnappedPanel wall = walls[w];
                 BoundingBox3D wallBox = wall.GetBoundingBox();
                 if (wallBox == null)
                 {
                     continue;
                 }
 
-                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, overshoot, roofOvershoot, toleranceDistance, true);
-                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, overshoot, roofOvershoot, toleranceDistance, false);
+                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, overshoot, roofOvershoot, toleranceDistance, true, records, wallPanelIndices[w], capPanelIndices, capSourceIndices);
+                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, overshoot, roofOvershoot, toleranceDistance, false, records, wallPanelIndices[w], capPanelIndices, capSourceIndices);
             }
         }
 
@@ -1547,7 +1644,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// spanning two roof planes still receives its correct multi-slope top from the native kernel, which
         /// trims it against every roof face in the cell complex.</para>
         /// </summary>
-        private static void ExtendWallToNearestCap(SnappedPanel wall, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double overshoot, double roofOvershoot, double toleranceDistance, bool up)
+        private static void ExtendWallToNearestCap(SnappedPanel wall, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double overshoot, double roofOvershoot, double toleranceDistance, bool up, List<ExtendRecord> records = null, int wallPanelIndex = -1, List<int> capPanelIndices = null, List<int> capSourceIndices = null)
         {
             double wallExtreme = up ? wallBox.Max.Z : wallBox.Min.Z;
             double centreX = 0.5 * (wallBox.Min.X + wallBox.Max.X);
@@ -1575,6 +1672,11 @@ namespace SAM.Geometry.OCCT.Solver
             bool capIsRoof = capBox.Max.Z - capBox.Min.Z > toleranceDistance + 0.1;
             double scalarOvershoot = capIsRoof ? roofOvershoot : overshoot;
 
+            // E3: snapshot the wall's real extreme BEFORE the mutation so the record measures the actual move
+            // (the passed wallBox is captured once per wall for cap SELECTION and is stale after the first of
+            // the two up/down calls - the fresh box here is the honest from-value).
+            BoundingBox3D preBox = records != null ? wall.GetBoundingBox() : null;
+
             bool flatRelative = IsCapFlatRelativeToWall(wall, capPlane);
             if (up)
             {
@@ -1598,6 +1700,65 @@ namespace SAM.Geometry.OCCT.Solver
                     wall.ExtendBottomToPlane(capPlane, capBox.Min.Z, overshoot, toleranceDistance);
                 }
             }
+
+            if (records != null && preBox != null)
+            {
+                RecordCapExtend(records, wall, wallPanelIndex, preBox, up, capIndex, capBox, capPlane, flatRelative,
+                    flatRelative ? scalarOvershoot : overshoot, capPanelIndices, capSourceIndices, toleranceDistance);
+            }
+        }
+
+        /// <summary>E3 observability for a vertical cap extend (<see cref="SnappedPanel.ExtendTopTo"/> /
+        /// <c>ExtendTopToPlane</c> and their bottom mirrors): emits one <see cref="ExtendRecord"/> when the
+        /// wall's top/base actually moved, recording the elevation delta at the wall centre, the target cap
+        /// (its panel index) and whether the scalar (E1 flat-Z) or the sloped-plane (E2) branch was taken.
+        /// Vertical reach is MaxExtend-UNCAPPED by policy, so the lateral-capped flag is always false. Recording
+        /// only.</summary>
+        private static void RecordCapExtend(
+            List<ExtendRecord> records, SnappedPanel wall, int wallPanelIndex, BoundingBox3D preBox, bool up,
+            int capIndex, BoundingBox3D capBox, Plane capPlane, bool flatRelative, double overshoot,
+            List<int> capPanelIndices, List<int> capSourceIndices, double toleranceDistance)
+        {
+            BoundingBox3D postBox = wall.GetBoundingBox();
+            if (postBox == null)
+            {
+                return;
+            }
+
+            double fromValue = up ? preBox.Max.Z : preBox.Min.Z;
+            double toValue = up ? postBox.Max.Z : postBox.Min.Z;
+            if (System.Math.Abs(toValue - fromValue) <= toleranceDistance)
+            {
+                return; // no-op: the wall already reached the cap, or the (clamped) target did not clear it
+            }
+
+            double centreX = 0.5 * (preBox.Min.X + preBox.Max.X);
+            double centreY = 0.5 * (preBox.Min.Y + preBox.Max.Y);
+            double capExtremeZ = up ? capBox.Max.Z : capBox.Min.Z;
+
+            int targetPanelIndex = capPanelIndices != null && capIndex >= 0 && capIndex < capPanelIndices.Count ? capPanelIndices[capIndex] : -1;
+            int targetSourceIndex = capSourceIndices != null && capIndex >= 0 && capIndex < capSourceIndices.Count ? capSourceIndices[capIndex] : -1;
+
+            string targetDescription;
+            if (flatRelative)
+            {
+                targetDescription = string.Format("cap z={0:0.###}", capExtremeZ);
+            }
+            else
+            {
+                Vector3D n = capPlane.Normal?.Unit;
+                targetDescription = n == null
+                    ? string.Format("cap z={0:0.###}", capExtremeZ)
+                    : string.Format("cap plane n=({0:0.##},{1:0.##},{2:0.##}) z={3:0.###}", n.X, n.Y, n.Z, capExtremeZ);
+            }
+
+            records.Add(new ExtendRecord(
+                wallPanelIndex, RepresentativeSource(wall),
+                up ? ExtendOperationKind.Top : ExtendOperationKind.Bottom,
+                fromValue, toValue, flatRelative ? "elevation" : "distance-to-plane",
+                new Point3D(centreX, centreY, fromValue), new Point3D(centreX, centreY, toValue),
+                targetPanelIndex, targetSourceIndex, flatRelative ? "cap-scalar" : "cap-plane", targetDescription,
+                overshoot, false));
         }
 
         /// <summary>
@@ -1698,7 +1859,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// overshoots the surrounding walls, closing the floor/roof-to-wall gaps that otherwise leave naked
         /// edges and prevent any cell from closing. The native resolve trims the overshoot back at the walls.
         /// </summary>
-        public static void Fill(List<SnappedPanel> panels, double verticalAngleTolerance, double margin, double toleranceDistance, double overshoot = 0.05)
+        public static void Fill(List<SnappedPanel> panels, double verticalAngleTolerance, double margin, double toleranceDistance, double overshoot = 0.05, List<ExtendRecord> records = null)
         {
             if (panels == null || panels.Count == 0 || margin <= toleranceDistance)
             {
@@ -1710,16 +1871,37 @@ namespace SAM.Geometry.OCCT.Solver
             // trims the small overshoot. A cap with no wall in reach falls back to the fixed-margin grow.
             List<SnappedPanel> walls = panels.Where(x => x.IsVertical(verticalAngleTolerance)).ToList();
 
-            foreach (SnappedPanel panel in panels)
+            for (int panelIndex = 0; panelIndex < panels.Count; panelIndex++)
             {
+                SnappedPanel panel = panels[panelIndex];
                 if (panel.IsVertical(verticalAngleTolerance)) // floors and roofs are the caps
                 {
                     continue;
                 }
 
-                if (!panel.GrowOutwardTo(walls, margin, overshoot, toleranceDistance))
+                double areaBefore = records != null ? panel.GetArea() : 0;
+
+                bool measured = panel.GrowOutwardTo(walls, margin, overshoot, toleranceDistance);
+                if (!measured)
                 {
                     panel.GrowOutward(margin, toleranceDistance);
+                }
+
+                // E3: record the cap grow (area before -> after). A cap grow is an in-plane offset of the whole
+                // boundary - no single moved edge - so it carries no preview segment (null From/To); the measured
+                // grow tells the reviewer which caps reached their walls (measured) vs fell back to fixed-margin.
+                if (records != null)
+                {
+                    double areaAfter = panel.GetArea();
+                    if (areaAfter > areaBefore + toleranceDistance)
+                    {
+                        records.Add(new ExtendRecord(
+                            panelIndex, RepresentativeSource(panel), ExtendOperationKind.CapGrow,
+                            areaBefore, areaAfter, "area",
+                            null, null,
+                            -1, -1, measured ? "walls-measured" : "fixed-margin", string.Empty,
+                            overshoot, false));
+                    }
                 }
             }
         }

@@ -208,6 +208,11 @@ namespace SAM.Analytical.OCCT.Solver
             // method's List<string> diagnostics contract.
             diagnostics.AddRange(SolverReportFormat.FormatDiagnostics(solver.Diagnostics, "SAM_OCCT_SOLVE3D"));
 
+            // E3 observability: one SAM_OCCT_EXTEND3D_PANEL line per applied managed extend/fill op (empty on a
+            // raw-adopted solve), plus any SAM_OCCT_EXTEND3D_HOLE_DROPPED a footprint trim recorded (E1/R6).
+            diagnostics.AddRange(SolverReportFormat.FormatExtendRecords(solver.ExtendRecords, sources));
+            diagnostics.AddRange(SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels));
+
             report = BuildReport(solver, sources, options, classifyCells, minCellVolume);
 
             return result;
@@ -237,7 +242,8 @@ namespace SAM.Analytical.OCCT.Solver
                 solver.LevelFrames,
                 solver.NativeResolved,
                 solver.ResolvedCellCount,
-                resolvedCellComplex: solver.ResolvedCellComplex);
+                resolvedCellComplex: solver.ResolvedCellComplex,
+                extendRecords: solver.ExtendRecords);
         }
 
         /// <summary>
@@ -428,6 +434,11 @@ namespace SAM.Analytical.OCCT.Solver
 
             diagnostics.AddRange(SolverReportFormat.FormatDiagnostics(solver.Diagnostics, "SAM_OCCT_EXTEND3D"));
 
+            // E3 observability: per-panel extend summary (which edge moved, from -> to, toward what) plus any
+            // SAM_OCCT_EXTEND3D_HOLE_DROPPED a footprint trim recorded (E1/R6, previously not surfaced).
+            diagnostics.AddRange(SolverReportFormat.FormatExtendRecords(solver.ExtendRecords, sources));
+            diagnostics.AddRange(SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels));
+
             report = BuildStageReport(solver, sources);
 
             return result;
@@ -452,7 +463,8 @@ namespace SAM.Analytical.OCCT.Solver
                 solver.CleanFace3Ds,
                 solver.LevelFrames,
                 solver.NativeResolved,
-                solver.ResolvedCellCount);
+                solver.ResolvedCellCount,
+                extendRecords: solver.ExtendRecords);
         }
 
         /// <summary>
@@ -515,6 +527,11 @@ namespace SAM.Analytical.OCCT.Solver
                 "SAM_OCCT_OPENPANELS3D_RESULT: {0} wall(s) still open in plan ({1} open end(s)); raise MaxExtend or bucket size on these and re-run.",
                 result.Count,
                 openEndPoint3Ds.Count));
+
+            // E3 observability: the same per-panel extend summary + hole-drop lines Extend3D surfaces, so the
+            // open-ends diagnostic run shows how far each wall was extended (and toward what) before measuring.
+            diagnostics.AddRange(SolverReportFormat.FormatExtendRecords(solver.ExtendRecords, sources));
+            diagnostics.AddRange(SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels));
 
             return result;
         }

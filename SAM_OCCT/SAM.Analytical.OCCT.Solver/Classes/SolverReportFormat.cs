@@ -71,6 +71,85 @@ namespace SAM.Analytical.OCCT.Solver
             return result;
         }
 
+        /// <summary>
+        /// One coded <c>SAM_OCCT_EXTEND3D_PANEL:</c> line per applied managed extend/fill operation (E3,
+        /// docs/EXTEND3D_ROBUST_HANDOVER.md): the mutated panel (its source Guid + solver index), the operation
+        /// kind, the measured from -&gt; to, the target (cap index + scalar/sloped-plane branch, or the 2D
+        /// plan-loop), the overshoot and the lateral-cap flag. The source Guid is resolved here (the geometry
+        /// solver carries only indices); an out-of-range/absent source is reported as "n/a".
+        /// </summary>
+        public static List<string> FormatExtendRecords(IReadOnlyList<ExtendRecord> extendRecords, IReadOnlyList<Panel> sources)
+        {
+            List<string> result = new List<string>();
+            foreach (ExtendRecord extendRecord in extendRecords ?? new List<ExtendRecord>())
+            {
+                if (extendRecord == null)
+                {
+                    continue;
+                }
+
+                result.Add(string.Format(
+                    "SAM_OCCT_EXTEND3D_PANEL: panel {0} {1}",
+                    PanelLabel(extendRecord.PanelIndex, extendRecord.SourceIndex, sources),
+                    extendRecord.Describe()));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// The per-panel extend diagnostics recorded on the conditioned panels themselves - currently only
+        /// <c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c>, emitted when a footprint trim clips or drops an internal
+        /// opening (E1 / R6). These live on the <see cref="SnappedPanel"/> and were previously not surfaced
+        /// beyond the panel; E3 flows them out to the diagnostics list so a dropped window is never silent.
+        /// Already fully-formed coded lines, returned verbatim.
+        /// </summary>
+        public static List<string> FormatExtendPanelDiagnostics(IReadOnlyList<SnappedPanel> snappedPanels)
+        {
+            List<string> result = new List<string>();
+            foreach (SnappedPanel snappedPanel in snappedPanels ?? new List<SnappedPanel>())
+            {
+                foreach (string diagnostic in snappedPanel?.ExtendDiagnostics ?? (IReadOnlyList<string>)new List<string>())
+                {
+                    if (!string.IsNullOrEmpty(diagnostic))
+                    {
+                        result.Add(diagnostic);
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>The moved-edge preview segments for the applied extend operations (E3): one
+        /// <see cref="Segment3D"/> per record that moved a single edge (top/bottom/plan-start/plan-end). Cap
+        /// grows have no single edge and contribute none. For dropping straight onto a Grasshopper canvas
+        /// alongside the extended panels.</summary>
+        public static List<Segment3D> ExtendPreviewSegment3Ds(IReadOnlyList<ExtendRecord> extendRecords)
+        {
+            List<Segment3D> result = new List<Segment3D>();
+            foreach (ExtendRecord extendRecord in extendRecords ?? new List<ExtendRecord>())
+            {
+                Segment3D segment3D = extendRecord?.PreviewSegment3D();
+                if (segment3D != null)
+                {
+                    result.Add(segment3D);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>"{source Guid} (#{solver index})" for an extend record's panel; "n/a (#idx)" when the
+        /// source index is out of range or the panel is absent.</summary>
+        private static string PanelLabel(int panelIndex, int sourceIndex, IReadOnlyList<Panel> sources)
+        {
+            string guid = sourceIndex >= 0 && sources != null && sourceIndex < sources.Count && sources[sourceIndex] != null
+                ? sources[sourceIndex].Guid.ToString()
+                : "n/a";
+            return string.Format("{0} (#{1})", guid, panelIndex);
+        }
+
         /// <summary>One line per level frame: elevation, tilt (degrees) and member cap count.</summary>
         public static List<string> FormatLevelFrames(IReadOnlyList<LevelFrame> levelFrames)
         {
