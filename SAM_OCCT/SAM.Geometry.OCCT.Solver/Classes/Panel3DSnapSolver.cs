@@ -2786,6 +2786,16 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
+        /// The pre-P4 six-argument gate signature, preserved for binary compatibility: a downstream binary
+        /// compiled against it keeps resolving this exact overload (no <see cref="System.MissingMethodException"/>
+        /// after a DLL swap). Delegates with no under-split cells - i.e. the pre-P4 behaviour exactly.
+        /// </summary>
+        public static RawAdoptionOutcome EvaluateRawAdoption(int cellCount, int resolvedFaceCount, int nakedEdgeCount, int sliverCellCount, double droppedRatio, double maxDroppedRatio)
+        {
+            return EvaluateRawAdoption(cellCount, resolvedFaceCount, nakedEdgeCount, sliverCellCount, droppedRatio, maxDroppedRatio, 0);
+        }
+
+        /// <summary>
         /// The raw-first (L0) adoption gate's decision rule, pure and native-free so it is unit-testable
         /// without a kernel: given what a raw resolve measured, decides whether it is trusted as-is or the
         /// managed pipeline should run instead. Checked in this order - no cells formed, a gappy envelope
@@ -2797,7 +2807,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// the caller computes it geometrically (<see cref="CountUnderSplitCells"/>) and passes it here so this
         /// rule stays pure and unit-testable across every branch.
         /// </summary>
-        public static RawAdoptionOutcome EvaluateRawAdoption(int cellCount, int resolvedFaceCount, int nakedEdgeCount, int sliverCellCount, double droppedRatio, double maxDroppedRatio, int underSplitCellCount = 0)
+        public static RawAdoptionOutcome EvaluateRawAdoption(int cellCount, int resolvedFaceCount, int nakedEdgeCount, int sliverCellCount, double droppedRatio, double maxDroppedRatio, int underSplitCellCount)
         {
             if (cellCount < 1 || resolvedFaceCount == 0)
             {

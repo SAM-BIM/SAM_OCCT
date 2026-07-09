@@ -42,10 +42,6 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>An input face has no surviving representation in the resolved output.</summary>
         DroppedFace,
 
-        /// <summary>Raw adoption rejected because a dropped room-dividing partition sits strictly inside an
-        /// adopted cell (rooms merged watertight-but-wrong) - the under-split gate (codex #7, P4).</summary>
-        UnderSplit,
-
         /// <summary>
         /// A native-history composition gap: an input face that the history neither mapped to an
         /// output nor recorded as deleted, or an output face no input maps to (reverse gap). The
@@ -98,6 +94,11 @@ namespace SAM.Geometry.OCCT.Solver
         /// per-role diagnostic (e.g. <see cref="SliverCell"/>) with the space-layer consequence - never
         /// silent, so a room that unexpectedly did not get a Space is traceable to its cause.
         /// </summary>
-        CellExcludedFromSpaces
+        CellExcludedFromSpaces,
+
+        /// <summary>Raw adoption rejected because a dropped room-dividing partition sits strictly inside an
+        /// adopted cell (rooms merged watertight-but-wrong) - the under-split gate (codex #7, P4). Appended at
+        /// the end of the enum so existing members keep their ordinal values (public-enum binary contract).</summary>
+        UnderSplit
     }
 }
