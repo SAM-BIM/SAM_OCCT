@@ -295,7 +295,15 @@ namespace SAM.Analytical.OCCT
             // One panel per unique cell face, keyed by its per-decode TopologyKey; identity inherited on an
             // unambiguous geometric match, defaulted (and counted) otherwise.
             Dictionary<int, Panel> panelsByKey = new Dictionary<int, Panel>();
-            int inheritedCount = 0, defaultedCount = 0, ambiguousCount = 0, smallFaceCount = 0;
+            // A source panel's plane can contain the interior point of more than one distinct cell face (e.g.
+            // a wall spanning past an internal separator) - MatchPanelByGeometry matches each independently, so
+            // two DIFFERENT cell faces can both resolve to the SAME matched.Guid. Re-stamping both with that
+            // Guid would hand back two Panel objects sharing one identity; AdjacencyCluster (Guid-keyed)
+            // silently keeps only the last one added, dropping a panel and its relations with no diagnostic.
+            // Track which source Guids are already claimed so a second face falls back to a defaulted identity
+            // instead of colliding.
+            HashSet<System.Guid> claimedGuids = new HashSet<System.Guid>();
+            int inheritedCount = 0, defaultedCount = 0, ambiguousCount = 0, guidCollisionCount = 0, smallFaceCount = 0;
             foreach (ResolvedCellFace cellFace in resolvedCellComplex.Faces)
             {
                 if (cellFace?.Face3D == null || panelsByKey.ContainsKey(cellFace.TopologyKey))
@@ -317,6 +325,12 @@ namespace SAM.Analytical.OCCT
                 }
 
                 Panel matched = MatchPanelByGeometry(cellFace.Face3D, panels_Temp, tolerance, out bool ambiguous);
+                if (matched != null && claimedGuids.Contains(matched.Guid))
+                {
+                    guidCollisionCount++;
+                    matched = null;
+                }
+
                 Panel panel;
                 if (matched != null)
                 {
@@ -330,6 +344,7 @@ namespace SAM.Analytical.OCCT
                     if (panel != null)
                     {
                         inheritedCount++;
+                        claimedGuids.Add(matched.Guid);
                     }
                 }
                 else
@@ -395,8 +410,8 @@ namespace SAM.Analytical.OCCT
                 "SAM_OCCT_ANALYTICAL_COMPLEX_CONSUMED: Built adjacency cluster directly from the supplied ResolvedCellComplex (SolveId {0}) with {1} space(s), {2} panel(s), {3} relation(s); {4} face(s) below minArea skipped; {5} face(s) had TopologyKey==0 (excluded from the complex); {6} cell(s) excluded by index.",
                 resolvedCellComplex.SolveId, spaceByCellIndex.Count, panelsByKey.Count, relationCount, smallFaceCount, resolvedCellComplex.TopologyKeyZeroFaceCount, excluded.Count));
             diagnostics.Add(string.Format(
-                "SAM_OCCT_ANALYTICAL_PANEL_IDENTITY: {0} panel(s) inherited identity from a supplied panel; {1} defaulted ({2} of them because the geometric match was ambiguous, never mis-attributed).",
-                inheritedCount, defaultedCount, ambiguousCount));
+                "SAM_OCCT_ANALYTICAL_PANEL_IDENTITY: {0} panel(s) inherited identity from a supplied panel; {1} defaulted ({2} of them because the geometric match was ambiguous, {3} of them because the matched source panel's Guid was already claimed by an earlier cell face - never mis-attributed, never a silent Guid collision).",
+                inheritedCount, defaultedCount, ambiguousCount, guidCollisionCount));
 
             // Keep normals consistent with the relations; do NOT reset panel types or constructions, so the
             // inherited identity survives (unmatched faces keep the default type/construction assigned above).
