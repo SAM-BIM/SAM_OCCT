@@ -8,6 +8,7 @@ using SAM.Analytical.Solver;
 using SAM.Core;
 using SAM.Core.Grasshopper;
 using SAM.Geometry.Grasshopper;
+using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
 using System;
 using System.Collections.Generic;
@@ -24,7 +25,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("3d6b9e02-4a17-4c8d-b5e3-1f9a2c7d4e8b");
 
-        public override string LatestComponentVersion => "0.4.0";
+        public override string LatestComponentVersion => "0.5.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -111,6 +112,16 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "SourceMap", NickName = "SourceMap", Description = "One line per input source: which resolved output face(s) it contributed to, and how (provenance).", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelFrames", NickName = "LevelFrames", Description = "One line per clustered level datum (elevation, tilt, cap count) the managed pipeline conditioned onto. Empty when the raw-first attempt was adopted or the model formed no frames.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "ClosureReport", NickName = "ClosureReport", Description = "Human-readable summary of the solve: adopted path, raw/final closure signatures, AutoTune rounds, diagnostics counts, level frames.", Access = GH_ParamAccess.item }, ParamVisibility.Voluntary));
+
+                // P3 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): the CellComplex the solve adopted, exposed as a
+                // value so SAMOCCT.CreateAdjacencyCluster can consume it directly instead of rebuilding.
+                // Append-only and Voluntary - existing saved definitions keep working unchanged.
+                result.Add(new GH_SAMParam(new GooResolvedCellComplexParam() { Name = "CellComplex", NickName = "CellComplex", Description = "The cell complex this solve adopted (cells, unique faces, adjacencies, naked wires, SolveId). Wire into SAMOCCT.CreateAdjacencyCluster's cellComplex_ input for a direct handoff (no native rebuild) - it is honoured only when the incoming panel roster still matches (see SolveId output stamp).", Access = GH_ParamAccess.item }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new GooSAMGeometryParam() { Name = "ComplexFaces", NickName = "ComplexFaces", Description = "Geometry of every unique cell face in the CellComplex (index-aligned with ComplexFaceOwners).", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "ComplexFaceOwners", NickName = "ComplexFaceOwners", Description = "Per unique cell face (index-aligned with ComplexFaces): its per-decode face key and owner cell index/indices - one owner for an envelope face, two for a shared internal separator.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "ComplexAdjacencies", NickName = "ComplexAdjacencies", Description = "One line per shared-face adjacency: the two cell indices it separates and its face key (index-aligned with ComplexAdjacencyFaces).", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new GooSAMGeometryParam() { Name = "ComplexAdjacencyFaces", NickName = "ComplexAdjacencyFaces", Description = "The shared-face geometry for each adjacency (index-aligned with ComplexAdjacencies).", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "ComplexSummary", NickName = "ComplexSummary", Description = "One-line CellComplex summary: cell/face/adjacency/naked-wire counts, excluded-face count, panel-roster count, SolveId.", Access = GH_ParamAccess.item }, ParamVisibility.Voluntary));
 
                 return result.ToArray();
             }
@@ -207,6 +218,17 @@ namespace SAM.Analytical.Grasshopper.OCCT
             // weights/maxExtends null => read SolverParameter.Weight / SolverParameter.MaxExtend off each
             // panel (the same parameters SAMAnalytical.Visualize shows), so they can be tuned per panel.
             List<Panel> resolvedPanels = panels.Solve3D(out List<Point3D> nakedPoint3Ds, out List<string> diagnostics, out _, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, classifyCells: classifyCells, minCellVolume: minCellVolume);
+
+            // P3 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): stamp every output panel with this solve's SolveId
+            // (PanelProvenanceParameter), and attach the SAME roster to the CellComplex output, so
+            // SAMOCCT.CreateAdjacencyCluster can later prove an incoming panel set genuinely came from THIS
+            // solve (the P3 roster gate) before consuming the complex directly instead of rebuilding.
+            ResolvedCellComplex resolvedCellComplex = report?.ResolvedCellComplex;
+            if (resolvedCellComplex != null && resolvedPanels != null)
+            {
+                CellComplexHandoff.StampSolveId(resolvedPanels, resolvedCellComplex.SolveId);
+                resolvedCellComplex = resolvedCellComplex.WithPanelGuids(resolvedPanels.Where(x => x != null).Select(x => x.Guid));
+            }
 
             index = Params.IndexOfOutputParam("Panels");
             if (index != -1)
@@ -308,6 +330,44 @@ namespace SAM.Analytical.Grasshopper.OCCT
             if (index != -1)
             {
                 dataAccess.SetData(index, report?.ClosureReportText);
+            }
+
+            // P3 CellComplex outputs - all Voluntary, sourced from the roster-stamped complex above so the
+            // SolveId this component just stamped on Panels matches what CellComplex/ComplexSummary report.
+            index = Params.IndexOfOutputParam("CellComplex");
+            if (index != -1)
+            {
+                dataAccess.SetData(index, resolvedCellComplex == null ? null : new GooResolvedCellComplex(resolvedCellComplex));
+            }
+
+            index = Params.IndexOfOutputParam("ComplexFaces");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, SolverReportFormat.FormatResolvedCellComplexFaceGeometry(resolvedCellComplex)?.Select(x => new GooSAMGeometry(x)));
+            }
+
+            index = Params.IndexOfOutputParam("ComplexFaceOwners");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, SolverReportFormat.FormatResolvedCellComplexFaceOwners(resolvedCellComplex));
+            }
+
+            index = Params.IndexOfOutputParam("ComplexAdjacencies");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, SolverReportFormat.FormatResolvedCellComplexAdjacencies(resolvedCellComplex));
+            }
+
+            index = Params.IndexOfOutputParam("ComplexAdjacencyFaces");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, SolverReportFormat.FormatResolvedCellComplexAdjacencyFaceGeometry(resolvedCellComplex)?.Where(x => x != null).Select(x => new GooSAMGeometry(x)));
+            }
+
+            index = Params.IndexOfOutputParam("ComplexSummary");
+            if (index != -1)
+            {
+                dataAccess.SetData(index, SolverReportFormat.FormatResolvedCellComplexSummary(resolvedCellComplex));
             }
         }
     }
