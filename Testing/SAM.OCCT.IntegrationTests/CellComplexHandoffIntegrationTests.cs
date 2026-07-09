@@ -4,6 +4,7 @@
 using SAM.Analytical;
 using SAM.Analytical.OCCT.Solver;
 using SAM.Core;
+using SAM.Core.OCCT;
 using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
 using System;
@@ -64,7 +65,11 @@ namespace SAM.OCCT.IntegrationTests
         /// <summary>The set of unordered space-index-pair (or single-index envelope) relation keys a cluster's
         /// panels imply, keyed by which cell indices the panel's owner spaces correspond to via Guid identity -
         /// the same "relation multiset" comparison WorkflowParityIntegrationTests uses, applied here to prove
-        /// the gated call and the direct P2-overload call build the SAME relations.</summary>
+        /// the gated call and the direct P2-overload call build the SAME relations. Space locations are rounded
+        /// (not raw ToString()) because the direct-consume complex and an independently re-run native rebuild
+        /// each compute a cell centre from a SEPARATE decode - the same physical cell lands within a few ULPs,
+        /// not bit-identically (observed: -3.6000000000000005 vs -3.6). Millimetre rounding is well inside any
+        /// real geometric distinction and outside native floating-point noise.</summary>
         private static HashSet<string> RelationKeys(AdjacencyCluster adjacencyCluster)
         {
             HashSet<string> result = new HashSet<string>();
@@ -73,21 +78,32 @@ namespace SAM.OCCT.IntegrationTests
                 List<Space> spaces = (adjacencyCluster.GetSpaces(panel) ?? new List<Space>()).Where(x => x != null).ToList();
                 if (spaces.Count == 2)
                 {
-                    string a = spaces[0].Location?.ToString() ?? "";
-                    string b = spaces[1].Location?.ToString() ?? "";
+                    string a = RoundedLocation(spaces[0]);
+                    string b = RoundedLocation(spaces[1]);
                     result.Add(string.CompareOrdinal(a, b) <= 0 ? a + "|" + b : b + "|" + a);
                 }
                 else if (spaces.Count == 1)
                 {
-                    result.Add("ENV|" + spaces[0].Location);
+                    result.Add("ENV|" + RoundedLocation(spaces[0]));
                 }
             }
 
             return result;
         }
 
+        private static string RoundedLocation(Space space)
+        {
+            Point3D location = space?.Location;
+            if (location == null)
+            {
+                return "";
+            }
+
+            return string.Format("({0:0.000}, {1:0.000}, {2:0.000})", location.X, location.Y, location.Z);
+        }
+
         [SkippableFact]
-        public void TryDirectConsume_UnmodifiedRosterFromRealSolve_ApprovesAndMatchesDirectOverloadCall()
+        public void TryDirectConsume_UnmodifiedRosterFromRealSolve_MatchesRebuildPath()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
             (List<Panel> panels, ResolvedCellComplex complex) = SolveAndPrepareHandoff("whole-level-flat.sam");
@@ -96,17 +112,23 @@ namespace SAM.OCCT.IntegrationTests
             Assert.True(approved, reason);
             Assert.Null(reason);
 
-            // The gated path (what SAMOCCTCreateAdjacencyCluster does once approved) and calling the P2
-            // overload directly (bypassing the gate) must build the identical cluster - the gate is a pure
-            // permission check, it never alters what gets built.
-            AdjacencyCluster gatedCluster = AnalyticalOcctCreate.AdjacencyCluster(panels, complex, out List<string> _);
+            // The property that actually matters: on an UNMODIFIED roster, skipping the native rebuild (the
+            // direct P2-overload consume SAMOCCTCreateAdjacencyCluster performs once the gate approves) must
+            // build the SAME cluster as the pre-P3 rebuild path (the solver-matched options every production
+            // call site uses - docs/CELLCOMPLEX_FIRST_HANDOVER.md's diagnosed-seam recipe). The gate is a pure
+            // permission check; it must never change what gets built.
             AdjacencyCluster directCluster = AnalyticalOcctCreate.AdjacencyCluster(panels, complex, out List<string> _);
 
-            Assert.NotNull(gatedCluster);
+            Log log = new Log();
+            AdjacencyCluster rebuiltCluster = AnalyticalOcctCreate.AdjacencyCluster(
+                new List<Space>(), panels, out OcctCellComplexResult _, log,
+                new OcctBuildOptions { AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01 });
+
             Assert.NotNull(directCluster);
-            Assert.Equal(directCluster.GetSpaces().Count, gatedCluster.GetSpaces().Count);
-            Assert.Equal(directCluster.GetPanels().Count, gatedCluster.GetPanels().Count);
-            Assert.Equal(RelationKeys(directCluster), RelationKeys(gatedCluster));
+            Assert.NotNull(rebuiltCluster);
+            Assert.Equal(rebuiltCluster.GetSpaces().Count, directCluster.GetSpaces().Count);
+            Assert.Equal(rebuiltCluster.GetPanels().Count, directCluster.GetPanels().Count);
+            Assert.Equal(RelationKeys(rebuiltCluster), RelationKeys(directCluster));
         }
 
         [SkippableFact]

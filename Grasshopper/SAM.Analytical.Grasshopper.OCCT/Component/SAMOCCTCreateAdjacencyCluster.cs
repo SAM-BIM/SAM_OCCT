@@ -144,24 +144,36 @@ namespace SAM.Analytical.Grasshopper.OCCT
             // The roster gate: consume the supplied complex directly ONLY if every incoming panel's SolveId
             // stamp matches AND the panel roster (count + Guid set) still equals what that solve produced -
             // never silently, and only when a complex was actually wired in (an unwired cellComplex_ is the
-            // normal, quiet default - not a drift to report).
+            // normal, quiet default - not a drift to report). The direct P2 overload has no spaces_ parameter
+            // (it cannot match panels to existing Spaces), so an existing spaces_ list is not eligible for the
+            // direct path either - falling back to rebuild (which does honour spaces_) rather than silently
+            // dropping the existing-space matching a caller asked for.
             bool directConsumeAttempted = resolvedCellComplex != null;
+            bool spacesSupplied = spaces != null && spaces.Count > 0;
             bool directConsumed = false;
-            bool rosterOk = CellComplexHandoff.TryDirectConsume(panels, resolvedCellComplex, out string driftReason);
-            if (rosterOk)
-            {
-                adjacencyCluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(panels, resolvedCellComplex, out List<string> complexDiagnostics, tolerance: tolerance, fuzzyTolerance: fuzzyTolerance);
-                diagnostics.AddRange(complexDiagnostics);
-                directConsumed = adjacencyCluster != null;
 
-                if (!directConsumed)
-                {
-                    diagnostics.Add("SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD: direct handoff was eligible but produced no cluster (see SAM_OCCT_ANALYTICAL_COMPLEX_* diagnostics above); falling back to the native rebuild.");
-                }
-            }
-            else if (directConsumeAttempted)
+            if (directConsumeAttempted && spacesSupplied)
             {
-                diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD: supplied cellComplex_ was not consumed directly ({0}); falling back to the native rebuild.", driftReason));
+                diagnostics.Add("SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD: supplied cellComplex_ was not consumed directly (spaces_ was also supplied, and the direct handoff has no way to match panels to existing spaces); falling back to the native rebuild.");
+            }
+            else
+            {
+                bool rosterOk = CellComplexHandoff.TryDirectConsume(panels, resolvedCellComplex, out string driftReason);
+                if (rosterOk)
+                {
+                    adjacencyCluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(panels, resolvedCellComplex, out List<string> complexDiagnostics, tolerance: tolerance, fuzzyTolerance: fuzzyTolerance);
+                    diagnostics.AddRange(complexDiagnostics);
+                    directConsumed = adjacencyCluster != null;
+
+                    if (!directConsumed)
+                    {
+                        diagnostics.Add("SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD: direct handoff was eligible but produced no cluster (see SAM_OCCT_ANALYTICAL_COMPLEX_* diagnostics above); falling back to the native rebuild.");
+                    }
+                }
+                else if (directConsumeAttempted)
+                {
+                    diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD: supplied cellComplex_ was not consumed directly ({0}); falling back to the native rebuild.", driftReason));
+                }
             }
 
             if (!directConsumed)
