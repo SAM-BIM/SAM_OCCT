@@ -32,18 +32,34 @@ namespace SAM.OCCT.IntegrationTests
         /// short of the ceiling - so it fails to divide the box and the raw build drops it, silently merging the
         /// two rooms into one watertight cell. Only one face of seven is dropped (ratio ~14%, well under the 30%
         /// dropped-ratio ceiling), so the coarse dropped-ratio check cannot see it - this is exactly the case the
-        /// under-split gate exists for.</summary>
-        private static List<Panel> DoorCutPartitionTwoRoom()
+        /// under-split gate exists for. <paramref name="tiltDegrees"/> rotates the whole room about world Y so
+        /// the room's OWN "up" (its true ceiling-ward direction) is tilted relative to world Z - the codex #7
+        /// review-round-2 scenario: a naive world-Z measurement inflates the WORLD axis-aligned bounding box of
+        /// a tilted room and can hide the under-split.</summary>
+        private static List<Panel> DoorCutPartitionTwoRoom(double tiltDegrees = 0)
         {
+            double angle = tiltDegrees * System.Math.PI / 180.0;
+            Point3D P(double x, double y, double z)
+            {
+                if (angle == 0)
+                {
+                    return new Point3D(x, y, z);
+                }
+
+                double c = System.Math.Cos(angle);
+                double s = System.Math.Sin(angle);
+                return new Point3D((x * c) + (z * s), y, (-x * s) + (z * c)); // rotate about world Y
+            }
+
             return new List<Panel>
             {
-                Slab(Rect(new Point3D(0, 0, 0), new Point3D(8, 0, 0), new Point3D(8, 4, 0), new Point3D(0, 4, 0)), PanelType.Floor),
-                Slab(Rect(new Point3D(0, 0, 3), new Point3D(8, 0, 3), new Point3D(8, 4, 3), new Point3D(0, 4, 3)), PanelType.Roof),
-                Wall(Rect(new Point3D(0, 0, 0), new Point3D(8, 0, 0), new Point3D(8, 0, 3), new Point3D(0, 0, 3))), // y=0
-                Wall(Rect(new Point3D(0, 4, 0), new Point3D(8, 4, 0), new Point3D(8, 4, 3), new Point3D(0, 4, 3))), // y=4
-                Wall(Rect(new Point3D(0, 0, 0), new Point3D(0, 4, 0), new Point3D(0, 4, 3), new Point3D(0, 0, 3))), // x=0
-                Wall(Rect(new Point3D(8, 0, 0), new Point3D(8, 4, 0), new Point3D(8, 4, 3), new Point3D(8, 0, 3))), // x=8
-                Wall(Rect(new Point3D(4, 0, 0), new Point3D(4, 4, 0), new Point3D(4, 4, 2.5), new Point3D(4, 0, 2.5))), // partition, 0.5 short of ceiling
+                Slab(Rect(P(0, 0, 0), P(8, 0, 0), P(8, 4, 0), P(0, 4, 0)), PanelType.Floor),
+                Slab(Rect(P(0, 0, 3), P(8, 0, 3), P(8, 4, 3), P(0, 4, 3)), PanelType.Roof),
+                Wall(Rect(P(0, 0, 0), P(8, 0, 0), P(8, 0, 3), P(0, 0, 3))), // y=0
+                Wall(Rect(P(0, 4, 0), P(8, 4, 0), P(8, 4, 3), P(0, 4, 3))), // y=4
+                Wall(Rect(P(0, 0, 0), P(0, 4, 0), P(0, 4, 3), P(0, 0, 3))), // x=0
+                Wall(Rect(P(8, 0, 0), P(8, 4, 0), P(8, 4, 3), P(8, 0, 3))), // x=8
+                Wall(Rect(P(4, 0, 0), P(4, 4, 0), P(4, 4, 2.5), P(4, 0, 2.5))), // partition, 0.5 short of ceiling
             };
         }
 
@@ -84,6 +100,26 @@ namespace SAM.OCCT.IntegrationTests
             Assert.True(report.RawAdopted);
             Assert.Equal(1, report.ResolvedCellCount);
             Assert.DoesNotContain(diagnostics, d => d.Contains("UnderSplit"));
+        }
+
+        [SkippableFact]
+        public void Solve3D_TiltedDoorCutPartition_RejectsRawUnderSplitAndManagedSeparatesRooms()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Codex #7 review, round 2: the SAME door-cut room, rigidly tilted 30 deg about world Y. Solve3D
+            // auto-detects the level normal and sets Panel3DSnapSolver.Up to it, so this exercises the
+            // under-split gate on a genuinely tilted level (not just world-Z-vertical geometry) - the exact
+            // scenario a naive world-axis-aligned-bounding-box measurement gets wrong (the room's world AABB is
+            // inflated by the tilt, which would hide the under-split if height/plan were measured against it
+            // instead of the level's own frame).
+            List<Panel> panels = DoorCutPartitionTwoRoom(tiltDegrees: 30);
+            panels.Solve3D(out List<Point3D> _, out List<string> diagnostics, out _, out Solve3DReport report);
+
+            Assert.False(report.RawAdopted);
+            Assert.Contains(diagnostics, d => d.Contains("UnderSplit") && d.Contains("under-split"));
+            Assert.Equal(2, report.ResolvedCellCount);
+            Assert.Empty(report.NakedWires);
         }
     }
 }
