@@ -53,10 +53,13 @@ namespace SAM.OCCT.UnitTests
             // Both cell faces became distinct panels (no Guid collision silently dropped one).
             Assert.Equal(2, panels.Count);
             Assert.Equal(2, panels.Select(x => x.Guid).Distinct().Count());
-            // Exactly one of the two inherited the source's identity; the other fell back to a defaulted
-            // Guid/construction rather than colliding.
+            // Exactly one of the two keeps the source's Guid; the other gets a fresh Guid instead of colliding.
             Assert.Single(panels, x => x.Guid == sourcePanel.Guid);
-            Assert.Contains(diagnostics, x => x.Contains("SAM_OCCT_ANALYTICAL_PANEL_IDENTITY") && x.Contains("1 of them because the matched source panel's Guid was already claimed"));
+            // BUT both inherit the source's construction and type - they are pieces of the same physical wall,
+            // so only the Guid is freshened, never the metadata (codex P2 follow-up on the collision fix).
+            Assert.All(panels, x => Assert.Equal("Source Wall", x.Construction?.Name));
+            Assert.All(panels, x => Assert.Equal(PanelType.Wall, x.PanelType));
+            Assert.Contains(diagnostics, x => x.Contains("SAM_OCCT_ANALYTICAL_PANEL_IDENTITY") && x.Contains("1 inherited construction/type but got a fresh Guid"));
         }
 
         [Fact]
@@ -76,7 +79,7 @@ namespace SAM.OCCT.UnitTests
             Assert.NotNull(adjacencyCluster);
             Panel panel = Assert.Single(adjacencyCluster.GetPanels());
             Assert.Equal(sourcePanel.Guid, panel.Guid);
-            Assert.Contains(diagnostics, x => x.Contains("1 panel(s) inherited identity"));
+            Assert.Contains(diagnostics, x => x.Contains("1 panel(s) fully inherited identity (construction/type/Guid)"));
         }
     }
 }
