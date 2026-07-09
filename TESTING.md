@@ -1374,3 +1374,71 @@ identity inheritance; index-based exclusion), and the updated `CreateSpacesInteg
 dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~ResolvedCellComplexTests"
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~ResolvedCellComplexIntegrationTests"
 ```
+
+## CellComplex Grasshopper handoff (docs/CELLCOMPLEX_FIRST_HANDOVER.md, Phase P3)
+
+P3 exposes the P2 `ResolvedCellComplex` in Grasshopper (D) and wires the value-based direct handoff (E):
+`SAMOCCT.Solve3D` outputs the complex a solve adopted; `SAMOCCT.CreateAdjacencyCluster` optionally
+consumes it directly (no native rebuild) when the incoming panels can PROVE they still match what that
+solve produced. Library semantics are otherwise unchanged - the new `Create.AdjacencyCluster(panels,
+resolvedCellComplex, ...)` call path is the SAME P2 overload, gated by a new roster check.
+
+- **`ResolvedCellComplex.PanelGuids`** (new, additive field): the Guids of the resolved OUTPUT panels a
+  solve produced. Empty until attached - the solver has no `Panel`/Guid concept, so `Project(...)`
+  leaves it empty; `WithPanelGuids(IEnumerable<Guid>)` (mirrors the existing `WithNakedWires`) attaches
+  it once the analytical/GH layer has built the output panels. JSON round-trips. An empty roster is a
+  safe "unknown" default - the gate below never consumes a complex with no recorded roster.
+- **`PanelProvenanceParameter.SolveId`** (new enum member): a string-valued stamp, the complex's
+  `SolveId` as text, set on every output panel by `SAMOCCT.Solve3D` (mirrors the existing
+  `SourceGuid`/`MergedSourceGuids`/`Provenance` stamps).
+- **`CellComplexHandoff`** (`SAM.Analytical.OCCT.Solver`, new, pure managed - no native, no Grasshopper
+  document required): the roster gate as a plain, unit-testable static class.
+  - `StampSolveId(panels, solveId)`: sets the stamp on every panel.
+  - `TryDirectConsume(panels, resolvedCellComplex, out reason)`: true ONLY when every incoming panel
+    carries a `SolveId` stamp matching the complex's `SolveId` AND the incoming panel Guid roster equals
+    `resolvedCellComplex.PanelGuids` exactly (same count, same Guid SET - order-independent). False with
+    a named reason otherwise: no complex supplied, no panels supplied, complex has no recorded roster,
+    N panel(s) missing/mismatched stamp (also catches a SolveId collision - a Guid coincidentally in the
+    roster but stamped by a DIFFERENT solve), roster count mismatch, or roster Guid-set mismatch (same
+    count, different panels - a swap the count check alone would miss). Never a silent bypass.
+- **`SAMOCCT.Solve3D`** (`0.4.0 -> 0.5.0`, append-only Voluntary outputs): stamps every output panel's
+  `SolveId`, attaches the SAME roster to the complex it outputs, and adds `CellComplex` (the DTO, via
+  the new `GooResolvedCellComplex`/`GooResolvedCellComplexParam`), `ComplexFaces`/`ComplexFaceOwners`
+  (unique cell face geometry + owner cell index/indices, index-aligned), `ComplexAdjacencies`/
+  `ComplexAdjacencyFaces` (shared-face adjacency pairs + geometry, index-aligned), and `ComplexSummary`
+  (one-line cell/face/adjacency/naked-wire/roster counts). Formatters live on `SolverReportFormat`
+  (`FormatResolvedCellComplex*`), the same Grasshopper-facing-text-formatter class as the existing
+  `FormatSourceMap`/`FormatCells`/`FormatLevelFrames`.
+- **`SAMOCCT.CreateAdjacencyCluster`** (`0.1.0 -> 0.2.0`, one new Voluntary/Optional input
+  `cellComplex_`): unwired (every existing saved definition), behaviour is BYTE-IDENTICAL to pre-P3 - the
+  native rebuild runs exactly as before, same diagnostics, same order. Wired, the roster gate runs
+  first: approved -> direct consume via the P2 overload (no native call, `SAM_OCCT_ANALYTICAL_COMPLEX_*`
+  diagnostics from that overload); refused -> falls back to the SAME rebuild path, with one additional
+  `SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD:` diagnostic naming why (only when a complex was actually wired
+  in - an unwired input is the normal, quiet default, not a drift to report).
+- **`GooResolvedCellComplex`/`GooResolvedCellComplexParam`** (new,
+  `Grasshopper/SAM.Analytical.Grasshopper.OCCT/Classes`): a thin `GooJSAMObject<ResolvedCellComplex>`
+  subclass (mirrors the existing `GooResult` pattern) - JSON round-trip via the DTO's own
+  `ToJsonObject`/`FromJsonObject`, no native handle captured, internalize/bake/file save-load all just
+  work. Solver-output only (interactive prompts not implemented, matching `GooResultParam`).
+
+**Back-compat proven, not assumed:** the rebuild code path in `SAMOCCTCreateAdjacencyCluster` is the
+EXACT pre-P3 code, now guarded by `if (!directConsumed)` - an unwired `cellComplex_` produces the
+identical diagnostics list, in the identical order, as before P3. All new outputs on both components are
+Voluntary/append-only; the new input is Optional. Full suite green with native present (**470 unit /
+171 integration**, +1 native-missing skip); all raw/managed goldens and E1/E2 pins byte-identical
+(P3 touches no solver/geometry code - only the DTO gains an additive field, and the analytical/GH layers
+gain new wiring).
+
+Tests: `CellComplexHandoffTests` (the roster gate: matching, order-independent, missing stamp, SolveId
+collision, no roster recorded, no complex, no panels, roster count mismatch, roster Guid-set mismatch -
+all pure managed, fabricated Guids); extended `ResolvedCellComplexTests` (`PanelGuids` projection default/
+`WithPanelGuids`/JSON round-trip); `CellComplexHandoffIntegrationTests` (native-gated, a REAL solve's
+panels/complex - unmodified roster approves and matches the direct P2-overload call by relation-key set;
+a deleted panel refuses with a roster-count reason; a panel swapped in from an UNRELATED solve refuses on
+the stamp/roster check; a complex with no roster attached refuses).
+
+```powershell
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~CellComplexHandoffTests|FullyQualifiedName~ResolvedCellComplexTests"
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~CellComplexHandoffIntegrationTests"
+```

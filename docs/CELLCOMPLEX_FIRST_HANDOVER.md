@@ -267,6 +267,50 @@ ACCEPTANCE GATE: suite green; goldens byte-identical; back-compat: existing comp
 untouched and green.
 ```
 
+**P3 outcome note (2026-07-09, Opus 4.8 impl):** implemented on branch `feat/cellcomplex-gh-handoff`
+off the post-#48/E2-merged `sow/2026-Q3` (HEAD `1713a5d`). (Plan assigned Sonnet 5 High; owner ran it
+on Opus 4.8.)
+
+- **Roster carrier.** The P2 `ResolvedCellComplex` had no panel-roster concept (the solver has no
+  `Panel`/Guid knowledge). Added `ResolvedCellComplex.PanelGuids` (additive field, JSON round-trips)
+  and `WithPanelGuids(IEnumerable<Guid>)` (mirrors the existing `WithNakedWires`), empty until attached
+  by the analytical/GH layer — never a silent "empty roster matches an empty incoming set" trap (the
+  gate explicitly refuses a complex with no recorded roster).
+- **Roster gate extracted as a testable unit.** Rather than inlining the SolveId-stamp + roster-set
+  comparison inside the GH component (hard to unit-test without a live Grasshopper document), it is a
+  new pure-managed static class `CellComplexHandoff` (`SAM.Analytical.OCCT.Solver`):
+  `StampSolveId(panels, solveId)` and `TryDirectConsume(panels, resolvedCellComplex, out reason)`. This
+  is what made the roster-gate edge cases (task spec's own concern) directly unit-testable: order
+  reversal, missing stamp, SolveId collision (a Guid coincidentally in the roster but stamped by a
+  DIFFERENT solve), no roster recorded, count mismatch vs Guid-set mismatch (same count, swapped
+  panel — the count check alone misses this).
+- **`PanelProvenanceParameter.SolveId`** added (string-valued, mirrors `SourceGuid`/`MergedSourceGuids`).
+- **`SAMOCCT.Solve3D`** (0.4.0→0.5.0): stamps `SolveId` on every output panel, attaches the SAME roster
+  to its `CellComplex` output, plus `ComplexFaces`/`ComplexFaceOwners`/`ComplexAdjacencies`/
+  `ComplexAdjacencyFaces`/`ComplexSummary` (all append-only Voluntary). Formatters added to the existing
+  `SolverReportFormat` (Grasshopper-facing text formatter class), not a new file, to stay consistent
+  with `FormatSourceMap`/`FormatCells`/`FormatLevelFrames`.
+- **`SAMOCCT.CreateAdjacencyCluster`** (0.1.0→0.2.0): one new Voluntary/Optional `cellComplex_` input.
+  Unwired, the rebuild code path is the EXACT pre-P3 code now guarded by `if (!directConsumed)` —
+  byte-identical diagnostics, in the same order, for every existing saved definition. Wired: the gate
+  runs, approved → direct P2-overload consume (no native call), refused → same rebuild + one
+  `SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD:` diagnostic naming why (suppressed when nothing was wired in —
+  the normal quiet default, not a drift).
+- **Goo wrapper.** `GooResolvedCellComplex : GooJSAMObject<ResolvedCellComplex>` (mirrors `GooResult`) +
+  `GooResolvedCellComplexParam : GH_PersistentParam<GooResolvedCellComplex>` — a thin JSON pass-through,
+  no native handle, in a new `Grasshopper/SAM.Analytical.Grasshopper.OCCT/Classes/` folder (this GH
+  project had none yet).
+- **Test-tier note:** `Testing/SAM.OCCT.UnitTests` has no Grasshopper/Rhino package reference (by
+  design, per the two-tier convention), so `IGH_Goo.Write/Read` itself isn't unit-testable there; the
+  "goo round-trip" acceptance is satisfied at the DTO level (`ResolvedCellComplexTests` — `Goo*`'s
+  `Write`/`Read` is a direct pass-through to `ToJsonObject`/`FromJsonObject`, unchanged from the
+  existing `GooJSAMObject<T>` base). The roster-gate and cluster-equivalence tests the task asked for
+  are covered end-to-end in `CellComplexHandoffIntegrationTests` (native-gated, against a real solve),
+  and the gate logic itself in `CellComplexHandoffTests` (pure managed, fabricated Guids).
+- **Verification.** Full suite green with native present — **470 unit / 171 integration** (+1
+  native-missing skip, unchanged). All raw/managed goldens and E1/E2 pins byte-identical (P3 touches no
+  solver/geometry code).
+
 ## 8. P3 review prompt (Opus 4.8, xhigh)
 
 ```
