@@ -1632,5 +1632,97 @@ namespace SAM.OCCT.UnitTests
         {
             return BoundaryPoints(face3D).Where(p => System.Math.Abs(p.X - x) <= 0.1).Max(p => p.Z);
         }
+
+        // ── E3: extend observability records (docs/EXTEND3D_ROBUST_HANDOVER.md) ────────────────
+        // Recording only: the records must match the ACTUAL geometry moves, and a null recorder must be
+        // byte-identical to a recorded run (no geometry change).
+
+        private const double E3VerticalAngle = 20 * System.Math.PI / 180;
+
+        private static SnappedPanel E3ShortWall(double topZ = 2.5)
+        {
+            return new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, topZ), new Point3D(0, 0, topZ)), 1, 0.3, 0.5);
+        }
+
+        private static SnappedPanel E3FlatCap(double z = 3.0)
+        {
+            return new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, z), new Point3D(4, 0, z), new Point3D(4, 2, z), new Point3D(0, 2, z)), 1, 0.3, 0.5);
+        }
+
+        [Fact]
+        public void Extend_ShortWallUnderFlatCap_RecordsTopMoveMatchingGeometry()
+        {
+            // A short vertical wall (top z=2.5) under a flat cap at z=3: Extend raises the top to the cap + the
+            // wall overshoot and records ONE top op whose to-value is exactly the new top.
+            SnappedPanel wall = E3ShortWall();
+            List<SnappedPanel> panels = new List<SnappedPanel> { wall, E3FlatCap() };
+            List<ExtendRecord> records = new List<ExtendRecord>();
+
+            Panel3DSnapSolver.Extend(panels, E3VerticalAngle, 0.05, 1e-6, 0.5, true, records);
+
+            ExtendRecord top = Assert.Single(records);
+            Assert.Equal(ExtendOperationKind.Top, top.Kind);
+            Assert.Equal(0, top.PanelIndex);                            // the wall is panel 0
+            Assert.Equal(0, top.SourceIndex);
+            Assert.Equal(1, top.TargetPanelIndex);                      // toward cap panel 1
+            Assert.Equal("cap-scalar", top.TargetKind);                // a flat cap takes the scalar branch
+            Assert.Equal(2.5, top.FromValue, 3);
+            Assert.Equal(wall.GetBoundingBox().Max.Z, top.ToValue, 6);  // record matches the ACTUAL move
+            Assert.Equal(3.05, top.ToValue, 3);                        // cap z=3 + 0.05 overshoot
+            Assert.False(top.MaxExtendCapped);                         // vertical reach is uncapped
+            Assert.NotNull(top.PreviewSegment3D());
+        }
+
+        [Fact]
+        public void Extend_WallAboveCap_RecordsNothing()
+        {
+            // Wall already taller than the only cap: no covering cap above it, nothing moves, nothing recorded
+            // (honesty - only actual moves are recorded, never a no-op call).
+            List<SnappedPanel> panels = new List<SnappedPanel> { E3ShortWall(topZ: 4.0), E3FlatCap(z: 3.0) };
+            List<ExtendRecord> records = new List<ExtendRecord>();
+
+            Panel3DSnapSolver.Extend(panels, E3VerticalAngle, 0.05, 1e-6, 0.5, true, records);
+
+            Assert.Empty(records);
+        }
+
+        [Fact]
+        public void Extend_NullRecorder_GeometryIdenticalToRecordedRun()
+        {
+            // The recorder is pure observation: the conditioned geometry must be byte-identical with a null
+            // recorder and with a live one (the E3 acceptance gate - this phase moves nothing).
+            SnappedPanel wallNull = E3ShortWall();
+            SnappedPanel wallRecorded = E3ShortWall();
+
+            Panel3DSnapSolver.Extend(new List<SnappedPanel> { wallNull, E3FlatCap() }, E3VerticalAngle, 0.05, 1e-6, 0.5, true, null);
+            Panel3DSnapSolver.Extend(new List<SnappedPanel> { wallRecorded, E3FlatCap() }, E3VerticalAngle, 0.05, 1e-6, 0.5, true, new List<ExtendRecord>());
+
+            Assert.Equal(wallNull.GetBoundingBox().Max.Z, wallRecorded.GetBoundingBox().Max.Z, 9);
+            Assert.Equal(wallNull.GetArea(), wallRecorded.GetArea(), 9);
+        }
+
+        [Fact]
+        public void Fill_LoneCap_RecordsCapGrowMatchingArea()
+        {
+            // A cap with no walls in reach falls back to the fixed-margin grow; the record captures the area
+            // before -> after and reports the fixed-margin target. A cap grow has no single moved edge.
+            SnappedPanel cap = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 4, 0), new Point3D(0, 4, 0)), 1, 0.3, 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel> { cap };
+            List<ExtendRecord> records = new List<ExtendRecord>();
+            double areaBefore = cap.GetArea();
+
+            Panel3DSnapSolver.Fill(panels, E3VerticalAngle, 0.5, 1e-6, 0.05, records);
+
+            ExtendRecord grow = Assert.Single(records);
+            Assert.Equal(ExtendOperationKind.CapGrow, grow.Kind);
+            Assert.Equal("fixed-margin", grow.TargetKind);
+            Assert.Equal(areaBefore, grow.FromValue, 6);
+            Assert.Equal(cap.GetArea(), grow.ToValue, 6);   // matches the ACTUAL grown area
+            Assert.True(grow.ToValue > grow.FromValue);
+            Assert.Null(grow.PreviewSegment3D());            // in-plane offset, no single edge
+        }
     }
 }

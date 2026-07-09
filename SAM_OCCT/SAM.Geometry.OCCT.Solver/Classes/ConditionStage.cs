@@ -44,7 +44,10 @@ namespace SAM.Geometry.OCCT.Solver
         /// caps-to-walls). Expects <paramref name="panels"/> already in the canonical Z-up frame when the level
         /// is tilted (the façade handles the transform).
         /// </summary>
-        public static void Condition(List<SnappedPanel> panels, Settings settings, ToleranceBudget tolerances)
+        /// <param name="extendRecords">Optional E3 observability sink: when non-null, each applied extend/fill
+        /// mutation appends one <see cref="ExtendRecord"/> (which panel, which edge, from where to where,
+        /// toward what target). Recording only - a null sink is byte-identical to the pre-E3 behaviour.</param>
+        public static void Condition(List<SnappedPanel> panels, Settings settings, ToleranceBudget tolerances, List<ExtendRecord> extendRecords = null)
         {
             if (panels == null || panels.Count == 0)
             {
@@ -57,19 +60,19 @@ namespace SAM.Geometry.OCCT.Solver
             // Walls first: close the plan loop.
             if (s.ExtendWallsToWalls)
             {
-                Panel3DSnapSolver.ExtendWalls(panels, tol.VerticalAngle, s.WallExtendOvershoot, tol.Distance);
+                Panel3DSnapSolver.ExtendWalls(panels, tol.VerticalAngle, s.WallExtendOvershoot, tol.Distance, extendRecords);
             }
 
             // Extend walls up to the floor/roof above and down to the floor below.
             if (s.ExtendToCaps)
             {
-                Panel3DSnapSolver.Extend(panels, tol.VerticalAngle, s.ExtendOvershoot, tol.Distance, s.RoofOvershoot, s.ExtendToRoofs);
+                Panel3DSnapSolver.Extend(panels, tol.VerticalAngle, s.ExtendOvershoot, tol.Distance, s.RoofOvershoot, s.ExtendToRoofs, extendRecords);
             }
 
             // Then grow the caps out to the now-closed walls.
             if (s.FillCapsToWalls)
             {
-                Panel3DSnapSolver.Fill(panels, tol.VerticalAngle, s.FillMargin, tol.Distance, s.FillOvershoot);
+                Panel3DSnapSolver.Fill(panels, tol.VerticalAngle, s.FillMargin, tol.Distance, s.FillOvershoot, extendRecords);
             }
         }
     }

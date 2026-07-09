@@ -71,6 +71,13 @@ namespace SAM.Analytical.OCCT.Solver
         /// Clean3D/Extend3D pass that never resolves). Carries no native lifetime.</summary>
         public ResolvedCellComplex ResolvedCellComplex { get; }
 
+        /// <summary>Per-operation observability for the managed conditioning passes (E3,
+        /// docs/EXTEND3D_ROBUST_HANDOVER.md): one <see cref="ExtendRecord"/> per applied extend/fill mutation.
+        /// Empty when the raw solve was adopted (no conditioning ran) or on a Clean3D pass. Use
+        /// <see cref="FormatExtendRecords"/> for the coded text lines and
+        /// <see cref="ExtendPreviewSegment3Ds"/> for the moved-edge preview geometry.</summary>
+        public IReadOnlyList<ExtendRecord> ExtendRecords { get; }
+
         public Solve3DReport(
             bool rawAdopted,
             ClosureSignature3D signature,
@@ -87,7 +94,8 @@ namespace SAM.Analytical.OCCT.Solver
             int resolvedCellCount,
             int rounds = 0,
             int roundsAccepted = 0,
-            ResolvedCellComplex resolvedCellComplex = null)
+            ResolvedCellComplex resolvedCellComplex = null,
+            IReadOnlyList<ExtendRecord> extendRecords = null)
         {
             RawAdopted = rawAdopted;
             Signature = signature;
@@ -105,6 +113,7 @@ namespace SAM.Analytical.OCCT.Solver
             Rounds = rounds;
             RoundsAccepted = roundsAccepted;
             ResolvedCellComplex = resolvedCellComplex;
+            ExtendRecords = extendRecords ?? new List<ExtendRecord>();
 
             ClosureReportText = ClosureReport.Format(rawAdopted, signature, rawAttemptSignature, Diagnostics, rounds, roundsAccepted, LevelFrames);
         }
@@ -119,6 +128,20 @@ namespace SAM.Analytical.OCCT.Solver
         public List<string> FormatCells()
         {
             return SolverReportFormat.FormatCells(Cells, CellRoles);
+        }
+
+        /// <summary>Convenience wrapper over <see cref="SolverReportFormat.FormatExtendRecords"/> with this
+        /// report's own <see cref="ExtendRecords"/>/<see cref="Sources"/> - the coded
+        /// <c>SAM_OCCT_EXTEND3D_PANEL:</c> observability lines (E3).</summary>
+        public List<string> FormatExtendRecords()
+        {
+            return SolverReportFormat.FormatExtendRecords(ExtendRecords, Sources);
+        }
+
+        /// <summary>The moved-edge preview segments for this report's <see cref="ExtendRecords"/> (E3).</summary>
+        public List<Geometry.Spatial.Segment3D> ExtendPreviewSegment3Ds()
+        {
+            return SolverReportFormat.ExtendPreviewSegment3Ds(ExtendRecords);
         }
     }
 }
