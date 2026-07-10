@@ -33,6 +33,12 @@ namespace SAM.OCCT.IntegrationTests
         private static readonly double[] ExpectedDatums = new double[] { 12.24, 15.29, 18.34 };
 
         private const double LevelBand = 0.21;
+
+        /// <summary>The double-height space's identity (plan §0.1) — GUID-backed per plan §6, not name-based,
+        /// so a re-export that renames or regenerates the space still fails P0 loudly instead of silently
+        /// validating the wrong space.</summary>
+        private static readonly Guid West3Guid = new Guid("02a1ae27-5461-4b41-ad07-008ccd9d1159");
+
         private const double VerticalNormalZ = 0.342; // sin(20°) — a wall's |normal.Z| stays below this
         private const double CapNormalZ = 0.939;      // cos(20°) — a cap's |normal.Z| stays above this
 
@@ -61,8 +67,13 @@ namespace SAM.OCCT.IntegrationTests
             Assert.All(spaces, x => Assert.False(string.IsNullOrWhiteSpace(x.Name), "Space with empty Name"));
             Assert.All(spaces, x => Assert.False(x.Name.Contains("\n") || x.Name.Contains("\r"), "Multiline Space name: " + x.Name));
             Assert.Equal(9, spaces.Select(x => x.Name).Distinct().Count());
-            Space west3 = spaces.FirstOrDefault(x => x.Name == "West3");
-            Assert.NotNull(west3);
+
+            // GUID-backed selection (plan §6/§0.1): the double-height space is identified by GUID, not by
+            // name, so a re-export that changes GUIDs or mislabels West3 fails loudly here rather than
+            // silently validating the wrong space.
+            Space west3 = spaces.FirstOrDefault(x => x.Guid == West3Guid);
+            Assert.True(west3 != null, string.Format("Expected double-height space with GUID {0} not found in the fixture (fixture drift).", West3Guid));
+            Assert.Equal("West3", west3.Name);
 
             // (a) Expected-space table.
             output.WriteLine("=== (a) Expected spaces ({0}) ===", spaces.Count);
@@ -391,8 +402,16 @@ namespace SAM.OCCT.IntegrationTests
 
             List<string> candidates = new List<string>();
             List<string> partials = new List<string>();
-            double zMin = System.Math.Min(locationA.Z, locationB.Z);
-            double zMax = System.Math.Max(locationA.Z, locationB.Z);
+
+            // Compare against the expected floor-to-ceiling span of the level(s) the two spaces occupy, not
+            // just the (much tighter) band around the two seed elevations - a wall-like panel that only
+            // covers a ~0.1 m gap between two same-floor seeds is a partial-height fragment/upstand that
+            // cannot bound a room, and must not be reported as a usable separator candidate (codex review,
+            // PR #57).
+            double[] spanA = ExpectedLevelSpan(locationA);
+            double[] spanB = ExpectedLevelSpan(locationB);
+            double zMin = System.Math.Min(spanA[0], spanB[0]);
+            double zMax = System.Math.Max(spanA[1], spanB[1]);
             Point3D midpoint = new Point3D((locationA.X + locationB.X) / 2, (locationA.Y + locationB.Y) / 2, (locationA.Z + locationB.Z) / 2);
 
             foreach (Panel panel in panels)
@@ -643,6 +662,30 @@ namespace SAM.OCCT.IntegrationTests
             }
 
             return z < ExpectedDatums[0] ? "below levels" : "above levels";
+        }
+
+        /// <summary>The expected [floor, ceiling] datum pair for the level a location sits in (used by the
+        /// separator scan to require a candidate wall span the FULL level height, not just the narrow band
+        /// between two seed elevations on the same floor - a partial-height fragment/upstand cannot bound a
+        /// room). Falls back to a band bracketing the location itself when it sits outside every known
+        /// datum pair.</summary>
+        private static double[] ExpectedLevelSpan(Point3D location)
+        {
+            if (location == null)
+            {
+                return new double[] { double.NegativeInfinity, double.PositiveInfinity };
+            }
+
+            double z = location.Z;
+            for (int i = 0; i < ExpectedDatums.Length - 1; i++)
+            {
+                if (z >= ExpectedDatums[i] - LevelBand && z <= ExpectedDatums[i + 1] + LevelBand)
+                {
+                    return new double[] { ExpectedDatums[i], ExpectedDatums[i + 1] };
+                }
+            }
+
+            return new double[] { z - LevelBand, z + LevelBand };
         }
 
         private static string DescribePanel(Panel panel)

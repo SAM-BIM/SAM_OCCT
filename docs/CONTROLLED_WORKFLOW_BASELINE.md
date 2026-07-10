@@ -84,19 +84,19 @@ MISSING: East1 (nearest cell 1, 2.79 m) · South1 (nearest cell 1, 1.98 m)
 
 7 of 9 matched, cells on-datum, **West3 double-height in both paths**. Orphans: 0. Unused (approx.): 1. The 3.29 m³ EXTRA sliver at (6.58, −23.26) is the multi-skin wall band (below) turned into a cell.
 
-## 5. Missing-wall determination — **no wall is genuinely absent from the input**
+## 5. Missing-wall determination — **one pair genuinely lacks a full-height separator; the rest are present-but-unused**
 
-Separator scan (vertical panel strictly between the two locations, lateral + vertical coverage) found **present-but-unused candidates for every failed pair**:
+Separator scan (vertical panel strictly between the two locations, requiring the candidate span the **full expected floor-to-ceiling level height** — not just a narrow band around the two seed elevations, per codex review on PR #57):
 
 | Failed pair | Candidate separator panels (present but unused) |
 |---|---|
-| South1 \| South2 (merged, path A) | `3b032875` Wall 10.0 m² @ x≈3.47 · `5d97f223` Wall 21.4 m² @ x≈3.35 |
-| North1 \| North0 (North1 missing, path A) | `d5c1f0bc`, `61ba52da` Walls 21.4 m² @ x≈3.7 |
-| North1 \| North2 (path A) | `9701dd76`, `1b2ef1d0` Walls 21.4 m² @ x≈7.3–7.4 |
-| East1 \| South1 (both paths) | **four near-parallel skins** `20fe83aa`, `31f97c71`, `763f6aa3`, `5b9dbfd6` (18.0 m² each) at y = −23.006 / −23.228 / −23.339 / −23.434 — a 0.43 m multi-skin band |
-| East1 \| South2 (both paths) | `aa6f86f4` Wall 14.5 m² @ x≈3.57 + the y≈−23 band above |
+| South1 \| South2 (merged, path A) | `3b032875` Wall 10.0 m² @ x≈3.47 (full-height) |
+| **North1 \| North0 (North1 missing, path A)** | **none — no full-height separator.** The two panels reported in an earlier, looser pass (`d5c1f0bc`, `61ba52da`) turned out to be partial-height fragments that do not span the level and were correctly excluded once the scan required full floor-to-ceiling coverage. |
+| North1 \| North2 (path A) | `1b2ef1d0` Wall 21.4 m² @ x≈7.4 (full-height) |
+| East1 \| South1 (both paths) | **four near-parallel skins** `20fe83aa`, `31f97c71`, `763f6aa3`, `5b9dbfd6` (18.0 m² each) at y = −23.006 / −23.228 / −23.339 / −23.434 — a 0.43 m multi-skin band, full-height |
+| East1 \| South2 (both paths) | `aa6f86f4` Wall 14.5 m² @ x≈3.57 (full-height) + the y≈−23 band above |
 
-**Resolution per plan §7:** the "MissingWalls" scenario is *present-but-unused*, not absent → **no corrected fixture is required; hard nine-space acceptance (P4) runs on the original panels fixture.** The four-skin band at y≈−23.2 is precisely what Clean3D bucketing must collapse (it currently survives to produce path B's sliver EXTRA cell), and the x≈3.3–3.7 partitions must reach the caps (Extend3D) to split North/South rooms.
+**Resolution per plan §7 (nuanced by the corrected scan):** four of five failed pairs have a genuine present-but-unused full-height separator — Clean3D/Extend3D must be made to use them, not invent anything. **North1's boundary toward North0 has no full-height wall candidate in the input at all** — this is either a genuinely missing separator on that one side, or North1's true bounding wall lies somewhere the point-pair scan does not test (e.g. a wall not strictly between the two seed *points* but still bounding North1's actual footprint). **P2/P3 must re-examine North1 specifically** with the real (GUID-based) matcher and full panel geometry, not just this diagnostic's point-pair heuristic, before P4 decides whether North1 needs a corrected fixture or whether Clean3D/Extend3D simply need to reach an existing-but-differently-placed wall. This does not block P1–P3 (which build the matcher and solver fixes this finding will be re-tested against); it is a named risk for the P4 stop gate. The four-skin band at y≈−23.2 is precisely what Clean3D bucketing must collapse (it currently survives to produce path B's sliver EXTRA cell), and the x≈3.3–3.7 partitions must reach the caps (Extend3D) to split North/South rooms.
 
 ## 6. Findings mapped to the plan's diagnosis
 
@@ -116,7 +116,7 @@ Separator scan (vertical panel strictly between the two locations, lateral + ver
 
 1. **P2:** `bucketBetweenLevels = 0.21` in the *first* Clean must reproduce §3-path-B's 3 datums deliberately (12.24 / 15.29 / 18.34); `inputAlreadyClean = true` must make the chained Extend condition-only (no accidental second snap); the y≈−23.2 four-skin band should collapse in Clean's bucketing with a CleanRecord trail.
 2. **P3:** wall-to-cap extension on the 3 merged datums; the x≈3.3–3.7 partitions (South1|South2, North1|North0, North1|North2, East1|South2) must reach floor+ceiling or emit skip/risk records saying why not; no cap growth into West3's column (z≈15.29 within its footprint).
-3. **P4:** 9 cells / 9 matched / 0 missing / 0 merged / 0 split / 0 extra / West3 (GUID `02a1ae27…`) double-height true / 0 orphan cluster panels — on this original fixture.
+3. **P4:** 9 cells / 9 matched / 0 missing / 0 merged / 0 split / 0 extra / West3 (GUID `02a1ae27…`) double-height true / 0 orphan cluster panels — on this original fixture, **contingent on North1's separator question (§5) resolving** in P2/P3's favor; otherwise P4 must decide (with the real matcher, not this diagnostic) whether North1 needs a corrected panel or whether an existing wall simply isn't reaching where expected.
 
 ## 8. Suite status at capture
 
