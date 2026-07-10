@@ -241,5 +241,78 @@ namespace SAM.OCCT.IntegrationTests
             Assert.Equal(1, report.ResolvedCellCount);
             Assert.DoesNotContain(diagnostics, d => d.Contains("UnderSplit"));
         }
+
+        /// <summary>The SAME 8x4x3 box with the SAME triangular brace, but exported TWICE at the exact same
+        /// footprint (a duplicate/overlapping export - codex #7 review, round 5). Naively SUMMING each member's
+        /// area would double the triangle's true 50%-covered footprint to a fictitious 100%, wrongly clearing the
+        /// 60% coverage floor; the union-area fix must still see only 50%.</summary>
+        private static List<Panel> SingleRoomWithDuplicateTriangularBrace()
+        {
+            return new List<Panel>
+            {
+                Slab(Rect(new Point3D(0, 0, 0), new Point3D(8, 0, 0), new Point3D(8, 4, 0), new Point3D(0, 4, 0)), PanelType.Floor),
+                Slab(Rect(new Point3D(0, 0, 3), new Point3D(8, 0, 3), new Point3D(8, 4, 3), new Point3D(0, 4, 3)), PanelType.Roof),
+                Wall(Rect(new Point3D(0, 0, 0), new Point3D(8, 0, 0), new Point3D(8, 0, 3), new Point3D(0, 0, 3))),
+                Wall(Rect(new Point3D(0, 4, 0), new Point3D(8, 4, 0), new Point3D(8, 4, 3), new Point3D(0, 4, 3))),
+                Wall(Rect(new Point3D(0, 0, 0), new Point3D(0, 4, 0), new Point3D(0, 4, 3), new Point3D(0, 0, 3))),
+                Wall(Rect(new Point3D(8, 0, 0), new Point3D(8, 4, 0), new Point3D(8, 4, 3), new Point3D(8, 0, 3))),
+                Wall(Rect(new Point3D(4, 0, 0), new Point3D(4, 4, 0), new Point3D(4, 0, 3))), // triangle, copy 1
+                Wall(Rect(new Point3D(4, 0, 0), new Point3D(4, 4, 0), new Point3D(4, 0, 3))), // exact duplicate, copy 2
+            };
+        }
+
+        [SkippableFact]
+        public void Solve3D_SingleRoomWithDuplicateTriangularBrace_AdoptsRawAndGateStaysSilent()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Coverage-union false-positive control (codex #7 review, round 5): summing the two duplicate
+            // triangles' areas gives a fictitious 100% coverage (2x the true 50%); the fix computes UNION
+            // coverage via sampling, so this must still read 50% (< 60%) and stay silent.
+            List<Panel> panels = SingleRoomWithDuplicateTriangularBrace();
+            panels.Solve3D(out List<Point3D> _, out List<string> diagnostics, out _, out Solve3DReport report);
+
+            Assert.True(report.RawAdopted);
+            Assert.Equal(1, report.ResolvedCellCount);
+            Assert.DoesNotContain(diagnostics, d => d.Contains("UnderSplit"));
+        }
+
+        /// <summary>The SAME 8x4x3 box with NO partition (one legitimate room), plus TWO disconnected coplanar
+        /// fins on the x=4 plane - each 1.5 m wide (plan) and full height, separated by a 0.5 m gap (well beyond
+        /// any "same feature" tolerance). Codex #7 review, round 5: pooled WITHOUT a connectivity check, the two
+        /// fins' combined plan span (3.5 m of the room's 4 m width) and combined area coverage (~86%) would both
+        /// clear their thresholds, even though neither fin - nor any contiguous wall-to-wall element - actually
+        /// exists; each fin alone spans only 1.5/4 = 37.5% of the room's plan width.</summary>
+        private static List<Panel> SingleRoomWithTwoDisconnectedFins()
+        {
+            return new List<Panel>
+            {
+                Slab(Rect(new Point3D(0, 0, 0), new Point3D(8, 0, 0), new Point3D(8, 4, 0), new Point3D(0, 4, 0)), PanelType.Floor),
+                Slab(Rect(new Point3D(0, 0, 3), new Point3D(8, 0, 3), new Point3D(8, 4, 3), new Point3D(0, 4, 3)), PanelType.Roof),
+                Wall(Rect(new Point3D(0, 0, 0), new Point3D(8, 0, 0), new Point3D(8, 0, 3), new Point3D(0, 0, 3))),
+                Wall(Rect(new Point3D(0, 4, 0), new Point3D(8, 4, 0), new Point3D(8, 4, 3), new Point3D(0, 4, 3))),
+                Wall(Rect(new Point3D(0, 0, 0), new Point3D(0, 4, 0), new Point3D(0, 4, 3), new Point3D(0, 0, 3))),
+                Wall(Rect(new Point3D(8, 0, 0), new Point3D(8, 4, 0), new Point3D(8, 4, 3), new Point3D(8, 0, 3))),
+                Wall(Rect(new Point3D(4, 0.0, 0), new Point3D(4, 1.5, 0), new Point3D(4, 1.5, 3), new Point3D(4, 0.0, 3))), // fin 1, y:[0.0,1.5]
+                Wall(Rect(new Point3D(4, 2.0, 0), new Point3D(4, 3.5, 0), new Point3D(4, 3.5, 3), new Point3D(4, 2.0, 3))), // fin 2, y:[2.0,3.5]
+            };
+        }
+
+        [SkippableFact]
+        public void Solve3D_SingleRoomWithTwoDisconnectedFins_AdoptsRawAndGateStaysSilent()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Connectivity false-positive control (codex #7 review, round 5): two coplanar but SPATIALLY
+            // DISCONNECTED fins must be measured as two independent (small) elements, never pooled into one
+            // fictitious wide "divider" just because they share an infinite plane. This is a single legitimate
+            // room; a false rejection here pushes it onto the weaker managed path.
+            List<Panel> panels = SingleRoomWithTwoDisconnectedFins();
+            panels.Solve3D(out List<Point3D> _, out List<string> diagnostics, out _, out Solve3DReport report);
+
+            Assert.True(report.RawAdopted);
+            Assert.Equal(1, report.ResolvedCellCount);
+            Assert.DoesNotContain(diagnostics, d => d.Contains("UnderSplit"));
+        }
     }
 }
