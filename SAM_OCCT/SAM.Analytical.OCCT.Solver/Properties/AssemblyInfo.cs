@@ -9,3 +9,4 @@ using System.Runtime.CompilerServices;
 // attributes live here rather than in a generated file).
 [assembly: InternalsVisibleTo("SAM.OCCT.UnitTests")]
 [assembly: InternalsVisibleTo("SAM.OCCT.IntegrationTests")]
+[assembly: InternalsVisibleTo("SAM.Analytical.Grasshopper.OCCT")]

@@ -7,6 +7,7 @@ using SAM.Core.OCCT;
 using SAM.Geometry.OCCT.Solver;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
+using System.Globalization;
 using Xunit;
 
 namespace SAM.OCCT.UnitTests
@@ -28,6 +29,15 @@ namespace SAM.OCCT.UnitTests
             };
             Face3D face3D = Face3D.Create(new List<IClosedPlanar3D> { new Polygon3D(points) });
             return global::SAM.Analytical.Create.Panel(WallConstruction, PanelType.Wall, face3D);
+        }
+
+        private static Face3D FlatCap(double z, double size)
+        {
+            return TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, z),
+                new Point3D(size, 0, z),
+                new Point3D(size, size, z),
+                new Point3D(0, size, z));
         }
 
         [Fact]
@@ -218,6 +228,76 @@ namespace SAM.OCCT.UnitTests
 
             // Assert
             Assert.Contains("not classified", lines[0]);
+        }
+
+        [Fact]
+        public void FormatLevelGroups_FixtureLikeGroup_UsesExactPlanGrammar()
+        {
+            // Arrange
+            List<LevelFrame> frames = LevelFrame.Cluster(new List<Face3D>
+            {
+                FlatCap(12.240, 10),
+                FlatCap(12.436, 2)
+            });
+            List<LevelGroup> groups = LevelFrame.GroupFrames(frames, 0.21);
+
+            // Act
+            List<string> lines = SolverReportFormat.FormatLevelGroups(groups, frames);
+
+            // Assert
+            Assert.Equal(
+                "SAM_OCCT_CLEAN3D_LEVELGROUP: group 0: elevation 12.240 m, frames [0,1] (12.240, 12.436), 2 cap(s), spread 0.196 m, tilt 0.0 deg",
+                Assert.Single(lines));
+        }
+
+        [Fact]
+        public void FormatCleanReport_SnappedPanel_UsesExactPlanGrammar()
+        {
+            // Arrange
+            Panel backer = MakeWallPanel();
+            Panel moved = MakeWallPanel();
+            List<Panel> sources = new List<Panel> { backer, moved };
+            List<LevelFrame> frames = LevelFrame.Cluster(new List<Face3D> { FlatCap(12.240, 10) });
+            List<LevelGroup> groups = LevelFrame.GroupFrames(frames, 0.21);
+            List<CleanRecord> records = new List<CleanRecord>
+            {
+                new CleanRecord(1, 0, CleanRecordKind.SnappedToBacker, 0.062, 0)
+            };
+
+            // Act
+            List<string> lines = SolverReportFormat.FormatCleanReport(
+                records, groups, frames, sources,
+                new List<double> { 0.4, 0.4 }, new List<ParameterProvenance> { ParameterProvenance.MinFloor, ParameterProvenance.MinFloor },
+                new List<double> { 0.74, 0.74 }, new List<ParameterProvenance> { ParameterProvenance.DerivedLength, ParameterProvenance.DerivedLength },
+                new List<double> { 0.5, 0.5 }, new List<ParameterProvenance> { ParameterProvenance.Stamped, ParameterProvenance.Stamped },
+                0.21);
+
+            // Assert
+            Assert.Equal("SAM_OCCT_CLEAN3D_LEVELS: 1 raw level frame(s) -> 1 level group(s) (bucketBetweenLevels=0.21 m).", lines[0]);
+            Assert.Equal(
+                string.Format(CultureInfo.InvariantCulture, "SAM_OCCT_CLEAN3D_PANEL: panel {0} (#1) snapped-to-backer; moved 0.062 m onto {1} (#0); bucket 0.400 (min-floor); weight 0.74 (derived-length); maxExtend 0.50 (stamped); group 0", moved.Guid, backer.Guid),
+                lines[2]);
+        }
+
+        [Fact]
+        public void FormatDiagnostics_LevelBandNearMiss_UsesExactPlanGrammar()
+        {
+            // Arrange
+            List<LevelFrame> frames = LevelFrame.Cluster(new List<Face3D>
+            {
+                FlatCap(12.240, 10),
+                FlatCap(12.436, 2)
+            });
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+            LevelFrame.GroupFrames(frames, 0.15, diagnostics: diagnostics);
+
+            // Act
+            List<string> lines = SolverReportFormat.FormatDiagnostics(diagnostics, "SAM_OCCT_CLEAN3D");
+
+            // Assert
+            Assert.Contains(
+                "SAM_OCCT_CLEAN3D_DIAGNOSTIC: [Snap/LevelBandNearMiss/Info] cap 0.196 m from group 0 datum (band 0.150) - excluded; raise bucketBetweenLevels to >= 0.196 to merge.",
+                lines);
         }
     }
 }

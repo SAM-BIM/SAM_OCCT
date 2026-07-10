@@ -215,5 +215,42 @@ namespace SAM.OCCT.UnitTests
             // Assert - "diagnostics identify the frame used where useful" (a tilted frame).
             Assert.Contains(diagnostics.All, x => x.Code == DiagnosticCode.AdoptedLevel && x.Message.Contains("tilted level frame"));
         }
+
+        [Fact]
+        public void ClassifyFace_CapWithinTwoFrameBands_ForwardsAmbiguousAssignmentDiagnostic()
+        {
+            // Arrange - two raw datums 0.2 m apart; the probe at 0.1 lies within the 0.15 band of both.
+            List<LevelFrame> frames = LevelFrame.Cluster(new List<Face3D> { FlatCap(0.0), FlatCap(0.2) });
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+
+            // Act
+            FaceRole role = LevelFrame.ClassifyFace(FlatCap(0.1), frames, out int frameIndex, VertTol, diagnostics);
+
+            // Assert - ClassifyFace must pass the diagnostics sink through to AssignCapToFrame; the deterministic
+            // nearest/tie-broken choice is allowed, but it is never silent.
+            Assert.Equal(FaceRole.Cap, role);
+            Assert.InRange(frameIndex, 0, 1);
+            Assert.Contains(diagnostics.All, x => x.Code == DiagnosticCode.AmbiguousLevelFrame);
+        }
+
+        [Fact]
+        public void ClassifyFace_FloatingWall_ForwardsNearestFrameFallbackDiagnostic()
+        {
+            // Arrange - the wall lies wholly between the z=0 and z=3 datums, so it spans neither one.
+            List<LevelFrame> frames = LevelFrame.Cluster(new List<Face3D> { FlatCap(0.0), FlatCap(3.0) });
+            Face3D wall = TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 1), new Point3D(0, 2, 1),
+                new Point3D(0, 2, 2), new Point3D(0, 0, 2));
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+
+            // Act
+            FaceRole role = LevelFrame.ClassifyFace(wall, frames, out int frameIndex, VertTol, diagnostics);
+
+            // Assert - the nearest-datum fallback remains deterministic and is never silent.
+            Assert.Equal(FaceRole.Wall, role);
+            Assert.InRange(frameIndex, 0, 1);
+            Assert.Contains(diagnostics.All, x =>
+                x.Code == DiagnosticCode.AmbiguousLevelFrame && x.Message.Contains("Wall spans no level frame"));
+        }
     }
 }

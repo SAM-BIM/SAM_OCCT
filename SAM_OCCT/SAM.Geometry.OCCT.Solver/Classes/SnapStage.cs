@@ -171,7 +171,7 @@ namespace SAM.Geometry.OCCT.Solver
                     // group datum is claimed by that datum (not the nearest-datum ambiguity fallback).
                     double effectiveBand = System.Math.Max(LevelFrame.DEFAULT_ElevationBand, bucketBetweenLevels);
                     List<LevelFrame> groupDatums = result.LevelGroups.Select(x => x.ToDatumFrame()).ToList();
-                    Panel3DSnapSolver.NormalizeCaps(panels, groupDatums, tol.Angle, tol.Distance, tol.VerticalAngle, diagnostics, effectiveBand, cleanRecords);
+                    Panel3DSnapSolver.NormalizeCaps(panels, groupDatums, tol.Angle, tol.Distance, tol.VerticalAngle, diagnostics, effectiveBand, cleanRecords, normalizeToFrameDatum: true);
                 }
                 else
                 {

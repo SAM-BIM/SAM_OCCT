@@ -64,8 +64,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 normalizeCapOffset.SetPersistentData(0.3);
                 result.Add(new GH_SAMParam(normalizeCapOffset, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number bucketBetweenLevels = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "bucketBetweenLevels_", NickName = "bucketBetweenLevels_", Description = "Level-group merge band (m, P2): merges the several near-coplanar slab-skin datums one physical floor was imported as onto a single storey datum for cap normalization and wall-to-cap extension. Wider than the pinned 0.15 m raw frame band; 0 = off (default). e.g. 0.21 on the 9-space fixture (5 raw frames -> 3 level groups).", Access = GH_ParamAccess.item };
-                bucketBetweenLevels.SetPersistentData(0.0);
+                global::Grasshopper.Kernel.Parameters.Param_Number bucketBetweenLevels = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "bucketBetweenLevels_", NickName = "bucketBetweenLevels_", Description = "Level-group merge band (m, P2). GH default 0.21; 0 = off. Merges near-coplanar slab-skin datums for cap normalization and wall-to-cap extension while the raw LevelFrame band remains 0.15 m. SAM_Solver uses the same name (and GH default 0.21) for a final cross-level WALL re-snap; SAM_OCCT instead merges LEVEL DATUMS and performs no cross-level wall re-snap. Tune larger values per model; values >= 0.25 can consume genuine split levels.", Access = GH_ParamAccess.item };
+                bucketBetweenLevels.SetPersistentData(SolverComponentDefaults.BucketBetweenLevels);
                 result.Add(new GH_SAMParam(bucketBetweenLevels, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Boolean inputAlreadyClean = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "inputAlreadyClean_", NickName = "inputAlreadyClean_", Description = "Condition-only mode (P2, §2): when true, the supplied panels are treated as the EXACT Clean3D result - Stage A (clean bucket) is SKIPPED, stamped parameters are reused and only the extend/fill conditioning runs. Use for the exact Clean3D -> Extend3D handoff so the chain does not clean twice. false = the legacy path (an internal clean runs first; default).", Access = GH_ParamAccess.item };
@@ -181,7 +181,9 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref normalizeCapOffset);
             }
 
-            double bucketBetweenLevels = 0.0;
+            // The voluntary input is absent on old saved components AND fresh placements, so this fallback is
+            // the effective GH default. Version-gated: documents saved before 0.7.0 keep the core default 0.
+            double bucketBetweenLevels = SolverComponentDefaults.BucketBetweenLevelsFallback(ComponentVersion, "0.7.0");
             index = Params.IndexOfInputParam("bucketBetweenLevels_");
             if (index != -1)
             {

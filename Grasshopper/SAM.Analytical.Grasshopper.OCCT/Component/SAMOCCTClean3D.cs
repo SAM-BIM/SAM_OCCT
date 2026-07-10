@@ -59,8 +59,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 normalizeCapOffset.SetPersistentData(0.3);
                 result.Add(new GH_SAMParam(normalizeCapOffset, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number bucketBetweenLevels = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "bucketBetweenLevels_", NickName = "bucketBetweenLevels_", Description = "Level-group merge band (m, P2): merges the several near-coplanar slab-skin datums one physical floor was imported as onto a single storey datum for cap normalization. Wider than the pinned 0.15 m raw frame band, so a deliberate split-level landing survives unless you opt in. 0 = off (raw frames unchanged; default). e.g. 0.21 merges the 0.196/0.183 m gaps of the 9-space fixture (5 raw frames -> 3 level groups). Warn at >= 0.25 (can eat a split-level landing).", Access = GH_ParamAccess.item };
-                bucketBetweenLevels.SetPersistentData(0.0);
+                global::Grasshopper.Kernel.Parameters.Param_Number bucketBetweenLevels = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "bucketBetweenLevels_", NickName = "bucketBetweenLevels_", Description = "Level-group merge band (m, P2). GH default 0.21; 0 = off. Merges near-coplanar slab-skin datums onto one storey datum while the raw LevelFrame band stays pinned at 0.15 m. SAM_Solver uses the same name (and GH default 0.21) for a final cross-level WALL re-snap; SAM_OCCT instead merges LEVEL DATUMS and performs no cross-level wall re-snap. Values >= 0.25 can consume a genuine split-level landing and should be tuned per model.", Access = GH_ParamAccess.item };
+                bucketBetweenLevels.SetPersistentData(SolverComponentDefaults.BucketBetweenLevels);
                 result.Add(new GH_SAMParam(bucketBetweenLevels, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number slitMinGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "slitMinGap_", NickName = "slitMinGap_", Description = "Minimum perpendicular gap (m) of a remaining double-wall/slit to report. Floored at the bucket capture width so only parallel panels OUTSIDE the bucket (not captured/merged by it) are reported.", Access = GH_ParamAccess.item };
@@ -159,7 +159,9 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref normalizeCapOffset);
             }
 
-            double bucketBetweenLevels = 0.0;
+            // The voluntary input is absent on old saved components AND fresh placements, so this fallback is
+            // the effective GH default. Version-gated: documents saved before 0.5.0 keep the core default 0.
+            double bucketBetweenLevels = SolverComponentDefaults.BucketBetweenLevelsFallback(ComponentVersion, "0.5.0");
             index = Params.IndexOfInputParam("bucketBetweenLevels_");
             if (index != -1)
             {

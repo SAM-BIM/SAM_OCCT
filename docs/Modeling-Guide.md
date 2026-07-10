@@ -450,8 +450,9 @@ visible and tunable before the native resolve:
 Panels → SAMOCCT.Clean3D → SAMOCCT.Extend3D (inputAlreadyClean = true) → SAMOCCT.CreateAdjacencyCluster
 ```
 
-All the P2 controls below are **off by default** — an existing definition, golden master, or saved GH
-document is unaffected until you opt in.
+Core APIs and existing saved GH components remain backward-compatible: when `bucketBetweenLevels_` is
+absent they use `0` (off), and the other P2 controls remain off. Current/new GH components use `0.21` for
+the level-group control; adding the voluntary input to an older component also supplies `0.21`.
 
 ### `bucketBetweenLevels_` — merge slab-skin datums into one storey (Clean3D / Extend3D / Solve3D)
 
@@ -461,13 +462,18 @@ deliberate ~0.25 m split-level landing is never merged away — so those slab sk
 and walls extend to the wrong plane. `bucketBetweenLevels_` is an **optional wider grouping on top of the
 frames** that merges them onto one storey datum for cap normalization and wall-to-cap extension:
 
-- `0` (default): grouping off; the `LevelGroups` output equals `LevelFrames` (one group per frame).
-- `0.21` (the 9-space fixture): the 5 raw frames merge into **3 level groups** at datums 12.24 / 15.29 /
+- `0`: grouping off; the `LevelGroups` output equals `LevelFrames` (one group per frame). This is the core
+  API default.
+- `0.21` (generic GH default and the 9-space fixture): the 5 raw frames merge into **3 level groups** at datums 12.24 / 15.29 /
   18.34 — inspect `LevelFrames` (still 5) and `LevelGroups` (now 3) on the Clean3D component to confirm.
 - `>= 0.25`: can eat a genuine split-level landing — the CleanReport near-miss lines tell you exactly which
-  value would merge a frame that just missed, so raise it deliberately.
+  value would merge a frame that just missed, so raise it deliberately per model. For example,
+  `whole-level-towers.sam` can be investigated with `fillMargin_=0.4` / `bucketBetweenLevels_=0.4`; this is
+  fixture tuning, not a proposed generic default.
 
 The grouping affects cap normalization and extend targets **only** — never wall bucket membership.
+SAM_Solver uses the same parameter name and GH default `0.21`, but its operation is different: a final
+cross-level **wall re-snap**. SAM_OCCT merges **level datums** and does not perform that wall re-snap.
 
 ### `inputAlreadyClean_` — the exact Clean3D → Extend3D handoff (Extend3D)
 

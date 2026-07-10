@@ -1687,9 +1687,10 @@ this messy fixture, not a bug; P2's `bucketBetweenLevels` plumbing is what makes
 
 ## Level groups, clean records, exact Clean→Extend handoff (P2)
 
-`docs/CONTROLLED_WORKFLOW_PLAN.md` §4/§5.1/§3. **Every new behaviour is off by default (core and GH), so
-all ten golden-master signatures stay byte-identical** — `GoldenMasterIntegrationTests` is unchanged and
-still green (raw + managed paths). The P2 work is exercised by:
+`docs/CONTROLLED_WORKFLOW_PLAN.md` §4/§5.1/§3. Core/API defaults remain off, so
+all ten existing golden-master signatures stay byte-identical. GH components use the documented
+`bucketBetweenLevels_ = 0.21`; a separate managed-0.21 golden variant pins that intentional path. The P2
+work is exercised by:
 
 **Unit (pure managed, `Testing/SAM.OCCT.UnitTests`):**
 
@@ -1701,9 +1702,10 @@ still green (raw + managed paths). The P2 work is exercised by:
   lower-elevation for the datum; a frame beyond the band from the seed is not chained in via an intermediate
   frame; shuffle determinism; tilted perpendicular-distance membership.
 - `CleanRecordTests` — the Stage A clean recorder (§4.4). The headline guarantee: **a null recorder is
-  byte-identical to the geometry** (the same clean run with a null recorder and with a live one produces
-  identical clean faces), and the real mutation sites (bucket snap → `SnappedToBacker`, cap normalization →
-  `CapNormalized`) emit their records.
+  byte-identical to the geometry** (the exact OCCT input coordinate/loop-count arrays match between null and
+  live recorder runs), and the real mutation sites (bucket snap → `SnappedToBacker`, cap normalization →
+  `CapNormalized`) emit their records. The 0.196 m synthetic cap test additionally proves it is claimed over
+  the 0.21 effective band and projected exactly onto the dominant group datum.
 - `ParameterPrecedenceTests` — the D6 precedence fix (§3): a valid per-panel **stamp always wins** over the
   derived value, which wins over the default, for BucketSize, Weight and MaxExtend. `ResolveWeights` now
   derives with `SetWeights(@override: false)` and reads the stamp straight off the source, so a hand-set
@@ -1728,8 +1730,39 @@ still green (raw + managed paths). The P2 work is exercised by:
   `Extend3D(Clean3D(original, 0.21), inputAlreadyClean: true, 0.21)`, dumped alongside paths A/B with its
   level groups, CleanReport, and the `PATH_C_CLEAN_SKIPPED` confirmation — the parity evidence that the
   chain no longer double-cleans. Report-only (hard nine-space acceptance is P4).
+- `GoldenMasterIntegrationTests.Solve3D_ManagedPath021_ClosureSignatureMatchesGoldenMaster` — a second,
+  explicit managed golden theory pins the GH path independently of the unchanged core-default
+  pins. The closure signature is `cells / naked / volume m³ / faces`:
+
+  | Fixture | Managed 0.21 pin |
+  |---|---:|
+  | `whole-level-flat.sam` | 22 / 0 / 3479.896693 / 219 |
+  | `tilted-two-spaces.sam` | 2 / 0 / 723.652483 / 9 |
+  | `whole-level-tilted.sam` | 22 / 0 / 3377.873886 / 184 |
+  | `two-level-tilted.sam` | 9 / 24 / 2082.410010 / 412 |
+  | `whole-level-towers.sam` | 25 / 0 / 9281.107191 / 231 |
+
+  The two disputed groupings are classified and asserted in the test. `whole-level-towers` merges only the
+  12.240/12.397978 slab skins; 12.602691 and 15.572691 remain singleton datums. `two-level-tilted` merges
+  only the 0.950536/1.124485 slab skins; its -5.149464 and -2.179464 levels remain distinct. Every claimed
+  cap is asserted to lie on the supplied group datum, catching any later reintroduction of the former
+  largest-cap/nearest-centroid substitution. These P2 pins are release gates; a later phase may change them
+  only with its own explicit mechanism and re-baseline.
+- `WorkflowParity_WholeLevelTowers_FixtureTuning04_Produces31ParityCleanSpaces` pins the reported
+  fixture-specific `fillMargin=0.4` / `bucketBetweenLevels=0.4` experiment: 10 raw frames → 7 groups,
+  **31/32 spaces**, zero open wall ends, zero orphan panels, and clean analytical parity. Sweeping
+  `fillMargin` through 0.4/0.5/0.6 did not recover the last cell, located near
+  `(19.584, -4.909, 13.925)`. This proves the residual is not a level-group or uniform-fill-margin issue;
+  it remains an explicit P3 frame-aware/directional-extension acceptance gate. The 0.4 band crosses this
+  fixture's 0.283/0.363 m near-misses and is not promoted to the generic GH default.
 
 Grasshopper: `SAMOCCT.Clean3D` (0.4.0 → 0.5.0) and `SAMOCCT.Extend3D` (0.6.0 → 0.7.0) gain
-`bucketBetweenLevels_` (0) — plus `inputAlreadyClean_` (false) on Extend3D — inputs and `LevelGroups` /
+`bucketBetweenLevels_` (generic default 0.21) — plus `inputAlreadyClean_` (false) on Extend3D — inputs and `LevelGroups` /
 `CleanReport` outputs; `SAMOCCT.Solve3D` (0.5.0 → 0.6.0) gains `bucketBetweenLevels_` and a `LevelGroups`
-output. All new params are Voluntary/defaulted, so saved definitions keep working.
+output. The GH description records that SAM_Solver's same-named 0.21 control is a final cross-level wall
+re-snap, whereas SAM_OCCT performs level-datum merging. Larger values are explicit per-model tuning.
+Because a Voluntary input exists neither on an old saved component nor on a fresh placement, the 0.21 GH
+default is delivered by a **version-gated fallback** (`SolverComponentDefaults.BucketBetweenLevelsFallback`,
+pinned by `SolverComponentDefaultsTests`): a component saved before the input's introducing version
+(0.5.0 / 0.7.0 / 0.6.0 respectively) resolves the absent input to the core default 0, so existing saved GH
+documents never change behavior on plugin update; components placed at or after it resolve to 0.21.

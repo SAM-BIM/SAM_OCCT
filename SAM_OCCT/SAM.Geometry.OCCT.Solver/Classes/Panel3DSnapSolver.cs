@@ -2964,20 +2964,25 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
-        /// Frame-aware cap normalization (Phase 6c): snaps each level's caps onto that level's own datum plane,
-        /// grouped by <see cref="LevelFrame"/> membership instead of the flat <see cref="NormalizeCapOffset"/>
-        /// band. This is the same per-group backer snap as the legacy
-        /// <see cref="NormalizeCaps(List{SnappedPanel}, double, double, double, double)"/> - within a frame the
-        /// largest-area cap is the backer and the rest are projected onto its plane - but the group is the level
-        /// frame (a ~0.15 m elevation band, <see cref="LevelFrame.DEFAULT_ElevationBand"/>), never the 0.3 m
-        /// <see cref="NormalizeCapOffset"/> that would swallow a split-level landing. Because caps never cross a
-        /// frame, a landing ~0.25 m above the floor is its OWN frame and keeps its own elevation - the split-level
-        /// landing the plan (§E Phase 6, Risk 5) requires be preserved. Cap membership is decided frame-aware
-        /// (<see cref="LevelFrame.ClassifyFace"/>), so a wall on a tilted level is never mistaken for a cap.
-        /// A frame with a single cap is a no-op. When <paramref name="frames"/> is null/empty the caller falls
-        /// back to the legacy world-frame overload.
+        /// Frame-aware cap normalization (Phase 6c): classifies caps by <see cref="LevelFrame"/> rather than the
+        /// flat <see cref="NormalizeCapOffset"/> band. In legacy/raw-frame mode each bucket uses its largest cap
+        /// as the backer and a one-cap bucket is unchanged. With <paramref name="normalizeToFrameDatum"/> enabled,
+        /// every claimed cap (including a one-cap bucket) is projected onto the supplied frame plane exactly;
+        /// this is the P2 level-group path, whose synthetic datum must not be replaced by another slab skin.
+        /// Cap membership is frame-aware (<see cref="LevelFrame.ClassifyFace"/>), so a wall on a tilted level is
+        /// never mistaken for a cap. When <paramref name="frames"/> is null/empty the caller falls back to the
+        /// legacy world-frame overload.
         /// </summary>
-        public static void NormalizeCaps(List<SnappedPanel> panels, IReadOnlyList<LevelFrame> frames, double toleranceAngle, double toleranceDistance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), SolverDiagnostics diagnostics = null, double elevationBand = LevelFrame.DEFAULT_ElevationBand, List<CleanRecord> records = null)
+        public static void NormalizeCaps(
+            List<SnappedPanel> panels,
+            IReadOnlyList<LevelFrame> frames,
+            double toleranceAngle,
+            double toleranceDistance,
+            double verticalAngleTolerance = 20 * (System.Math.PI / 180),
+            SolverDiagnostics diagnostics = null,
+            double elevationBand = LevelFrame.DEFAULT_ElevationBand,
+            List<CleanRecord> records = null,
+            bool normalizeToFrameDatum = false)
         {
             if (panels == null || panels.Count < 2 || frames == null || frames.Count == 0)
             {
@@ -3015,34 +3020,43 @@ namespace SAM.Geometry.OCCT.Solver
             diagnostics?.Add(SolverStage.Snap, DiagnosticCode.FrameNormalization, OcctDiagnosticSeverity.Info,
                 string.Format("Frame-aware cap normalization: {0} level frame(s) formed from {1} level frame(s) supplied, {2} cap(s) classified onto a frame.", capsByFrame.Count, frames.Count, capsByFrame.Values.Sum(x => x.Count)));
 
-            // Within each frame, snap every member cap onto the largest-area member's plane (the backer/datum).
-            // Identical to the legacy per-group backer snap - only the grouping is by frame, not the flat band.
+            // The legacy/raw-frame path snaps every member cap onto the largest-area member's plane. The P2
+            // level-GROUP path instead snaps onto the supplied synthetic datum frame exactly. The distinction is
+            // intentional: a group datum comes from the dominant raw frame and must remain the canonical target;
+            // choosing a largest panel again after grouping can silently select another slab skin. In datum mode a
+            // one-cap bucket is still normalized (it may be the 0.196 m skin claimed by a merged group).
             foreach (KeyValuePair<int, List<SnappedPanel>> entry in capsByFrame.OrderBy(x => x.Key))
             {
                 List<SnappedPanel> bucket = entry.Value;
-                if (bucket.Count < 2)
+                if (!normalizeToFrameDatum && bucket.Count < 2)
                 {
                     diagnostics?.Add(SolverStage.Snap, DiagnosticCode.FrameNormalization, OcctDiagnosticSeverity.Info,
                         string.Format("Level frame {0}: 1 cap - nothing to normalize onto.", entry.Key));
                     continue;
                 }
 
-                SnappedPanel backer = bucket.OrderByDescending(x => x.GetArea()).First();
+                LevelFrame datumFrame = frames[entry.Key];
+                SnappedPanel backer = normalizeToFrameDatum
+                    ? null // the synthetic group datum has no source panel; do not misreport a slab skin as it
+                    : bucket.OrderByDescending(x => x.GetArea()).First();
+                Plane targetPlane = normalizeToFrameDatum ? datumFrame.Plane : backer.Plane;
                 diagnostics?.Add(SolverStage.Snap, DiagnosticCode.FrameNormalization, OcctDiagnosticSeverity.Info,
-                    string.Format("Level frame {0}: {1} cap(s) normalized onto the largest-area cap's datum plane.", entry.Key, bucket.Count));
+                    normalizeToFrameDatum
+                        ? string.Format("Level group {0}: {1} cap(s) normalized onto the supplied group datum plane.", entry.Key, bucket.Count)
+                        : string.Format("Level frame {0}: {1} cap(s) normalized onto the largest-area cap's datum plane.", entry.Key, bucket.Count));
 
                 foreach (SnappedPanel candidate in bucket)
                 {
-                    if (ReferenceEquals(candidate, backer))
+                    if (!normalizeToFrameDatum && ReferenceEquals(candidate, backer))
                     {
                         continue;
                     }
 
-                    if (backer.IsParallelWith(candidate, toleranceAngle))
+                    if (normalizeToFrameDatum || backer.IsParallelWith(candidate, toleranceAngle))
                     {
                         Point3D candidateCentre = candidate.GetBoundingBox()?.GetCentroid();
-                        double capDistance = candidateCentre == null ? 0.0 : System.Math.Abs(backer.Plane.Distance(candidateCentre)); // before the move
-                        if (candidate.SnapToBacker(backer.Plane))
+                        double capDistance = candidateCentre == null ? 0.0 : System.Math.Abs(targetPlane.Distance(candidateCentre)); // before the move
+                        if (candidate.SnapToBacker(targetPlane))
                         {
                             RecordClean(records, candidate, backer, CleanRecordKind.CapNormalized, capDistance, entry.Key);
                         }

@@ -89,7 +89,7 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>
         /// A datum-only <see cref="LevelFrame"/> at this group's plane (no member caps). Fed to the frame-aware
-        /// <see cref="Panel3DSnapSolver.NormalizeCaps(List{SnappedPanel}, IReadOnlyList{LevelFrame}, double, double, double, SolverDiagnostics, double, List{CleanRecord})"/>
+        /// <c>Panel3DSnapSolver.NormalizeCaps</c>
         /// so a level's caps normalize onto the GROUP datum (one per storey) instead of the several raw
         /// frame datums.
         /// </summary>

@@ -4,6 +4,7 @@
 using SAM.Core.OCCT;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 
 namespace SAM.Geometry.OCCT.Solver
@@ -567,8 +568,9 @@ namespace SAM.Geometry.OCCT.Solver
                     }
 
                     diagnostics.Add(SolverStage.Snap, DiagnosticCode.LevelBandNearMiss, OcctDiagnosticSeverity.Info,
-                        string.Format("Level frame at {0:0.###} m is {1:0.###} m from group {2} datum ({3:0.###} m, band {4:0.###}) - excluded; raise bucketBetweenLevels to >= {1:0.###} to merge.",
-                            frame.Elevation, distance, g, group.Elevation, band),
+                        string.Format(CultureInfo.InvariantCulture,
+                            "cap {0:0.000} m from group {1} datum (band {2:0.000}) - excluded; raise bucketBetweenLevels to >= {0:0.000} to merge.",
+                            distance, g, band),
                         point3Ds: new List<Point3D> { frame.Origin }, toleranceUsed: band);
                     emitted++;
                 }
@@ -793,7 +795,7 @@ namespace SAM.Geometry.OCCT.Solver
             // is perpendicular to every datum, failing the parallel cone). The elevationBand is forwarded (P2,
             // docs plan §4.2) so a cap up to bucketBetweenLevels from a merged group datum is still claimed by
             // that datum rather than falling to the nearest-datum ambiguity fallback.
-            int capFrame = AssignCapToFrame(face, frames, DEFAULT_NormalConeTolerance, elevationBand);
+            int capFrame = AssignCapToFrame(face, frames, DEFAULT_NormalConeTolerance, elevationBand, diagnostics);
             if (capFrame >= 0)
             {
                 frameIndex = capFrame;
@@ -801,7 +803,7 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             // Otherwise a wall spans one or more datums (its foot-to-top range straddles them).
-            IReadOnlyList<int> spanned = AssignWallToFrames(face, frames, elevationBand);
+            IReadOnlyList<int> spanned = AssignWallToFrames(face, frames, elevationBand, diagnostics);
             if (spanned.Count > 0)
             {
                 frameIndex = spanned[0];

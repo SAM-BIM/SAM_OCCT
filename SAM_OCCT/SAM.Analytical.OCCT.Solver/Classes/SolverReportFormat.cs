@@ -5,6 +5,7 @@ using SAM.Geometry.OCCT;
 using SAM.Geometry.OCCT.Solver;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 
 namespace SAM.Analytical.OCCT.Solver
@@ -195,9 +196,9 @@ namespace SAM.Analytical.OCCT.Solver
                 }
 
                 string frames = string.Join(",", group.FrameIndices ?? new List<int>());
-                string elevations = string.Join(", ", (group.MemberElevations ?? new List<double>()).Select(x => string.Format("{0:0.###}", x)));
-                result.Add(string.Format(
-                    "SAM_OCCT_CLEAN3D_LEVELGROUP: group {0}: elevation {1:0.###} m, frames [{2}] ({3}), {4} cap(s), spread {5:0.###} m, tilt {6:0.#} deg",
+                string elevations = string.Join(", ", (group.MemberElevations ?? new List<double>()).Select(x => x.ToString("0.000", CultureInfo.InvariantCulture)));
+                result.Add(string.Format(CultureInfo.InvariantCulture,
+                    "SAM_OCCT_CLEAN3D_LEVELGROUP: group {0}: elevation {1:0.000} m, frames [{2}] ({3}), {4} cap(s), spread {5:0.000} m, tilt {6:0.0} deg",
                     i, group.Elevation, frames, elevations, group.CapCount, group.Spread, group.TiltAngle * (180.0 / System.Math.PI)));
             }
 
@@ -230,7 +231,7 @@ namespace SAM.Analytical.OCCT.Solver
 
             int frameCount = levelFrames?.Count ?? 0;
             int groupCount = levelGroups?.Count ?? 0;
-            result.Add(string.Format(
+            result.Add(string.Format(CultureInfo.InvariantCulture,
                 "SAM_OCCT_CLEAN3D_LEVELS: {0} raw level frame(s) -> {1} level group(s) (bucketBetweenLevels={2:0.###} m).",
                 frameCount, groupCount, bucketBetweenLevels));
 
@@ -244,26 +245,26 @@ namespace SAM.Analytical.OCCT.Solver
                 }
 
                 System.Text.StringBuilder line = new System.Text.StringBuilder();
-                line.Append(string.Format("SAM_OCCT_CLEAN3D_PANEL: panel {0} {1}",
+                line.Append(string.Format(CultureInfo.InvariantCulture, "SAM_OCCT_CLEAN3D_PANEL: panel {0} {1}",
                     CleanPanelLabel(cleanRecord.SourceIndex, sources), cleanRecord.KindText()));
 
                 if (cleanRecord.BackerSourceIndex >= 0)
                 {
-                    line.Append(string.Format("; moved {0:0.###} m onto {1}", cleanRecord.DistanceMoved, CleanPanelLabel(cleanRecord.BackerSourceIndex, sources)));
+                    line.Append(string.Format(CultureInfo.InvariantCulture, "; moved {0:0.000} m onto {1}", cleanRecord.DistanceMoved, CleanPanelLabel(cleanRecord.BackerSourceIndex, sources)));
                 }
                 else if (cleanRecord.Kind != CleanRecordKind.DroppedInvalid)
                 {
-                    line.Append(string.Format("; moved {0:0.###} m", cleanRecord.DistanceMoved));
+                    line.Append(string.Format(CultureInfo.InvariantCulture, "; moved {0:0.000} m", cleanRecord.DistanceMoved));
                 }
 
-                line.Append(string.Format("; bucket {0}; weight {1}; maxExtend {2}",
-                    ValueTag(cleanRecord.SourceIndex, bucketValues, bucketProvenance),
-                    ValueTag(cleanRecord.SourceIndex, weightValues, weightProvenance),
-                    ValueTag(cleanRecord.SourceIndex, maxExtendValues, maxExtendProvenance)));
+                line.Append(string.Format(CultureInfo.InvariantCulture, "; bucket {0}; weight {1}; maxExtend {2}",
+                    ValueTag(cleanRecord.SourceIndex, bucketValues, bucketProvenance, "0.000"),
+                    ValueTag(cleanRecord.SourceIndex, weightValues, weightProvenance, "0.00"),
+                    ValueTag(cleanRecord.SourceIndex, maxExtendValues, maxExtendProvenance, "0.00")));
 
                 if (cleanRecord.LevelGroupIndex >= 0)
                 {
-                    line.Append(string.Format("; group {0}", cleanRecord.LevelGroupIndex));
+                    line.Append(string.Format(CultureInfo.InvariantCulture, "; group {0}", cleanRecord.LevelGroupIndex));
                 }
 
                 result.Add(line.ToString());
@@ -279,12 +280,13 @@ namespace SAM.Analytical.OCCT.Solver
             string guid = sourceIndex >= 0 && sources != null && sourceIndex < sources.Count && sources[sourceIndex] != null
                 ? sources[sourceIndex].Guid.ToString()
                 : "n/a";
-            return string.Format("{0} (#{1})", guid, sourceIndex);
+            return string.Format(CultureInfo.InvariantCulture, "{0} (#{1})", guid, sourceIndex);
         }
 
-        /// <summary>"{value:0.###} ({provenance-tag})" for a resolved parameter at <paramref name="sourceIndex"/>,
-        /// or "n/a" when the index is out of range.</summary>
-        private static string ValueTag(int sourceIndex, IReadOnlyList<double> values, IReadOnlyList<ParameterProvenance> provenance)
+        /// <summary>"{value} ({provenance-tag})" for a resolved parameter at <paramref name="sourceIndex"/>,
+        /// formatted with the caller's invariant numeric <paramref name="format"/>; "n/a" when the index is out
+        /// of range.</summary>
+        private static string ValueTag(int sourceIndex, IReadOnlyList<double> values, IReadOnlyList<ParameterProvenance> provenance, string format)
         {
             if (sourceIndex < 0 || values == null || sourceIndex >= values.Count)
             {
@@ -292,7 +294,7 @@ namespace SAM.Analytical.OCCT.Solver
             }
 
             string tag = provenance != null && sourceIndex < provenance.Count ? provenance[sourceIndex].ToTag() : "n/a";
-            return string.Format("{0:0.###} ({1})", values[sourceIndex], tag);
+            return string.Format(CultureInfo.InvariantCulture, "{0} ({1})", values[sourceIndex].ToString(format, CultureInfo.InvariantCulture), tag);
         }
 
         /// <summary>

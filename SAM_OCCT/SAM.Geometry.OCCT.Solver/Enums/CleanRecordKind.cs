@@ -19,7 +19,7 @@ namespace SAM.Geometry.OCCT.Solver
         SnappedToBacker,
 
         /// <summary>A cap projected onto its level datum during cap normalization
-        /// (<see cref="Panel3DSnapSolver.NormalizeCaps(System.Collections.Generic.List{SnappedPanel}, System.Collections.Generic.IReadOnlyList{LevelFrame}, double, double, double, SolverDiagnostics, double, System.Collections.Generic.List{CleanRecord})"/>).</summary>
+        /// (<c>Panel3DSnapSolver.NormalizeCaps</c>).</summary>
         CapNormalized,
 
         /// <summary>A source face was absorbed into another during the final coplanar union (the coplanar merge

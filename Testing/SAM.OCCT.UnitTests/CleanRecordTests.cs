@@ -2,7 +2,10 @@
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
 using SAM.Geometry.OCCT.Solver;
+using SAM.Geometry.OCCT.Native;
+using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
+using SAM.Core.OCCT;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -54,18 +57,21 @@ namespace SAM.OCCT.UnitTests
             };
         }
 
-        /// <summary>Sorted (area, cx, cy, cz) fingerprints of the clean faces, rounded - a geometry identity key.</summary>
-        private static List<string> Fingerprint(IEnumerable<Face3D> face3Ds)
+        /// <summary>Serializes every external/internal loop to the exact coordinate/count arrays handed to OCCT.
+        /// Equality of these arrays is a byte-level geometry check: vertices, winding, face order and holes all
+        /// participate, unlike an area/centroid fingerprint.</summary>
+        private static OcctNativeInput Serialize(IEnumerable<Face3D> face3Ds)
         {
-            return face3Ds
-                .Where(x => x != null && x.IsValid())
-                .Select(x =>
-                {
-                    Point3D c = x.GetBoundingBox().GetCentroid();
-                    return string.Format("{0:0.0000}|{1:0.0000}|{2:0.0000}|{3:0.0000}", x.GetArea(), c.X, c.Y, c.Z);
-                })
-                .OrderBy(x => x)
-                .ToList();
+            OcctCellComplexResult result = new OcctCellComplexResult();
+            try
+            {
+                Assert.True(OcctNativeInputBuilder.TryBuild(face3Ds, new OcctBuildOptions(), result, out OcctNativeInput input));
+                return input;
+            }
+            finally
+            {
+                result.Dispose();
+            }
         }
 
         [Fact]
@@ -80,10 +86,51 @@ namespace SAM.OCCT.UnitTests
             SnapStage.Result a = SnapStage.Clean(withoutRecorder, new ToleranceBudget(), 0.3, 0.3, null, null, 0.0, null);
             SnapStage.Result b = SnapStage.Clean(withRecorder, new ToleranceBudget(), 0.3, 0.3, null, null, 0.0, records);
 
-            // Assert - the recorder changed nothing about the geometry; and it DID observe something (so the
+            // Assert - the recorder changed no face/loop/coordinate byte; and it DID observe something (so the
             // parity is meaningful, not a comparison of two empty runs).
-            Assert.Equal(Fingerprint(a.CleanFace3Ds), Fingerprint(b.CleanFace3Ds));
+            OcctNativeInput geometryA = Serialize(a.CleanFace3Ds);
+            OcctNativeInput geometryB = Serialize(b.CleanFace3Ds);
+            Assert.Equal(geometryA.FaceCount, geometryB.FaceCount);
+            Assert.Equal(geometryA.FaceLoopCounts, geometryB.FaceLoopCounts);
+            Assert.Equal(geometryA.LoopPointCounts, geometryB.LoopPointCounts);
+            Assert.Equal(geometryA.Coordinates, geometryB.Coordinates);
             Assert.NotEmpty(records);
+        }
+
+        [Fact]
+        public void Clean_GroupBand021_Cap0196FromDatum_IsClaimedAndNormalizedToGroupDatum()
+        {
+            // Arrange - two non-overlapping cap tiles form separate RAW frames because 0.196 > the pinned 0.15
+            // band. The larger 12.240 tile seeds the P2 group datum; the 12.436 skin must be claimed over 0.21.
+            Face3D datumCap = Cap(0, 0, 10, 10, 12.240);
+            Face3D skinCap = Cap(11, 0, 2, 2, 12.436);
+            List<LevelFrame> rawFrames = LevelFrame.Cluster(new List<Face3D> { datumCap, skinCap });
+            List<LevelGroup> groups = LevelFrame.GroupFrames(rawFrames, 0.21);
+            List<LevelFrame> groupDatums = groups.Select(x => x.ToDatumFrame()).ToList();
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+
+            // Act - prove membership directly, then run the real Stage A normalization with a live recorder.
+            int assigned = LevelFrame.AssignCapToFrame(skinCap, groupDatums, elevationBand: 0.21, diagnostics: diagnostics);
+            FaceRole role = LevelFrame.ClassifyFace(skinCap, groupDatums, out int classifiedFrame, diagnostics: diagnostics, elevationBand: 0.21);
+            List<CleanRecord> records = new List<CleanRecord>();
+            SnapStage.Result result = SnapStage.Clean(
+                new List<SnappedPanel>
+                {
+                    new SnappedPanel(0, datumCap, 1.0, 0.4, 0.4),
+                    new SnappedPanel(1, skinCap, 1.0, 0.4, 0.4)
+                },
+                new ToleranceBudget(), 0.3, 0.3, diagnostics, null, 0.21, records);
+
+            // Assert - this is assignment through the widened group band, not the nearest-centroid fallback;
+            // both clean caps lie exactly on the dominant group datum and the 0.196 m move is recorded.
+            Assert.Equal(2, rawFrames.Count);
+            Assert.Single(groups);
+            Assert.Equal(0, assigned);
+            Assert.Equal(FaceRole.Cap, role);
+            Assert.Equal(0, classifiedFrame);
+            Assert.DoesNotContain(diagnostics.All, x => x.Code == DiagnosticCode.AmbiguousLevelFrame);
+            Assert.All(result.CleanFace3Ds, x => Assert.Equal(12.240, x.GetBoundingBox().GetCentroid().Z, 6));
+            Assert.Contains(records, x => x.Kind == CleanRecordKind.CapNormalized && x.SourceIndex == 1 && System.Math.Abs(x.DistanceMoved - 0.196) < 1e-9);
         }
 
         [Fact]
