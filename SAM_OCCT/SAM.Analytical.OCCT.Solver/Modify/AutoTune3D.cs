@@ -43,9 +43,12 @@ namespace SAM.Analytical.OCCT.Solver
             double alignColinearOffset = 0.3,
             double normalizeCapOffset = 0.3,
             OcctBuildOptions options = null,
-            AutoTune3DOptions tune = null)
+            AutoTune3DOptions tune = null,
+            double bucketBetweenLevels = 0.0,
+            double fillMargin = 0.5,
+            bool directionalCapGrow = true)
         {
-            return AutoTune3D(panels, out nakedPoint3Ds, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, tune);
+            return AutoTune3D(panels, out nakedPoint3Ds, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, tune, bucketBetweenLevels: bucketBetweenLevels, fillMargin: fillMargin, directionalCapGrow: directionalCapGrow);
         }
 
         /// <summary>
@@ -71,9 +74,12 @@ namespace SAM.Analytical.OCCT.Solver
             OcctBuildOptions options = null,
             AutoTune3DOptions tune = null,
             double minApertureArea = Tolerance.MacroDistance,
-            double maxApertureDistance = Tolerance.MacroDistance)
+            double maxApertureDistance = Tolerance.MacroDistance,
+            double bucketBetweenLevels = 0.0,
+            double fillMargin = 0.5,
+            bool directionalCapGrow = true)
         {
-            return AutoTune3D(panels, out nakedPoint3Ds, out diagnostics, out orphanedApertures, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, tune, minApertureArea, maxApertureDistance);
+            return AutoTune3D(panels, out nakedPoint3Ds, out diagnostics, out orphanedApertures, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, tune, minApertureArea, maxApertureDistance, bucketBetweenLevels, fillMargin, directionalCapGrow);
         }
 
         /// <summary>
@@ -102,7 +108,10 @@ namespace SAM.Analytical.OCCT.Solver
             OcctBuildOptions options = null,
             AutoTune3DOptions tune = null,
             double minApertureArea = Tolerance.MacroDistance,
-            double maxApertureDistance = Tolerance.MacroDistance)
+            double maxApertureDistance = Tolerance.MacroDistance,
+            double bucketBetweenLevels = 0.0,
+            double fillMargin = 0.5,
+            bool directionalCapGrow = true)
         {
             nakedPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
@@ -125,7 +134,10 @@ namespace SAM.Analytical.OCCT.Solver
             {
                 Up = ResolveUp(sources),
                 AlignColinearOffset = alignColinearOffset,
-                NormalizeCapOffset = normalizeCapOffset
+                NormalizeCapOffset = normalizeCapOffset,
+                BucketBetweenLevels = bucketBetweenLevels,
+                FillMargin = fillMargin,
+                DirectionalCapGrow = directionalCapGrow
             };
             solver.Execute(options, tune);
 
