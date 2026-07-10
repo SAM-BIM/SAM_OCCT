@@ -46,6 +46,30 @@ namespace SAM.Geometry.OCCT.Solver
         /// stub cannot extend unrealistically far. Mirrors the 2D <c>SnappedWall.ExtensionLimitLengthRatio</c>.</summary>
         public const double EXTENSION_LIMIT_LENGTH_RATIO = 0.49;
 
+        /// <summary>Under-split gate (codex #7): a dropped wall-like face counts as a room-dividing partition
+        /// only when its vertical extent spans at least this fraction of the cell it sits inside AND its plan
+        /// width (perpendicular to its own normal) spans at least <see cref="UNDER_SPLIT_MIN_PLAN_RATIO"/> of the
+        /// cell - i.e. it very nearly fills the cell's cross-section, the way a wall that genuinely divides a
+        /// room into two must. A partial-height fin, a short balcony upstand, or a fragment interior to a large
+        /// real room all fall short of one bound and are ignored. Deliberately high (conservative): a false
+        /// positive pushes a well-modelled input onto the weaker managed pipeline.</summary>
+        public const double UNDER_SPLIT_MIN_HEIGHT_RATIO = 0.8;
+
+        /// <summary>Under-split gate (codex #7): the minimum fraction of the containing cell's plan width - in
+        /// the horizontal direction perpendicular to the dropped partition's own normal - the partition must
+        /// span to count as a room divider (a real partition reaches wall-to-wall). Paired with
+        /// <see cref="UNDER_SPLIT_MIN_HEIGHT_RATIO"/>; both must hold.</summary>
+        public const double UNDER_SPLIT_MIN_PLAN_RATIO = 0.7;
+
+        /// <summary>Under-split gate (codex #7): the minimum fraction of its own (height x plan) bounding
+        /// rectangle a dropped partition's actual area must fill to count as a room divider. Height/plan alone
+        /// are just extrema (max-min of the vertex projections), so a sparse or triangular face (a brace, gusset,
+        /// stair stringer, or small triangular infill panel) can touch all four extremes of its bounding
+        /// rectangle - satisfying both ratio checks - without nearly FILLING the cross-section a real partition
+        /// would. A right triangle covers exactly 50% of its bounding rectangle; 0.6 excludes that and any
+        /// sparser shape while comfortably admitting a genuine partition even with a header/sill cut removed.</summary>
+        public const double UNDER_SPLIT_MIN_COVERAGE_RATIO = 0.6;
+
         private readonly List<Face3D> face3Ds;
         private readonly List<double> bucketSizes;
         private readonly List<double> weights;
@@ -739,7 +763,24 @@ namespace SAM.Geometry.OCCT.Solver
             ResolvedCellComplex managedComplex = null;
 
             bool tryRebuild = ConsolidateRebuild && (patchFace3Ds.Count + retainedFace3Ds.Count) > 0;
-            int appendedNaked = tryRebuild ? ResolveStage.NakedEdgeCount(appended, occtOptions) : 0;
+
+            // The APPENDED (unimprinted) set is the fallback kept if the consolidation rebuild is rejected, so
+            // its OWN decoded cell/naked counts are the correct no-regress baseline - NOT the pre-append
+            // resolveCellCount (codex #3). resolveCellCount is measured before patches/retained were appended
+            // and is typically LOWER, which let a rebuild that DISSOLVED a separator (fewer cells than the
+            // appended fallback = two rooms merged into one) still pass rebuiltCells >= resolveCellCount and be
+            // wrongly adopted. Decode the appended set ONCE here (only when a rebuild is attempted) and reuse it
+            // in the reject path below, so the reject path adds no second decode.
+            int appendedNaked = 0;
+            int appendedCells = resolveCellCount;
+            List<double> appendedVolumes = new List<double>();
+            List<SolverCell> appendedSolverCells = new List<SolverCell>();
+            ResolvedCellComplex appendedComplex = null;
+            if (tryRebuild)
+            {
+                appendedNaked = ResolveStage.NakedEdgeCount(appended, occtOptions);
+                appendedVolumes = DecodeCellVolumes(appended, occtOptions, SolveId, out appendedCells, out appendedSolverCells, out appendedComplex);
+            }
 
             if (tryRebuild)
             {
@@ -765,9 +806,9 @@ namespace SAM.Geometry.OCCT.Solver
                     OcctHistory rebuildHistory = rebuildResult.History;
                     int rebuiltNaked = ResolveStage.NakedEdgeCount(rebuiltFaces, occtOptions);
 
-                    // Accept iff the rebuild does not regress: cells not reduced AND naked not increased
-                    // versus the appended-unimprinted alternative (§H / §I acceptance rule).
-                    if (rebuiltFaces.Count != 0 && rebuiltCells >= resolveCellCount && rebuiltNaked <= appendedNaked)
+                    // Accept iff the rebuild does not regress versus the appended-unimprinted fallback it would
+                    // replace (§H / §I acceptance rule); baseline is the appended set's OWN counts (codex #3).
+                    if (AcceptConsolidationRebuild(rebuiltFaces.Count, rebuiltCells, rebuiltNaked, appendedCells, appendedNaked))
                     {
                         finalFaces = rebuiltFaces;
                         cellCount = rebuiltCells;
@@ -782,7 +823,7 @@ namespace SAM.Geometry.OCCT.Solver
                     else
                     {
                         Diagnostics.Add(SolverStage.Heal, DiagnosticCode.RejectedSew, OcctDiagnosticSeverity.Warning,
-                            string.Format("Consolidation rebuild regressed (cells {0} vs pre {1}; naked {2} vs appended {3}); patches/retained appended unimprinted.", rebuiltCells, resolveCellCount, rebuiltNaked, appendedNaked));
+                            string.Format("Consolidation rebuild regressed (cells {0} vs appended {1}; naked {2} vs appended {3}); patches/retained appended unimprinted.", rebuiltCells, appendedCells, rebuiltNaked, appendedNaked));
                     }
                 }
 
@@ -802,7 +843,19 @@ namespace SAM.Geometry.OCCT.Solver
 
                 RecordRetainedProvenance(finalMap, retainedStart, retainedFace3Ds.Count, retainedSourceIndices);
 
-                cellVolumes = DecodeCellVolumes(appended, occtOptions, SolveId, out cellCount, out solverCells, out managedComplex);
+                if (tryRebuild)
+                {
+                    // Reuse the up-front appended decode (codex #3) - the fallback geometry is exactly `appended`,
+                    // already decoded for the acceptance baseline, so do not decode it a second time.
+                    cellVolumes = appendedVolumes;
+                    cellCount = appendedCells;
+                    solverCells = appendedSolverCells;
+                    managedComplex = appendedComplex;
+                }
+                else
+                {
+                    cellVolumes = DecodeCellVolumes(appended, occtOptions, SolveId, out cellCount, out solverCells, out managedComplex);
+                }
             }
 
             // Publish the adopted geometry + provenance. HoleFillFace3Ds stays the patch set (the air-panel
@@ -1232,6 +1285,418 @@ namespace SAM.Geometry.OCCT.Solver
             return point3D.X >= min.X - tolerance && point3D.X <= max.X + tolerance
                 && point3D.Y >= min.Y - tolerance && point3D.Y <= max.Y + tolerance
                 && point3D.Z >= min.Z - tolerance && point3D.Z <= max.Z + tolerance;
+        }
+
+        /// <summary>
+        /// Counts adopted cells that harbour a dropped room-dividing partition - the under-split gate's
+        /// geometric measurement (codex #7, P4). Dropped (unrepresented) faces are first grouped by shared
+        /// infinite plane (<see cref="GroupCoplanarFaces"/>), then split into spatially-CONNECTED clusters within
+        /// each plane (<see cref="SplitByConnectivity"/> - disconnected coplanar elements, e.g. separate
+        /// decorative fins scattered across one room, must never be pooled just because they share a plane). A
+        /// resulting cluster counts as a room-dividing partition when it is: (1) wall-like (its normal is within
+        /// <see cref="VerticalAngleTolerance"/> of horizontal, measured relative to the LEVEL - only a wall
+        /// divides rooms in plan); (2) strictly INTERIOR to one cell (some member's interior point is inside the
+        /// cell and not merely on its boundary - a face used AS a separator sits on the boundary and is
+        /// represented, so is never a dropped face); (3) spanning at least <see cref="UNDER_SPLIT_MIN_HEIGHT_RATIO"/>
+        /// of the cell's height AND <see cref="UNDER_SPLIT_MIN_PLAN_RATIO"/> of its plan width, pooled across every
+        /// member (a real partition, even one stopping short of the ceiling or split into touching pieces - not a
+        /// short decorative fin or a fragment interior to a large room); and (4) filling at least
+        /// <see cref="UNDER_SPLIT_MIN_COVERAGE_RATIO"/> of that pooled (height x plan) bounding rectangle with
+        /// actual UNION area (<see cref="ComputeUnionCoverageRatio"/> - excludes a sparse/triangular brace or
+        /// gusset that merely touches all four extremes without filling the cross-section, and never double-counts
+        /// overlapping/duplicate-exported members). Such a cluster is a partition the raw build failed to
+        /// imprint, so the rooms it should have separated merged into one watertight cell.
+        /// <para><b>Vertex-projected measurement (codex #7 review, rounds 2 and 3).</b> Height/plan-width are
+        /// measured by projecting the ACTUAL boundary vertices of the face/shell onto a direction (<see cref="Up"/>
+        /// for height, the in-level tangent for plan-width) and taking max-min - never a bounding box's extent,
+        /// which is only tight when the room happens to be axis-aligned to it (a tilted OR merely plan-yawed room
+        /// inflates any axis-aligned box and can understate the ratio). A dot product with a fixed world
+        /// direction is frame-invariant by construction, so no canonical-frame transform is needed at all.</para>
+        /// <para>Deliberately conservative (errs toward NOT rejecting, since a false positive pushes a
+        /// well-modelled input onto the weaker managed pipeline): a horizontal cap sliver, a stray face outside
+        /// every cell, a boundary-coincident face, a short fin, a sparse/triangular brace, and a scatter of
+        /// disconnected coplanar elements are all excluded - so atria, courtyard rings, double-height rooms and
+        /// legitimate diagonal bracing do not trip it. Native-free (pure managed Shell/Face3D/Face2D geometry);
+        /// the pure decision stays in <see cref="EvaluateRawAdoption"/>, which just receives this count.</para>
+        /// </summary>
+        private static int CountUnderSplitCells(List<Face3D> droppedFace3Ds, IReadOnlyList<SolverCell> cells, Vector3D up, double verticalAngleTolerance, double fuzzyTolerance, double tolerance, out List<string> details)
+        {
+            details = new List<string>();
+            if (droppedFace3Ds == null || droppedFace3Ds.Count == 0 || cells == null || cells.Count == 0)
+            {
+                return 0;
+            }
+
+            Vector3D upUnit = (up == null || up.Length <= tolerance) ? new Vector3D(0, 0, 1) : up.Unit;
+            double maxVerticalNormalZ = System.Math.Sin(verticalAngleTolerance); // |n.Up| at/below this => wall-like
+            HashSet<int> underSplitCells = new HashSet<int>();
+
+            foreach (List<Face3D> coplanarGroup in GroupCoplanarFaces(droppedFace3Ds))
+            {
+                Plane plane = coplanarGroup[0]?.GetPlane();
+                Vector3D normal = plane?.Normal?.Unit;
+                if (normal == null || System.Math.Abs(normal.DotProduct(upUnit)) > maxVerticalNormalZ)
+                {
+                    continue; // only a group vertical relative to the level (wall-like) can be a room divider
+                }
+
+                // The in-level horizontal tangent along the partition (perpendicular to both Up and the
+                // partition normal): the direction a room divider runs. Zero-length only if normal || Up, which
+                // the wall-like test above already excluded.
+                Vector3D tangent = upUnit.CrossProduct(normal);
+                if (tangent.Length <= tolerance)
+                {
+                    continue;
+                }
+                Vector3D tangentUnit = tangent.Unit;
+
+                foreach (List<Face3D> cluster in SplitByConnectivity(coplanarGroup, upUnit, tangentUnit, tolerance))
+                {
+                    // Pool every member's vertices/interior point - a divider split into TOUCHING pieces is
+                    // measured as the one physical element it represents (codex #7 review, round 4); a scatter of
+                    // disconnected elements was already split into separate clusters above (round 5).
+                    double faceHeightMin = double.PositiveInfinity, faceHeightMax = double.NegativeInfinity;
+                    double facePlanMin = double.PositiveInfinity, facePlanMax = double.NegativeInfinity;
+                    List<Point3D> internalPoints = new List<Point3D>();
+                    foreach (Face3D member in cluster)
+                    {
+                        if (TryVertexExtent(member, upUnit, out double hMin, out double hMax))
+                        {
+                            faceHeightMin = System.Math.Min(faceHeightMin, hMin);
+                            faceHeightMax = System.Math.Max(faceHeightMax, hMax);
+                        }
+
+                        if (TryVertexExtent(member, tangentUnit, out double pMin, out double pMax))
+                        {
+                            facePlanMin = System.Math.Min(facePlanMin, pMin);
+                            facePlanMax = System.Math.Max(facePlanMax, pMax);
+                        }
+
+                        Point3D internalPoint = member.GetInternalPoint3D(tolerance);
+                        if (internalPoint != null)
+                        {
+                            internalPoints.Add(internalPoint);
+                        }
+                    }
+
+                    if (internalPoints.Count == 0 || double.IsInfinity(faceHeightMin) || double.IsInfinity(facePlanMin))
+                    {
+                        continue;
+                    }
+
+                    double faceHeight = faceHeightMax - faceHeightMin;
+                    double facePlan = facePlanMax - facePlanMin;
+
+                    // Coverage: a sparse/triangular fragment (a brace, gusset, stair stringer) can touch all four
+                    // extrema of its bounding rectangle without nearly FILLING it (codex #7 review, round 4);
+                    // union (not summed) area also protects against overlapping/duplicate-exported members
+                    // (codex #7 review, round 5).
+                    double coverage = ComputeUnionCoverageRatio(cluster, plane, upUnit, tangentUnit, faceHeightMin, faceHeightMax, facePlanMin, facePlanMax, tolerance);
+                    if (coverage < UNDER_SPLIT_MIN_COVERAGE_RATIO)
+                    {
+                        continue; // does not fill its own footprint - not a real divider, even if it spans it
+                    }
+
+                    for (int c = 0; c < cells.Count; c++)
+                    {
+                        if (underSplitCells.Contains(c))
+                        {
+                            continue; // this cell is already counted
+                        }
+
+                        Shell shell = cells[c]?.Shell;
+                        if (shell == null)
+                        {
+                            continue;
+                        }
+
+                        // Strictly interior: some member's interior point is inside the cell AND not merely on its
+                        // boundary. Per-member (not pooled) so two UNRELATED but coincidentally coplanar dividers
+                        // in two different rooms are never credited to the wrong cell.
+                        Point3D interiorHit = internalPoints.Find(p => shell.Inside(p, fuzzyTolerance, tolerance) && !shell.On(p, tolerance));
+                        if (interiorHit == null)
+                        {
+                            continue;
+                        }
+
+                        if (!TryVertexExtent(shell, upUnit, out double cellHeightMin, out double cellHeightMax)
+                            || !TryVertexExtent(shell, tangentUnit, out double cellPlanMin, out double cellPlanMax))
+                        {
+                            continue;
+                        }
+                        double cellHeight = cellHeightMax - cellHeightMin;
+                        double cellPlan = cellPlanMax - cellPlanMin;
+
+                        if (cellHeight <= tolerance || faceHeight < UNDER_SPLIT_MIN_HEIGHT_RATIO * cellHeight)
+                        {
+                            continue; // a partial-height fin, not a room-height partition
+                        }
+
+                        if (cellPlan <= tolerance || facePlan < UNDER_SPLIT_MIN_PLAN_RATIO * cellPlan)
+                        {
+                            continue; // does not span the cell wall-to-wall - a partial element, not a divider
+                        }
+
+                        underSplitCells.Add(c);
+                        details.Add(string.Format(
+                            "cell {0} (vol {1:0.###} m3, height {2:0.###} m) harbours {3} dropped fragment(s) ({4:P0} coverage) spanning {5:P0} of its height and {6:P0} of its plan width at ({7:0.##}, {8:0.##}, {9:0.##})",
+                            c, cells[c].Volume, cellHeight, cluster.Count, coverage, faceHeight / cellHeight, facePlan / cellPlan, interiorHit.X, interiorHit.Y, interiorHit.Z));
+                        break;
+                    }
+                }
+            }
+
+            return underSplitCells.Count;
+        }
+
+        /// <summary>Splits one <see cref="GroupCoplanarFaces"/> group into spatially-connected sub-clusters, in
+        /// the group's own (tangent, up) 2D system: two members are in the same cluster only when their 2D
+        /// bounding boxes overlap or nearly touch (within 0.05 m - the same "same feature" tolerance
+        /// <see cref="GroupCoplanarFaces"/> uses for plane offset). Union-find over all pairs (the group is always
+        /// small - a handful of dropped faces at most). Prevents disconnected coplanar elements sharing one
+        /// infinite plane (e.g. separate decorative fins scattered across a room) from being pooled into one
+        /// fictitious "divider" just because they happen to lie on the same plane (codex #7 review, round 5).</summary>
+        private static List<List<Face3D>> SplitByConnectivity(List<Face3D> group, Vector3D upUnit, Vector3D tangentUnit, double tolerance)
+        {
+            int n = group.Count;
+            if (n <= 1)
+            {
+                return new List<List<Face3D>> { group };
+            }
+
+            double[] planMin = new double[n], planMax = new double[n];
+            double[] heightMin = new double[n], heightMax = new double[n];
+            for (int i = 0; i < n; i++)
+            {
+                TryVertexExtent(group[i], tangentUnit, out planMin[i], out planMax[i]);
+                TryVertexExtent(group[i], upUnit, out heightMin[i], out heightMax[i]);
+            }
+
+            const double gap = 0.05;
+            int[] parent = new int[n];
+            for (int i = 0; i < n; i++)
+            {
+                parent[i] = i;
+            }
+
+            int Find(int x)
+            {
+                while (parent[x] != x)
+                {
+                    x = parent[x] = parent[parent[x]];
+                }
+
+                return x;
+            }
+
+            for (int i = 0; i < n; i++)
+            {
+                for (int j = i + 1; j < n; j++)
+                {
+                    bool overlapPlan = planMin[i] - gap <= planMax[j] && planMin[j] - gap <= planMax[i];
+                    bool overlapHeight = heightMin[i] - gap <= heightMax[j] && heightMin[j] - gap <= heightMax[i];
+                    if (overlapPlan && overlapHeight)
+                    {
+                        int rootI = Find(i);
+                        int rootJ = Find(j);
+                        if (rootI != rootJ)
+                        {
+                            parent[rootI] = rootJ;
+                        }
+                    }
+                }
+            }
+
+            Dictionary<int, List<Face3D>> clusters = new Dictionary<int, List<Face3D>>();
+            for (int i = 0; i < n; i++)
+            {
+                int root = Find(i);
+                if (!clusters.TryGetValue(root, out List<Face3D> cluster))
+                {
+                    cluster = new List<Face3D>();
+                    clusters[root] = cluster;
+                }
+
+                cluster.Add(group[i]);
+            }
+
+            return clusters.Values.ToList();
+        }
+
+        /// <summary>The fraction of <paramref name="cluster"/>'s pooled (height x plan) bounding rectangle
+        /// actually covered by the UNION of its members' faces, sampled on a bounded grid (codex #7 review, round
+        /// 5): each sample point counts once if it lands inside ANY member, so overlapping or duplicate-exported
+        /// members never inflate the ratio the way summing individual face areas would. All members share
+        /// <paramref name="referencePlane"/> (by construction of <see cref="GroupCoplanarFaces"/>), so one 2D
+        /// conversion per member (via <see cref="Plane.Convert(Face3D)"/>, the same primitive
+        /// <see cref="IsRepresented"/> already uses) suffices for every sample.</summary>
+        private static double ComputeUnionCoverageRatio(List<Face3D> cluster, Plane referencePlane, Vector3D upUnit, Vector3D tangentUnit, double heightMin, double heightMax, double planMin, double planMax, double tolerance)
+        {
+            double heightSpan = heightMax - heightMin;
+            double planSpan = planMax - planMin;
+            if (referencePlane == null || heightSpan <= tolerance || planSpan <= tolerance)
+            {
+                return 0;
+            }
+
+            List<Geometry.Planar.Face2D> face2Ds = new List<Geometry.Planar.Face2D>();
+            foreach (Face3D member in cluster)
+            {
+                Geometry.Planar.Face2D face2D = referencePlane.Convert(member);
+                if (face2D != null)
+                {
+                    face2Ds.Add(face2D);
+                }
+            }
+
+            if (face2Ds.Count == 0)
+            {
+                return 0;
+            }
+
+            // Bounded grid (<=15 per axis) - this is a heuristic threshold check on a handful of dropped faces,
+            // not exact geometry, so sampling resolution trades a little precision for guaranteed-cheap cost.
+            int heightSamples = System.Math.Max(2, System.Math.Min(15, (int)System.Math.Ceiling(heightSpan / 0.2)));
+            int planSamples = System.Math.Max(2, System.Math.Min(15, (int)System.Math.Ceiling(planSpan / 0.2)));
+
+            Point3D origin = referencePlane.Origin;
+            double originHeight = (origin.X * upUnit.X) + (origin.Y * upUnit.Y) + (origin.Z * upUnit.Z);
+            double originPlan = (origin.X * tangentUnit.X) + (origin.Y * tangentUnit.Y) + (origin.Z * tangentUnit.Z);
+
+            int covered = 0;
+            int total = heightSamples * planSamples;
+            for (int i = 0; i < heightSamples; i++)
+            {
+                double h = heightMin + ((i + 0.5) / heightSamples * heightSpan);
+                double dh = h - originHeight;
+                for (int j = 0; j < planSamples; j++)
+                {
+                    double p = planMin + ((j + 0.5) / planSamples * planSpan);
+                    double dp = p - originPlan;
+
+                    // Move purely in-plane (tangent/up directions only - both orthogonal to the plane's normal
+                    // by construction) from the plane's own origin to the target absolute (height, plan)
+                    // coordinate, so the sample point stays on the group's plane.
+                    Point3D samplePoint = new Point3D(
+                        origin.X + (dp * tangentUnit.X) + (dh * upUnit.X),
+                        origin.Y + (dp * tangentUnit.Y) + (dh * upUnit.Y),
+                        origin.Z + (dp * tangentUnit.Z) + (dh * upUnit.Z));
+
+                    Geometry.Planar.Point2D point2D = referencePlane.Convert(samplePoint);
+                    if (point2D == null)
+                    {
+                        continue;
+                    }
+
+                    foreach (Geometry.Planar.Face2D face2D in face2Ds)
+                    {
+                        if (Geometry.Planar.Query.Inside(face2D, point2D, tolerance) || face2D.On(point2D, tolerance))
+                        {
+                            covered++;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return total == 0 ? 0 : (double)covered / total;
+        }
+
+        /// <summary>Groups <paramref name="face3Ds"/> by shared infinite plane (parallel normal within 0.99 dot
+        /// product, and within 0.05 m of the same plane offset - the same "same plane" tolerances
+        /// <see cref="IsRepresented"/> already uses) - so a single physical partition exported as several
+        /// coplanar fragments (e.g. split at a door head) is measured as ONE element (codex #7 review, round 4)
+        /// rather than each fragment independently. A face with no plane starts its own singleton group.</summary>
+        private static List<List<Face3D>> GroupCoplanarFaces(List<Face3D> face3Ds)
+        {
+            List<List<Face3D>> groups = new List<List<Face3D>>();
+            List<Plane> groupPlanes = new List<Plane>();
+
+            foreach (Face3D face3D in face3Ds ?? new List<Face3D>())
+            {
+                Plane plane = face3D?.GetPlane();
+                Vector3D normal = plane?.Normal?.Unit;
+                if (normal == null)
+                {
+                    groups.Add(new List<Face3D> { face3D });
+                    groupPlanes.Add(null);
+                    continue;
+                }
+
+                int matchIndex = -1;
+                for (int i = 0; i < groupPlanes.Count; i++)
+                {
+                    Plane groupPlane = groupPlanes[i];
+                    Vector3D groupNormal = groupPlane?.Normal?.Unit;
+                    if (groupNormal == null || System.Math.Abs(normal.DotProduct(groupNormal)) < 0.99)
+                    {
+                        continue; // not parallel - a different orientation
+                    }
+
+                    if (System.Math.Abs(plane.Distance(groupPlane.Origin)) > 0.05)
+                    {
+                        continue; // parallel but a different (offset) plane
+                    }
+
+                    matchIndex = i;
+                    break;
+                }
+
+                if (matchIndex >= 0)
+                {
+                    groups[matchIndex].Add(face3D);
+                }
+                else
+                {
+                    groups.Add(new List<Face3D> { face3D });
+                    groupPlanes.Add(plane);
+                }
+            }
+
+            return groups;
+        }
+
+        /// <summary>The min/max of every boundary vertex of <paramref name="face3D"/> dotted with
+        /// <paramref name="direction"/> - the exact support of the face's actual shape along that direction
+        /// (never a bounding box's, which is only tight when the shape happens to be axis-aligned to it).</summary>
+        private static bool TryVertexExtent(Face3D face3D, Vector3D direction, out double min, out double max)
+        {
+            min = double.PositiveInfinity;
+            max = double.NegativeInfinity;
+            List<Point3D> point3Ds = (face3D?.GetExternalEdge3D() as ISegmentable3D)?.GetPoints();
+            if (point3Ds == null || point3Ds.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (Point3D point3D in point3Ds)
+            {
+                double d = (point3D.X * direction.X) + (point3D.Y * direction.Y) + (point3D.Z * direction.Z);
+                min = System.Math.Min(min, d);
+                max = System.Math.Max(max, d);
+            }
+
+            return true;
+        }
+
+        /// <summary>The min/max of every boundary vertex across all of <paramref name="shell"/>'s faces dotted
+        /// with <paramref name="direction"/> - the cell's true extent along that direction.</summary>
+        private static bool TryVertexExtent(Shell shell, Vector3D direction, out double min, out double max)
+        {
+            min = double.PositiveInfinity;
+            max = double.NegativeInfinity;
+            bool any = false;
+            foreach (Face3D face3D in shell?.Face3Ds ?? new List<Face3D>())
+            {
+                if (TryVertexExtent(face3D, direction, out double faceMin, out double faceMax))
+                {
+                    any = true;
+                    min = System.Math.Min(min, faceMin);
+                    max = System.Math.Max(max, faceMax);
+                }
+            }
+
+            return any;
         }
 
         /// <summary>
@@ -2515,6 +2980,8 @@ namespace SAM.Geometry.OCCT.Solver
             List<Face3D> droppedFace3Ds = new List<Face3D>();
             List<int> droppedSourceIndices = new List<int>();
             double droppedRatio = 0;
+            int underSplitCellCount = 0;
+            List<string> underSplitDetails = new List<string>();
 
             if (nakedEdgeCount == 0)
             {
@@ -2551,9 +3018,14 @@ namespace SAM.Geometry.OCCT.Solver
                 }
 
                 droppedRatio = rawFace3Ds.Count == 0 ? 0 : (double)droppedFace3Ds.Count / rawFace3Ds.Count;
+
+                // Codex #7: the finer "watertight-but-wrong" net the dropped-RATIO check misses - a dropped
+                // wall-like face sitting strictly inside an adopted cell is a partition that failed to split its
+                // room, so two rooms merged into one cell (droppedRatio stays low because only one face dropped).
+                underSplitCellCount = CountUnderSplitCells(droppedFace3Ds, solverCells, Up, VerticalAngleTolerance, rawOptions.FuzzyTolerance, rawOptions.Tolerance, out underSplitDetails);
             }
 
-            RawAdoptionOutcome outcome = EvaluateRawAdoption(cells, resolved.Count, nakedEdgeCount, sliverCellCount, droppedRatio, MaxDroppedRatio);
+            RawAdoptionOutcome outcome = EvaluateRawAdoption(cells, resolved.Count, nakedEdgeCount, sliverCellCount, droppedRatio, MaxDroppedRatio, underSplitCellCount);
             switch (outcome)
             {
                 case RawAdoptionOutcome.RejectedNakedEdges:
@@ -2572,6 +3044,12 @@ namespace SAM.Geometry.OCCT.Solver
                     Diagnostics.Add(SolverStage.Resolve, DiagnosticCode.DroppedFace, OcctDiagnosticSeverity.Warning,
                         string.Format("Raw (L0) resolve dropped {0} of {1} input face(s) ({2:P0} > {3:P0} max); not adopted.",
                             droppedFace3Ds.Count, rawFace3Ds.Count, droppedRatio, MaxDroppedRatio));
+                    return false;
+
+                case RawAdoptionOutcome.RejectedUnderSplit:
+                    Diagnostics.Add(SolverStage.Resolve, DiagnosticCode.UnderSplit, OcctDiagnosticSeverity.Warning,
+                        string.Format("Raw (L0) resolve under-split: {0} adopted cell(s) harbour a dropped room-dividing partition (a watertight-but-wrong merge the {1:P0}-max dropped-ratio check did not catch at {2:P0}); not adopted. {3}",
+                            underSplitCellCount, MaxDroppedRatio, droppedRatio, string.Join("; ", underSplitDetails)));
                     return false;
 
                 case RawAdoptionOutcome.RejectedNoCells:
@@ -2623,15 +3101,28 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
+        /// The pre-P4 six-argument gate signature, preserved for binary compatibility: a downstream binary
+        /// compiled against it keeps resolving this exact overload (no <see cref="System.MissingMethodException"/>
+        /// after a DLL swap). Delegates with no under-split cells - i.e. the pre-P4 behaviour exactly.
+        /// </summary>
+        public static RawAdoptionOutcome EvaluateRawAdoption(int cellCount, int resolvedFaceCount, int nakedEdgeCount, int sliverCellCount, double droppedRatio, double maxDroppedRatio)
+        {
+            return EvaluateRawAdoption(cellCount, resolvedFaceCount, nakedEdgeCount, sliverCellCount, droppedRatio, maxDroppedRatio, 0);
+        }
+
+        /// <summary>
         /// The raw-first (L0) adoption gate's decision rule, pure and native-free so it is unit-testable
         /// without a kernel: given what a raw resolve measured, decides whether it is trusted as-is or the
         /// managed pipeline should run instead. Checked in this order - no cells formed, a gappy envelope
         /// (naked edges), then the two "watertight-but-wrong" cases a naked-edge check alone cannot see (a
         /// sliver artifact cell, or too many input faces silently dropped because they bound no closed cell) -
         /// each closes a distinct failure mode found on real fixtures
-        /// (docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md §C, Phase 1).
+        /// (docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md §C, Phase 1). <paramref name="underSplitCellCount"/>
+        /// (codex #7, P4) is the count of adopted cells found to harbour a dropped room-dividing partition -
+        /// the caller computes it geometrically (<see cref="CountUnderSplitCells"/>) and passes it here so this
+        /// rule stays pure and unit-testable across every branch.
         /// </summary>
-        public static RawAdoptionOutcome EvaluateRawAdoption(int cellCount, int resolvedFaceCount, int nakedEdgeCount, int sliverCellCount, double droppedRatio, double maxDroppedRatio)
+        public static RawAdoptionOutcome EvaluateRawAdoption(int cellCount, int resolvedFaceCount, int nakedEdgeCount, int sliverCellCount, double droppedRatio, double maxDroppedRatio, int underSplitCellCount)
         {
             if (cellCount < 1 || resolvedFaceCount == 0)
             {
@@ -2653,7 +3144,28 @@ namespace SAM.Geometry.OCCT.Solver
                 return RawAdoptionOutcome.RejectedDroppedRatio;
             }
 
+            // The finer net after the coarse dropped-RATIO check: even when only a few faces are dropped (ratio
+            // under the max), a single dropped partition sitting strictly inside a cell means rooms merged.
+            if (underSplitCellCount > 0)
+            {
+                return RawAdoptionOutcome.RejectedUnderSplit;
+            }
+
             return RawAdoptionOutcome.Adopted;
+        }
+
+        /// <summary>
+        /// The consolidation-rebuild acceptance rule (codex #3, P4), pure and native-free so it is unit-testable:
+        /// the direct (history-capturing) rebuild of the appended set is adopted only when it does NOT regress
+        /// versus the appended-unimprinted fallback it would replace - it produced faces, kept AT LEAST as many
+        /// cells (a rebuild that DISSOLVED a room-dividing separator would form fewer, silently merging rooms),
+        /// and did not open new naked edges. The baseline is the appended set's OWN decoded cell count
+        /// (<paramref name="appendedCellCount"/>), never the pre-append resolve count - which, being measured
+        /// before patches/retained were added, was typically lower and let a separator-dissolving rebuild through.
+        /// </summary>
+        public static bool AcceptConsolidationRebuild(int rebuiltFaceCount, int rebuiltCellCount, int rebuiltNakedEdgeCount, int appendedCellCount, int appendedNakedEdgeCount)
+        {
+            return rebuiltFaceCount != 0 && rebuiltCellCount >= appendedCellCount && rebuiltNakedEdgeCount <= appendedNakedEdgeCount;
         }
 
         private static List<SnappedPanel> Register(List<Face3D> face3Ds, List<double> bucketSizes, List<double> weights, List<double> maxExtensions)

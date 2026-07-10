@@ -311,7 +311,9 @@ namespace SAM.Geometry.OCCT.Native
             // issue #37: optionally heal the face soup into a watertight shell
             // BEFORE MakerVolume, so triangulated / near-touching faces close
             // first instead of relying on MakerVolume's fuzzy-tolerance guesswork.
-            if (options.SewBeforeBuild && TrySewThenMakeVolume(face3DList, options, result))
+            if (options.SewBeforeBuild
+                && CanAttemptSew(face3DList, options, result)
+                && TrySewThenMakeVolume(face3DList, options, result))
             {
                 result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", "Built the cell complex via native sew-and-heal before MakerVolume (SewBeforeBuild).");
                 return true;
@@ -343,7 +345,10 @@ namespace SAM.Geometry.OCCT.Native
                     // rebuild before giving up - this recovers the triangulated /
                     // near-touching face soups that defeat a direct MakerVolume.
                     // Skipped when SewBeforeBuild already tried (and failed) above.
-                    if ((status == 30 || status == 40) && !options.SewBeforeBuild && TrySewThenMakeVolume(face3DList, options, result))
+                    if ((status == 30 || status == 40)
+                        && !options.SewBeforeBuild
+                        && CanAttemptSew(face3DList, options, result)
+                        && TrySewThenMakeVolume(face3DList, options, result))
                     {
                         result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", string.Format("MakerVolume returned status {0} ({1}); recovered via native sew-and-heal retry.", status, OcctOpenShellAnalysis.DescribeBuildStatus(status)));
                         return true;
@@ -395,6 +400,23 @@ namespace SAM.Geometry.OCCT.Native
                     }
                 }
             }
+        }
+
+        internal static bool CanAttemptSew(List<Face3D> face3Ds, OcctBuildOptions options, OcctCellComplexResult result = null)
+        {
+            int maxSewFaceCount = options?.MaxSewFaceCount ?? new OcctBuildOptions().MaxSewFaceCount;
+            int faceCount = face3Ds?.Count ?? 0;
+
+            if (maxSewFaceCount <= 0 || faceCount <= maxSewFaceCount)
+            {
+                return true;
+            }
+
+            result?.AddDiagnostic(
+                OcctDiagnosticSeverity.Warning,
+                "SAM_OCCT_SEW_SKIPPED_LARGE_INPUT",
+                string.Format("Skipped native sew-and-heal for {0} face(s) because MaxSewFaceCount is {1}. Large analytical panel soups can exhaust the host stack in OCCT sewing; building directly instead.", faceCount, maxSewFaceCount));
+            return false;
         }
 
         /// <summary>

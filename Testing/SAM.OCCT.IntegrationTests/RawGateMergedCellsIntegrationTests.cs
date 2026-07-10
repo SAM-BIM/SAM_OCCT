@@ -15,10 +15,13 @@ namespace SAM.OCCT.IntegrationTests
     /// whose dividing partition stops short of the ceiling - too undersized for the raw kernel to use
     /// as a cell boundary, so the raw solve leaves a single watertight-but-wrong cell (the two rooms
     /// silently merge) even though the outer envelope has no naked edges. Before Phase 1, the raw gate
-    /// (cells >= 1 &amp;&amp; naked == 0) adopted this merged result outright. The hardened gate's dropped-face
-    /// ratio check now catches it (the undersized partition bounds no closed cell, so it is "dropped")
-    /// and falls through to the managed pipeline, which extends the partition up to the ceiling like
-    /// any other wall and correctly separates the two rooms.
+    /// (cells >= 1 &amp;&amp; naked == 0) adopted this merged result outright. The hardened gate catches it two
+    /// ways: on a small fixture with a tightened <c>MaxDroppedRatio</c> the dropped-face ratio check trips
+    /// (the undersized partition bounds no closed cell, so it is "dropped"); and at the real-world-calibrated
+    /// DEFAULT ratio - where one dropped face of seven stays under the ceiling - the P4 under-split gate
+    /// (codex #7) trips instead, because the dropped partition is wall-like, strictly interior to the one
+    /// merged cell, and nearly fills its cross-section. Either way raw is rejected and the managed pipeline
+    /// extends the partition up to the ceiling like any other wall and correctly separates the two rooms.
     /// </summary>
     public class RawGateMergedCellsIntegrationTests
     {
@@ -80,21 +83,27 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         [SkippableFact]
-        public void Execute_UndersizedPartitionWithDefaultMaxDroppedRatio_RawGateStillAdoptsOnSmallFixture()
+        public void Execute_UndersizedPartitionWithDefaultMaxDroppedRatio_UnderSplitGateRejectsAndManagedSeparatesRooms()
         {
-            // Sanity check on the OTHER side of the calibration: with the real-world-calibrated default
-            // (0.30), this fixture's ~14% dropped ratio does NOT trip the gate, so the merged (wrong)
-            // single-cell result IS adopted - demonstrating why the default cannot be tightened to 0.10
-            // globally without the explicit per-model override exercised above.
+            // The codex #7 hole, closed in P4. With the real-world-calibrated default MaxDroppedRatio (0.30)
+            // this fixture's ~14% dropped ratio does NOT trip the dropped-ratio check - before P4 the merged
+            // (watertight-but-wrong) single-cell result was adopted outright. The under-split gate now catches
+            // it WITHOUT needing the per-model 0.10 override the sibling test uses: the dropped partition is
+            // wall-like, strictly interior to the one adopted cell, and nearly fills its cross-section (2.5 m of
+            // a 3 m height, full 4 m width), so raw is rejected and the managed pipeline separates the rooms.
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
 
             List<Face3D> face3Ds = UndersizedPartitionBox(shortfall: 0.5);
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds);
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds); // default MaxDroppedRatio (0.30)
             solver.Execute(new OcctBuildOptions());
 
-            Assert.NotNull(solver.Signature); // adopted at the calibrated default
-            Assert.Equal(1, solver.ResolvedCellCount); // the two rooms merged into one cell
+            // Rejected by the under-split gate specifically (the dropped-ratio check passes at the default).
+            Assert.Contains(solver.Diagnostics.All, d => d.Code == DiagnosticCode.UnderSplit);
+            Assert.True(solver.NativeResolved, "Expected the managed fallback to still resolve natively");
+            Assert.True(solver.ResolvedCellCount >= 2, $"Expected the two rooms separated, got {solver.ResolvedCellCount} cell(s)");
+            Assert.NotNull(solver.Signature);
+            Assert.True(solver.Signature.CellCount >= 2, $"Expected the managed signature to reflect >= 2 cells, got {solver.Signature.CellCount}");
         }
     }
 }

@@ -24,6 +24,12 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>More than <see cref="Panel3DSnapSolver.MaxDroppedRatio"/> of input faces bound no
         /// closed cell - watertight-but-wrong (e.g. a partition that fails to split the rooms it should).</summary>
-        RejectedDroppedRatio
+        RejectedDroppedRatio,
+
+        /// <summary>At least one dropped wall-like input face lies strictly INTERIOR to a single adopted cell,
+        /// spanning a real fraction of its height - a room-dividing partition the raw build failed to imprint,
+        /// so two (or more) rooms silently merged into one cell. Watertight-but-wrong, and invisible to the
+        /// dropped-RATIO check when only a few partitions are dropped out of many faces (codex #7).</summary>
+        RejectedUnderSplit
     }
 }

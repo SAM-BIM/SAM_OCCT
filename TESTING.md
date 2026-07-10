@@ -1147,6 +1147,15 @@ mismatch, without touching solver geometry or any adoption gate. Two changes:
    (`AvoidInternalShapes=false, SewBeforeBuild=true, SewingTolerance=0.01`). Both components now use
    the solver-matched recipe by default (`SAMOCCTCreateAdjacencyClusterByShells`'s `sew_` toggle
    default flipped from `false` to `true`; it stays overridable per-run).
+   A later robustness guard keeps this options-parity behaviour for normal fixtures while preventing
+   Rhino-host crashes on very large analytical panel soups: `OcctBuildOptions.MaxSewFaceCount`
+   defaults to `2048`, so pre-build native sew is skipped with `SAM_OCCT_SEW_SKIPPED_LARGE_INPUT`
+   when the face count is above that value, and the full input is built once through the direct
+   MakerVolume path. The threshold is empirical, not an OCCT kernel limit: it is deliberately far
+   above the current P1 fixture set (largest `.sam` fixture is under 300 analytical panels) and below
+   the Talybont regression file (`Panels-InputForAdjac1.sam`, 6927 valid panels), which previously
+   stack-overflowed inside `sam_occt_sew_faces`. A local scratch-run verification on that file built
+   directly in about 200.7s, producing 1740 spaces / 9076 panels and the sew-skip diagnostic.
 2. **Parity diagnostic.** `Create.AdjacencyCluster`'s `DirectAdjacencyCluster`
    (`SAM_OCCT_ANALYTICAL_PARITY`) counts, on every direct rebuild: relations added vs. expected
    (`2 x |FaceAdjacencies| + envelope faces`, i.e. every shared face owned by two cells contributes
@@ -1516,6 +1525,55 @@ the stamp/roster check; a complex with no roster attached refuses).
 ```powershell
 dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~CellComplexHandoffTests|FullyQualifiedName~ResolvedCellComplexTests"
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~CellComplexHandoffIntegrationTests"
+```
+
+## Adoption-gate hardening (docs/CELLCOMPLEX_FIRST_HANDOVER.md, Phase P4)
+
+P4 closes the two "watertight-but-wrong" adoption-gate holes (deferred codex findings #3 and #7) without
+moving any of the five golden fixtures - they still adopt exactly as before (verified byte-identical, the
+findings do not fire on them).
+
+- **Codex #3 - consolidation-rebuild baseline** (`Panel3DSnapSolver.FinalizeAndValidate`): the direct
+  (history-capturing) rebuild of the appended set is now accepted only when it does not regress versus the
+  APPENDED set's OWN decoded cell/naked counts - the fallback it would replace - not the pre-append
+  `resolveCellCount`. That old baseline was measured before patches/retained faces were appended and was
+  typically lower, so a rebuild that DISSOLVED a shared separator (fewer cells = two rooms merged into one)
+  could still pass `rebuiltCells >= resolveCellCount` and be wrongly adopted. The appended set is decoded
+  once, up front, only when a rebuild is attempted, and reused by the reject path (no second decode). The
+  acceptance rule is extracted as the pure, unit-testable `AcceptConsolidationRebuild`.
+- **Codex #7 - under-split raw adoption** (`Panel3DSnapSolver.EvaluateRawAdoption` + `CountUnderSplitCells`):
+  a new gate, checked after the coarse dropped-RATIO test, rejects a raw solve when a dropped input face is a
+  room-dividing partition the build failed to imprint - so two rooms silently merged into one watertight
+  cell (a case the dropped-ratio check misses when only one partition of many faces is dropped, e.g. 0-14%).
+  A dropped face counts as such a partition only when it is (1) wall-like (vertical, within
+  `VerticalAngleTolerance` of horizontal), (2) strictly INTERIOR to a single adopted cell (inside, not on its
+  boundary), and (3) nearly fills that cell's cross-section - spanning >= `UNDER_SPLIT_MIN_HEIGHT_RATIO`
+  (0.8) of its height AND >= `UNDER_SPLIT_MIN_PLAN_RATIO` (0.7) of its plan width perpendicular to the
+  partition. Deliberately conservative (a false positive pushes a well-modelled input onto the weaker managed
+  pipeline): a partial-height fin, a short balcony upstand, a horizontal cap sliver, a boundary-coincident
+  duplicate, or a fragment interior to a large real room all fall short and are ignored - so atria, courtyard
+  rings and double-height rooms are not tripped. `EvaluateRawAdoption` stays pure (the geometry is measured by
+  the caller and passed in as a count); rejections emit `SAM_OCCT_..._UnderSplit` with the measured values
+  (cell, volume, height/plan span). The new `RawAdoptionOutcome.RejectedUnderSplit` /
+  `DiagnosticCode.UnderSplit` are additive.
+
+**Calibration evidence (the gate must fire on real under-splits but never on good models):** the thresholds
+were tuned against the real fixtures. The under-split gate does NOT fire on any of the five golden fixtures
+(all raw pins byte-identical) nor on the clean PR #49 exports (`Extend3DRegressionIntegrationTests`,
+incl. `PR49-Test2` at 43 cells / 88 walls, whose one dropped interior face spans only 54% of its cell's
+height - correctly below the 0.8 bound). It DOES fire on the door-cut two-room fixture below.
+
+Tests: `RawAdoptionGateTests` (the pure under-split branch + precedence, native-free);
+`ConsolidationRebuildGateTests` (the pure #3 acceptance rule, all branches incl. the separator-dissolving
+case, native-free); `GateHardeningIntegrationTests` (native-gated, built programmatically): a door-cut
+partition (0.5 m short of the ceiling) is raw-rejected under-split and the managed pipeline separates the two
+rooms into 2 cells (fail-before: with the gate disabled during development the raw path adopted it as 1
+merged cell), and a partition-free large single room is still adopted raw with the gate silent (false-positive
+control).
+
+```powershell
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~RawAdoptionGateTests|FullyQualifiedName~ConsolidationRebuildGateTests"
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~GateHardeningIntegrationTests"
 ```
 
 ## PR #49 regression fixtures (Extend3D "walls disappear" bug)
