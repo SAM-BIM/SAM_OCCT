@@ -449,16 +449,19 @@ namespace SAM.Analytical.OCCT.Solver
                     continue; // not a cap face
                 }
 
-                double elevation = normal.Z < 0 ? -plane.Origin.Z : plane.Origin.Z;
+                // Elevation is the face centroid's Z, NOT a normal-signed offset: a horizontal cap sits at
+                // its own Z regardless of which way its normal points, and caps arrive with either
+                // orientation (LevelFrame.Cluster negates downward normals for exactly this reason). Using
+                // the centroid keeps a slightly-tilted-but-still-cap face's representative height too.
+                Point3D centroid = face.GetBoundingBox()?.GetCentroid();
+                if (centroid == null || centroid.X < box.Min.X || centroid.X > box.Max.X || centroid.Y < box.Min.Y || centroid.Y > box.Max.Y)
+                {
+                    continue;
+                }
+
                 foreach (double datum in intermediate)
                 {
-                    if (System.Math.Abs(elevation - datum) > options.LevelBand)
-                    {
-                        continue;
-                    }
-
-                    Point3D centroid = face.GetBoundingBox()?.GetCentroid();
-                    if (centroid == null || centroid.X < box.Min.X || centroid.X > box.Max.X || centroid.Y < box.Min.Y || centroid.Y > box.Max.Y)
+                    if (System.Math.Abs(centroid.Z - datum) > options.LevelBand)
                     {
                         continue;
                     }

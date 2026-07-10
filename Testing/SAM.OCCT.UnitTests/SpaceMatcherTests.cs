@@ -273,6 +273,33 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void Match_DoubleHeightViolatedByDownwardFacingIntermediateFace_ReturnsSplit()
+        {
+            // Arrange - like the violated case, but the intermediate face at datum 10 is wound the OTHER way
+            // so its normal points DOWN (-Z). A cap's elevation must be read from its position, not a
+            // normal-signed offset, or a downward-facing intermediate slab (an intermediate floor's
+            // underside - common real geometry) slips past the double-height check as a false ok=true.
+            Space space = new Space(Guid.NewGuid(), "West3", new Point3D(8, 8, 10));
+            ExpectedSpaceSet expectedSpaceSet = CreateExpectedSet(new[] { space }, new[] { 0.0, 10.0, 20.0 }, new[] { space.Guid });
+
+            List<Face3D> faces = CreateBoxFaces(0, 0, 0, 10, 10, 20);
+            // Reversed winding vs the upward case -> normal points -Z.
+            faces.Add(Rect(new Point3D(0, 0, 10), new Point3D(0, 3, 10), new Point3D(3, 3, 10), new Point3D(3, 0, 10)));
+            Shell shell = new Shell(faces);
+            List<CellGeometry> cells = new List<CellGeometry> { ToCellGeometry(0, shell) };
+
+            // Act
+            SpaceMatchReport report = SpaceMatcher.Match(expectedSpaceSet, cells, new[] { space.Guid });
+
+            // Assert
+            SpaceMatchRecord record = Assert.Single(report.SpaceMatches);
+            Assert.Equal(SpaceMatchOutcome.Split, record.Outcome);
+            Assert.Equal(10.0, record.SplitElevation, 2);
+            Assert.False(report.DoubleHeightOk[space.Guid]);
+            Assert.False(report.Valid);
+        }
+
+        [Fact]
         public void ToLines_SummaryLine_ReflectsCounts()
         {
             // Arrange
