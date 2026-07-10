@@ -191,6 +191,45 @@ namespace SAM.OCCT.IntegrationTests
             return result;
         }
 
+        /// <summary>Fixture-specific tuning reported from Grasshopper. This is deliberately not the generic
+        /// default: 0.4 crosses the fixture's 0.283/0.363 m level near-misses. It improves workflow B from
+        /// 28 to 31 of the 32 reference spaces with no open wall ends and clean analytical parity. The one
+        /// remaining cell (near 19.584,-4.909,13.925) is an explicit P3 extension gate, not hidden here.</summary>
+        [SkippableFact]
+        public void WorkflowParity_WholeLevelTowers_FixtureTuning04_Produces31ParityCleanSpaces()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+            List<Panel> inputPanels = LoadPanels(Path.Combine(FixturesDirectory, "whole-level-towers.sam"));
+            Assert.NotEmpty(inputPanels);
+
+            List<Panel> extended = inputPanels.Extend3D(
+                out List<string> diagnostics,
+                out Solve3DReport report,
+                fillMargin: 0.4,
+                bucketBetweenLevels: 0.4);
+            List<Panel> nonAir = (extended ?? new List<Panel>())
+                .Where(x => x != null && x.PanelType != PanelType.Air && x.GetFace3D() != null && x.GetFace3D().IsValid())
+                .ToList();
+            WorkflowResult workflow = BuildWorkflow("B-clean-extend-0.4", nonAir, SolverMatchedOptions());
+
+            output.WriteLine("FILL=0.4; BAND=0.4; " + FormatWorkflow(workflow));
+            output.WriteLine(string.Format("RAW_FRAMES={0}; GROUPS={1}", report.LevelFrames.Count, report.LevelGroups.Count));
+            foreach (string line in diagnostics.Where(x =>
+                x.Contains("OPEN_ENDS") || x.Contains("LevelBandNearMiss") || x.Contains("CLEAN3D_LEVEL")))
+            {
+                output.WriteLine(line);
+            }
+
+            Assert.NotNull(workflow.Cluster);
+            Assert.Equal(31, workflow.Cluster.GetSpaces()?.Count);
+            Assert.Equal(7, report.LevelGroups.Count);
+            Assert.Contains(diagnostics, x => x.Contains("SAM_OCCT_EXTEND3D_OPEN_ENDS: 0 wall end"));
+            Assert.Equal(OcctDiagnosticSeverity.Info,
+                workflow.CellComplexResult.Diagnostics.Last(x => x.Code == "SAM_OCCT_ANALYTICAL_PARITY").Severity);
+            Assert.DoesNotContain(workflow.Cluster.GetPanels() ?? new List<Panel>(), x =>
+                (workflow.Cluster.GetSpaces(x) ?? new List<Space>()).Count == 0);
+        }
+
         [SkippableTheory]
         [MemberData(nameof(Fixtures))]
         public void WorkflowParity_AllWorkflows_ObservedAcrossAllFixtures(string fixture)

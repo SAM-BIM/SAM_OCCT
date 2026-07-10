@@ -441,6 +441,69 @@ For roof or atrium-heavy volume workflows:
 6. Use SAMOCCT.PanelsFromShells when panel objects are needed.
 ```
 
+## Controlled 3D Workflow: Clean3D → Extend3D (level groups, clean records, exact handoff)
+
+The inspectable staged workflow (`docs/CONTROLLED_WORKFLOW_PLAN.md`) makes every clean/extend decision
+visible and tunable before the native resolve:
+
+```text
+Panels → SAMOCCT.Clean3D → SAMOCCT.Extend3D (inputAlreadyClean = true) → SAMOCCT.CreateAdjacencyCluster
+```
+
+Core APIs and existing saved GH components remain backward-compatible: when `bucketBetweenLevels_` is
+absent they use `0` (off), and the other P2 controls remain off. Current/new GH components use `0.21` for
+the level-group control; adding the voluntary input to an older component also supplies `0.21`.
+
+### `bucketBetweenLevels_` — merge slab-skin datums into one storey (Clean3D / Extend3D / Solve3D)
+
+A single physical floor is often imported as several near-coplanar cap datums (the fixture's 12.240 m and
+12.436 m frames are the same slab's two skins). The raw level frames keep a **pinned 0.15 m band** so a
+deliberate ~0.25 m split-level landing is never merged away — so those slab skins stay as separate frames
+and walls extend to the wrong plane. `bucketBetweenLevels_` is an **optional wider grouping on top of the
+frames** that merges them onto one storey datum for cap normalization and wall-to-cap extension:
+
+- `0`: grouping off; the `LevelGroups` output equals `LevelFrames` (one group per frame). This is the core
+  API default.
+- `0.21` (generic GH default and the 9-space fixture): the 5 raw frames merge into **3 level groups** at datums 12.24 / 15.29 /
+  18.34 — inspect `LevelFrames` (still 5) and `LevelGroups` (now 3) on the Clean3D component to confirm.
+- `>= 0.25`: can eat a genuine split-level landing — the CleanReport near-miss lines tell you exactly which
+  value would merge a frame that just missed, so raise it deliberately per model. For example,
+  `whole-level-towers.sam` can be investigated with `fillMargin_=0.4` / `bucketBetweenLevels_=0.4`; this is
+  fixture tuning, not a proposed generic default.
+
+The grouping affects cap normalization and extend targets **only** — never wall bucket membership.
+SAM_Solver uses the same parameter name and GH default `0.21`, but its operation is different: a final
+cross-level **wall re-snap**. SAM_OCCT merges **level datums** and does not perform that wall re-snap.
+
+### `inputAlreadyClean_` — the exact Clean3D → Extend3D handoff (Extend3D)
+
+`Extend3D` normally runs its own internal clean first, so `Extend3D(Clean3D(panels))` would clean **twice** —
+the second pass can move already-clean geometry and re-derive parameters. Set `inputAlreadyClean_ = true`
+when you feed Extend3D the Clean3D output: Stage A (clean bucket) is **skipped**, the supplied panels are
+treated as the exact clean result (stamped BucketSize/Weight/MaxExtend reused, an identity source map,
+frames/groups clustered for reporting only), and only the extend/fill conditioning runs. A
+`SAM_OCCT_CLEAN3D_SKIPPED` diagnostic records the bypass. Leave it `false` (default) for the standalone,
+byte-identical legacy behaviour.
+
+### `CleanReport` and `LevelGroups` outputs — what the clean bucket did, per panel
+
+- **`LevelGroups`** — one line per storey datum: elevation, the raw frames it merged (and their elevations),
+  cap count, spread and tilt.
+- **`CleanReport`** — the `SAM_OCCT_CLEAN3D_LEVELS`/`_LEVELGROUP` level summary plus one
+  `SAM_OCCT_CLEAN3D_PANEL` line per applied clean action (`opposed-collapsed` / `snapped-to-backer` /
+  `cap-normalized` / `coplanar-merged` / `dropped-invalid`), each naming the moved distance, the backer, and
+  the resolved **BucketSize / Weight / MaxExtend with their provenance** (`stamped` / `derived-length` /
+  `derived-thickness` / `min-floor` / `default`). Recorded at the real decision points — never inferred from
+  a geometry diff.
+
+### Parameter precedence (bake → SolverProperties → rerun)
+
+A valid **per-panel stamp always wins** over the derived value, which wins over the solver default — for
+BucketSize, Weight **and** MaxExtend. To tune a problem panel: run with defaults, read the CleanReport, bake
+the panel to Rhino, assign `SolverParameter.BucketSize` / `Weight` / `Max Extend` with SAM_Solver's
+**SolverProperties** component, and rerun. The provenance tag on each CleanReport line confirms your stamp
+was honoured (it reads `stamped`).
+
 ## Large Building Strategy
 
 Avoid sending very large whole-building shell sets through one interactive

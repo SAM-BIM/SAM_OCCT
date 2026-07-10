@@ -25,7 +25,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("a7e4c92f-1b53-4d8a-9f26-3c70e1b8d4a5");
 
-        public override string LatestComponentVersion => "0.6.0";
+        public override string LatestComponentVersion => "0.7.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -64,6 +64,14 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 normalizeCapOffset.SetPersistentData(0.3);
                 result.Add(new GH_SAMParam(normalizeCapOffset, ParamVisibility.Voluntary));
 
+                global::Grasshopper.Kernel.Parameters.Param_Number bucketBetweenLevels = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "bucketBetweenLevels_", NickName = "bucketBetweenLevels_", Description = "Level-group merge band (m, P2). GH default 0.21; 0 = off. Merges near-coplanar slab-skin datums for cap normalization and wall-to-cap extension while the raw LevelFrame band remains 0.15 m. SAM_Solver uses the same name (and GH default 0.21) for a final cross-level WALL re-snap; SAM_OCCT instead merges LEVEL DATUMS and performs no cross-level wall re-snap. Tune larger values per model; values >= 0.25 can consume genuine split levels.", Access = GH_ParamAccess.item };
+                bucketBetweenLevels.SetPersistentData(SolverComponentDefaults.BucketBetweenLevels);
+                result.Add(new GH_SAMParam(bucketBetweenLevels, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Boolean inputAlreadyClean = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "inputAlreadyClean_", NickName = "inputAlreadyClean_", Description = "Condition-only mode (P2, §2): when true, the supplied panels are treated as the EXACT Clean3D result - Stage A (clean bucket) is SKIPPED, stamped parameters are reused and only the extend/fill conditioning runs. Use for the exact Clean3D -> Extend3D handoff so the chain does not clean twice. false = the legacy path (an internal clean runs first; default).", Access = GH_ParamAccess.item };
+                inputAlreadyClean.SetPersistentData(false);
+                result.Add(new GH_SAMParam(inputAlreadyClean, ParamVisibility.Voluntary));
+
                 global::Grasshopper.Kernel.Parameters.Param_Number slitMinGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "slitMinGap_", NickName = "slitMinGap_", Description = "Minimum perpendicular gap (m) of a remaining double-wall/slit to report. Floored at the bucket capture width so only parallel panels OUTSIDE the bucket (not captured/merged by it) are reported.", Access = GH_ParamAccess.item };
                 slitMinGap.SetPersistentData(0.02);
                 result.Add(new GH_SAMParam(slitMinGap, ParamVisibility.Voluntary));
@@ -99,7 +107,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
                 // Phase 8: pre-resolve reporting, append-only and Voluntary - existing saved definitions keep working.
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "SourceMap", NickName = "SourceMap", Description = "One line per input source: which filled/extended output face(s) it contributed to.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
-                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelFrames", NickName = "LevelFrames", Description = "One line per clustered level datum (elevation, tilt, cap count) cap normalization conditioned onto. Empty when the model formed no frames.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelFrames", NickName = "LevelFrames", Description = "One line per clustered RAW level datum (elevation, tilt, cap count) - the pinned 0.15 m band. Empty when the model formed no frames.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+
+                // P2 (docs/CONTROLLED_WORKFLOW_PLAN.md §4): level groups + clean observability, Voluntary.
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelGroups", NickName = "LevelGroups", Description = "One line per level GROUP (P2): the merged storey datum caps normalize onto (elevation, the raw frames it merged, cap count, spread, tilt). Equals LevelFrames when bucketBetweenLevels = 0. Empty on the inputAlreadyClean path only if the supplied panels form no cap frame.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "CleanReport", NickName = "CleanReport", Description = "Per-panel clean observability (P2): SAM_OCCT_CLEAN3D_LEVELS/_LEVELGROUP + one SAM_OCCT_CLEAN3D_PANEL line per applied clean action, with the resolved BucketSize/Weight/MaxExtend and their provenance. Empty on the inputAlreadyClean path (Stage A skipped - only a CLEAN-SKIPPED diagnostic appears instead).", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
 
                 // E3 (docs/EXTEND3D_ROBUST_HANDOVER.md): per-panel extend observability, append-only and Voluntary.
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "ExtendReport", NickName = "ExtendReport", Description = "One SAM_OCCT_EXTEND3D_PANEL line per applied extend/fill op: which panel (source Guid + solver index), which edge (top / bottom / plan-start / plan-end / cap-grow), measured from -> to, toward what target (cap index + scalar or sloped-plane branch, or the 2D plan-loop), the overshoot and the lateral-cap flag. Also carries any SAM_OCCT_EXTEND3D_HOLE_DROPPED a footprint trim recorded.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
@@ -169,6 +181,22 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref normalizeCapOffset);
             }
 
+            // The voluntary input is absent on old saved components AND fresh placements, so this fallback is
+            // the effective GH default. Version-gated: documents saved before 0.7.0 keep the core default 0.
+            double bucketBetweenLevels = SolverComponentDefaults.BucketBetweenLevelsFallback(ComponentVersion, "0.7.0");
+            index = Params.IndexOfInputParam("bucketBetweenLevels_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref bucketBetweenLevels);
+            }
+
+            bool inputAlreadyClean = false;
+            index = Params.IndexOfInputParam("inputAlreadyClean_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref inputAlreadyClean);
+            }
+
             double slitMinGap = 0.02;
             index = Params.IndexOfInputParam("slitMinGap_");
             if (index != -1)
@@ -192,7 +220,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
             // weights/maxExtends null => read SolverParameter.Weight / SolverParameter.MaxExtend off each
             // panel (the same parameters SAMAnalytical.Visualize shows), so they can be tuned per panel.
-            List<Panel> extendedPanels = panels.Extend3D(out List<string> diagnostics, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, fillMargin: fillMargin, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset);
+            List<Panel> extendedPanels = panels.Extend3D(out List<string> diagnostics, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, fillMargin: fillMargin, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, bucketBetweenLevels: bucketBetweenLevels, inputAlreadyClean: inputAlreadyClean);
 
             index = Params.IndexOfOutputParam("Panels");
             if (index != -1)
@@ -223,7 +251,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
             // Plan-closure diagnostic: the walls whose feet still leave an open end (no other wall meets them),
             // and the open-corner locations. These are the panels to upgrade (MaxExtend / bucket) so the loops
             // close and floors/roofs can fill a closed polysurface.
-            List<Panel> openPanels = panels.OpenPanels3D(out List<Point3D> openEndPoint3Ds, out List<string> openDiagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset);
+            List<Panel> openPanels = panels.OpenPanels3D(out List<Point3D> openEndPoint3Ds, out List<string> openDiagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, bucketBetweenLevels: bucketBetweenLevels, inputAlreadyClean: inputAlreadyClean);
             if (openDiagnostics != null)
             {
                 diagnostics.AddRange(openDiagnostics);
@@ -262,6 +290,18 @@ namespace SAM.Analytical.Grasshopper.OCCT
             if (index != -1)
             {
                 dataAccess.SetDataList(index, report == null ? null : SolverReportFormat.FormatLevelFrames(report.LevelFrames));
+            }
+
+            index = Params.IndexOfOutputParam("LevelGroups");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, report?.FormatLevelGroups());
+            }
+
+            index = Params.IndexOfOutputParam("CleanReport");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, report?.FormatCleanReport());
             }
 
             // E3 observability: per-panel extend summary (incl. any HOLE_DROPPED) + moved-edge preview.

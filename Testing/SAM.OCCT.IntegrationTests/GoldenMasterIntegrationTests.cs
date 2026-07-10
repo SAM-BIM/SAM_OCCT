@@ -9,6 +9,7 @@ using SAM.Geometry.OCCT;
 using SAM.Geometry.OCCT.Solver;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using Xunit;
@@ -190,6 +191,110 @@ namespace SAM.OCCT.IntegrationTests
 
             double volumeDelta = System.Math.Abs(signature.TotalVolume - expectedVolume);
             Assert.True(volumeDelta <= Core.Tolerance.MacroDistance, string.Format("{0}: expected total volume {1:0.###} m3 (+/- {2}), got {3:0.###} m3 (delta {4})", fixture, expectedVolume, Core.Tolerance.MacroDistance, signature.TotalVolume, volumeDelta));
+        }
+
+        /// <summary>The Grasshopper 0.21 path is intentional and independently pinned. These pins
+        /// do not replace the core-default managed goldens above: core default 0 remains byte-identical.</summary>
+        public static IEnumerable<object[]> Managed021Fixtures()
+        {
+            yield return new object[] { "whole-level-flat.sam", 22, 0, 3479.896692853791, 219 };
+            yield return new object[] { "tilted-two-spaces.sam", 2, 0, 723.6524834224442, 9 };
+            yield return new object[] { "whole-level-tilted.sam", 22, 0, 3377.8738860857575, 184 };
+            yield return new object[] { "two-level-tilted.sam", 9, 24, 2082.4100099648185, 412 };
+            yield return new object[] { "whole-level-towers.sam", 25, 0, 9281.107190604413, 231 };
+        }
+
+        [SkippableTheory]
+        [MemberData(nameof(Managed021Fixtures))]
+        public void Solve3D_ManagedPath021_ClosureSignatureMatchesGoldenMaster(
+            string fixture,
+            int expectedCellCount,
+            int expectedNakedEdgeCount,
+            double expectedVolume,
+            int expectedFaceCount)
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+            string path = Path.Combine(FixturesDirectory, fixture);
+            Skip.IfNot(File.Exists(path), "Fixture not found: " + path);
+            List<Panel> panels = LoadPanels(path);
+            Assert.NotEmpty(panels);
+
+            List<Panel> solved = panels.Solve3D(
+                out List<Point3D> nakedPoint3Ds,
+                out _,
+                out _,
+                out Solve3DReport report,
+                forceManagedPipeline: true,
+                bucketBetweenLevels: 0.21);
+
+            Assert.NotNull(solved);
+            Assert.NotEmpty(solved);
+            ClosureSignature3D signature = CaptureSignature(solved, nakedPoint3Ds);
+            output.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "{0} [managed-0.21]: cells={1}, naked={2}, volume={3:R}, faces={4}",
+                fixture, signature.CellCount, signature.NakedEdgeCount, signature.TotalVolume, signature.FaceCount));
+
+            Assert.Equal(expectedCellCount, signature.CellCount);
+            Assert.Equal(expectedNakedEdgeCount, signature.NakedEdgeCount);
+            Assert.Equal(expectedFaceCount, signature.FaceCount);
+            Assert.True(System.Math.Abs(signature.TotalVolume - expectedVolume) <= Core.Tolerance.MacroDistance,
+                string.Format(CultureInfo.InvariantCulture, "{0}: expected volume {1:R}, got {2:R}", fixture, expectedVolume, signature.TotalVolume));
+
+            AssertIntended021Grouping(fixture, report);
+            AssertClaimedCapsNormalizedToGroupDatum(report);
+        }
+
+        /// <summary>Classifies the two changed 0.21 fixtures at the source of the delta. Only slab-skin datums
+        /// merge; the other nearby datums remain singleton groups rather than being chained or swallowed.</summary>
+        private static void AssertIntended021Grouping(string fixture, Solve3DReport report)
+        {
+            if (fixture == "whole-level-towers.sam")
+            {
+                Assert.Equal(10, report.LevelFrames.Count);
+                Assert.Equal(9, report.LevelGroups.Count);
+                LevelGroup merged = report.LevelGroups.Single(x => System.Math.Abs(x.Elevation - 12.240) < 1e-6);
+                Assert.Equal(new List<int> { 0, 1 }, merged.FrameIndices);
+                Assert.Equal(new List<double> { 12.240000, 12.397978 }, merged.MemberElevations.Select(x => System.Math.Round(x, 6)).ToList());
+                Assert.Contains(report.LevelGroups, x => x.FrameIndices.SequenceEqual(new[] { 2 }) && System.Math.Abs(x.Elevation - 12.602691) < 1e-6);
+                Assert.Contains(report.LevelGroups, x => x.FrameIndices.SequenceEqual(new[] { 3 }) && System.Math.Abs(x.Elevation - 15.290000) < 1e-6);
+                Assert.Contains(report.LevelGroups, x => x.FrameIndices.SequenceEqual(new[] { 4 }) && System.Math.Abs(x.Elevation - 15.572691) < 1e-6);
+            }
+            else if (fixture == "two-level-tilted.sam")
+            {
+                Assert.Equal(4, report.LevelFrames.Count);
+                Assert.Equal(3, report.LevelGroups.Count);
+                LevelGroup merged = report.LevelGroups.Single(x => x.FrameIndices.Count == 2);
+                Assert.Equal(new List<int> { 2, 3 }, merged.FrameIndices);
+                Assert.Equal(new List<double> { 0.950536, 1.124485 }, merged.MemberElevations.Select(x => System.Math.Round(x, 6)).ToList());
+            }
+        }
+
+        /// <summary>Every clean face parallel to a group datum and inside its 0.21 claim band must be ON a group
+        /// datum. This catches the prior defect where NormalizeCaps silently reselected an actual cap plane.</summary>
+        private static void AssertClaimedCapsNormalizedToGroupDatum(Solve3DReport report)
+        {
+            List<LevelFrame> datums = report.LevelGroups.Select(x => x.ToDatumFrame()).ToList();
+            double minDot = System.Math.Cos(LevelFrame.DEFAULT_NormalConeTolerance);
+            foreach (Face3D face in report.CleanFace3Ds ?? new List<Face3D>())
+            {
+                Plane plane = face?.GetPlane();
+                Point3D centroid = face?.GetBoundingBox()?.GetCentroid();
+                if (plane == null || centroid == null)
+                {
+                    continue;
+                }
+
+                List<double> claimedDistances = datums
+                    .Where(x => System.Math.Abs(x.Normal.DotProduct(plane.Normal)) >= minDot)
+                    .Select(x => System.Math.Abs(x.Plane.Distance(centroid)))
+                    .Where(x => x <= 0.21 + Core.Tolerance.Distance)
+                    .ToList();
+                if (claimedDistances.Count > 0)
+                {
+                    Assert.True(claimedDistances.Min() <= 1e-6,
+                        string.Format(CultureInfo.InvariantCulture, "Claimed cap remained {0:R} m from its group datum.", claimedDistances.Min()));
+                }
+            }
         }
     }
 }

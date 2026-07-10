@@ -135,13 +135,38 @@ namespace SAM.OCCT.IntegrationTests
             output.WriteLine("--- path B: Extend3D(Clean3D(original)) [current double-Clean chain] ---");
             DumpExtendPath("B", extendedB, diagnosticsB, reportB);
 
+            // path C (P2): the EXACT controlled handoff - Clean3D(bucketBetweenLevels 0.21) then
+            // Extend3D(inputAlreadyClean: true, bucketBetweenLevels 0.21). Unlike path B, Stage A runs ONCE
+            // (a CLEAN-SKIPPED diagnostic marks the skipped second clean), so this is the parity evidence that
+            // the chain no longer double-cleans. Reported, never asserted here (hard acceptance is P4).
+            List<Panel> cleaned021 = panels.Clean3D(out List<string> cleanDiagnostics021, out Solve3DReport cleanReport021, bucketBetweenLevels: 0.21);
+            output.WriteLine("--- path C: Extend3D(Clean3D(original, 0.21), inputAlreadyClean: true, 0.21) [P2 exact handoff] ---");
+            output.WriteLine("PATH_C_CLEAN021_PANELS: {0}", cleaned021?.Count.ToString() ?? "null");
+            WriteLines("PATH_C_CLEAN021_LEVELFRAMES", SolverReportFormat.FormatLevelFrames(cleanReport021?.LevelFrames));
+            WriteLines("PATH_C_CLEAN021_LEVELGROUPS", cleanReport021?.FormatLevelGroups());
+            WriteLines("PATH_C_CLEAN021_CLEANREPORT", cleanReport021?.FormatCleanReport(), 250);
+
+            List<Panel> extendedC = null;
+            List<string> diagnosticsC = new List<string>();
+            Solve3DReport reportC = null;
+            if (cleaned021 != null && cleaned021.Count != 0)
+            {
+                extendedC = cleaned021.Extend3D(out diagnosticsC, out reportC, bucketBetweenLevels: 0.21, inputAlreadyClean: true);
+            }
+
+            DumpExtendPath("C", extendedC, diagnosticsC, reportC);
+            output.WriteLine("PATH_C_CLEAN_SKIPPED: {0}", diagnosticsC.Any(x => x.Contains("CLEAN3D_SKIPPED")));
+
             output.WriteLine("--- path A vs path B diff ---");
             DiffPanels(extendedA, extendedB);
+            output.WriteLine("--- path B vs path C diff (double-clean chain vs P2 exact handoff) ---");
+            DiffPanels(extendedB, extendedC);
             output.WriteLine("");
 
             // (e)+(f) Adjacency + containment + separator scan, per path.
             AnalyzeAdjacency("path A (Extend3D(original))", extendedA, spaces, panels, west3);
             AnalyzeAdjacency("path B (Extend3D(Clean3D(original)))", extendedB, spaces, panels, west3);
+            AnalyzeAdjacency("path C (P2 exact handoff, inputAlreadyClean)", extendedC, spaces, panels, west3);
 
             output.WriteLine("=== Baseline capture complete (report-only; no success assertions) ===");
         }
