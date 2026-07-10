@@ -554,6 +554,94 @@ sharply:
 clean bucket and the level grouping must be set on the **Clean3D** component upstream — Extend3D is only
 conditioning the already-clean panels. The `INPUT_INERT` diagnostic on each run states this explicitly.
 
+### The full chain end to end (+ CreateAdjacencyCluster + ValidateSpaces)
+
+The complete controlled chain adds the native rebuild and a GUID-based validation stage:
+
+```text
+Panels ─▶ SAMOCCT.Clean3D ─▶ SAMOCCT.Extend3D ─▶ SAMOCCT.CreateAdjacencyCluster ─▶ SAMOCCT.ValidateSpaces
+          bucketBetweenLevels  inputAlreadyClean=true   seeds = expected Spaces        _expectedSpaces (+ GUIDs)
+          = 0.21               directionalCapGrow=true   (or ExpectedSpaceSet seeds)    doubleHeightSpaces_
+                               bucketBetweenLevels=0.21
+```
+
+- **`SAMOCCT.CreateAdjacencyCluster`** builds the cells (the native MakerVolume split) from the extended
+  panels, seeded by the Spaces you expect. Its diagnostics name two failure modes that used to be silent:
+  `SAM_OCCT_ANALYTICAL_MERGED_SEED_CELL` (more than one expected seed landed in one built cell) and
+  `SAM_OCCT_ANALYTICAL_ZERO_RELATION_PANELS` (generated cluster panels that bound no space).
+- **`SAMOCCT.ValidateSpaces`** compares the built cells against the expected Spaces **by GUID** and reports
+  the outcome. It never changes geometry — it is the scorecard.
+
+### What to wire to `SAMAnalytical.Visualize` after each stage
+
+Bake/visualize the panel output of each stage to *see* what it did before trusting the next one:
+
+| After | Visualize | What you are checking |
+|---|---|---|
+| Clean3D | `Panels` (+ `Slits`, `SlitPanels`) | Double walls collapsed to one; `Slits` shows any parallel pair the bucket did **not** capture (gap > bucket). Panels carry BucketSize/Weight so Visualize draws the capture slab in the middle of each panel. |
+| Extend3D | `Panels` (+ `OpenPanels`) | Walls reach their caps; floors/roofs grew out. `OpenPanels` are walls whose feet still do not close a loop — raise their `MaxExtend`/bucket. |
+| CreateAdjacencyCluster | the cell `Shells` | One watertight cell per room, sitting on the 3 level datums. |
+| ValidateSpaces | `MatchedSpaces` / `MissingSpaces` / `ExtraShells` / `SuspectedSeparatorPanels` | Which rooms matched, which are missing, which cells are spurious, and which input panels *should* have separated a merged pair but did not. |
+
+### Reading `ValidateSpaces`
+
+The `Report` output is the authoritative scorecard; its header is the one line to read first:
+
+```text
+SAM_OCCT_SPACEMATCH: SUMMARY expected=9 cells=8 matched=7 merged=0 missing=2 split=0 incorrect=0 extra=1
+```
+
+`Valid` is `true` only when every expected Space matched exactly one cell with a consistent span, every
+requested double-height check passed, and there are no extra cells or orphan cluster panels. When it is not,
+the typed outputs point at the cause: `MissingSpaces` (no cell), `MergedSpaces` (two rooms in one cell),
+`SplitSpaces` / `IncorrectlyBoundedSpaces` (wrong span), `ExtraShells` (spurious cell),
+`SuspectedSeparatorPanels` (an input wall that should have divided a merged pair but did not contribute),
+`OrphanClusterPanels` (generated panels bounding nothing), and `DoubleHeightOk` (per requested
+double-height Space, in input order).
+
+### Worked example — the 9-space fixture, stage by stage
+
+Fixture: `Testing/SAM.OCCT.IntegrationTests/Fixtures/ControlledWorkflow/Panels-9SpacesModel.sam` (66 panels)
+and `Spaces-9SpacesModel.sam` (9 Spaces; West3 GUID `02a1ae27-5461-4b41-ad07-008ccd9d1159` is the
+double-height room). Wiring `0.21 / true / true` as above:
+
+| Stage | Expected output |
+|---|---|
+| Clean3D | 66 → **43** panels; `LevelFrames` = **5** raw datums; `LevelGroups` = **3** (12.24 / 15.29 / 18.34 m). |
+| Extend3D | **43** panels; total area **1625.9 → 1925.5 m²** (+18%, walls grown to caps; count unchanged — extend grows size, it does not merge). |
+| CreateAdjacencyCluster | **8** cells. |
+| ValidateSpaces | `matched=7`, `missing=2` (**East1**, **South1**), `extra=1` (a ~6.6 m³ sliver), `merged=0 split=0 incorrect=0`, West3 `DoubleHeightOk=true`, `0` orphan panels. |
+
+Seven of nine rooms match cleanly. The two that do not are a known, evidence-backed fixture limitation,
+covered next.
+
+### Diagnosing a stubborn gap in GH — the East1|South1 near-miss
+
+This is the worked example of using the diagnostics to find *why* a room will not close, and confirming no
+input can fix it. East1 and South1 share a wall modelled as **two skins** (`20fe83aa…` and `31f97c71…`).
+
+1. **See the merge that mis-fired.** In the Clean3D `CleanReport`, one skin collapses onto the *wrong*
+   partner — a third skin of the same band:
+   `SAM_OCCT_CLEAN3D_PANEL: panel 31f97c71… opposed-collapsed; moved 0.111 m onto 763f6aa3…`.
+2. **See the rejected collapse.** In the Clean3D `Diagnostics`, the remaining skin is declined because its
+   footprint overlap is *just* under the collapse floor:
+   `[Snap/RejectedCollapse/Info] Opposed pair overlaps only 96.76% of the larger footprint (< 97.00%) — distinct walls, not one partition.`
+   The gate is **footprint geometry**, not capture distance — the two skins really are offset ~0.1 m.
+3. **See the symptom downstream.** `ValidateSpaces` reports East1/South1 in `MissingSpaces`, a sliver in
+   `ExtraShells`, and both skins in `SuspectedSeparatorPanels` (present in the input, but did not divide the
+   merged region).
+4. **Confirm no input closes it.** Because the blocker is the overlap-ratio gate, the per-panel levers cannot
+   move it: sweeping `SolverParameter.BucketSize` (0.1–2.0 m) or `MaxExtend` (0.4–3.0 m) on either skin — via
+   SolverProperties, bake → stamp → rerun — leaves the result at 7/9 (verified across the whole range). A
+   wider bucket only widens the *capture* test, which is already satisfied; it does not change the two skins'
+   footprint overlap. This is a genuine input-geometry issue, not a tuning shortfall: the fix is to model the
+   separator as one panel (or align the two skins to ≥97% footprint overlap) in the source model.
+
+The mechanism in isolation — parallel skins squeezing to one plane (vertical/horizontal/tilted), the
+overlap-ratio gate that decides collapse-vs-keep, and cap-extend across tilt angles — is unit-tested in
+`SAM.OCCT.UnitTests.SqueezeAndAngledExtendTests`; the same effects on this fixture are in
+`SAM.OCCT.IntegrationTests.ControlledWorkflowLeverIntegrationTests`.
+
 ## Large Building Strategy
 
 Avoid sending very large whole-building shell sets through one interactive

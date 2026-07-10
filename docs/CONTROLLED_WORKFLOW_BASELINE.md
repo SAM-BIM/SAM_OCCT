@@ -143,12 +143,26 @@ merge with a third skin), so the general snap also declines — correctly, by th
 to protect genuine voids/shafts from being deleted). The visible symptom is a ~6.6 m³ sliver `Extra` cell
 between East1 and South1's expected locations, both reported `Missing`.
 
-**Verified NOT fixable via the sanctioned per-panel overrides**: stamping `SolverParameter.BucketSize` up to
-0.5 m on the standalone panel (`20fe83aa`) — a distance/capture-width lever — had **zero effect** (confirmed by
-re-running the chain with the stamp applied; identical CleanReport, identical cell count). This is consistent
-with the failure being the overlap-ratio/void-guard *gate*, not a capture-distance shortfall; none of
-`BucketSize`/`Weight`/`MaxExtend` (the only per-panel stamps the plan sanctions) influence
-`OPPOSED_PARTITION_MIN_OVERLAP_RATIO` or the void-guard's separation ceiling.
+**Verified NOT fixable via the sanctioned per-panel overrides — full-range sweep, not a single probe (2026-07-10, follow-up session).**
+Sweeping `SolverParameter.BucketSize` across **0.1 → 2.0 m** and `MaxExtend` across **0.4 → 3.0 m** on the two
+skins (and on all four skins of the band), plus joint bucket+extend combinations and `Weight = 10` on either
+skin, closes **neither** East1 nor South1 in any case — every run stays at `matched=7 missing=2` (a
+`Weight=10` on `31f97c71` removes the sliver Extra cell, dropping cells 8→7, but still produces no East1/South1
+room, so it is not a fix). This is mechanically expected: the two gates that block the collapse —
+`OPPOSED_PARTITION_MIN_OVERLAP_RATIO` (in-plane footprint overlap, 0.9676 < 0.97) and the 0.3 m void-guard
+separation ceiling — are **pure geometry / fixed constants**; no per-panel `BucketSize`/`Weight`/`MaxExtend`
+stamp feeds either (`BucketContains` only *widens* the capture test, which is already satisfied). The same
+threshold reproduced synthetically (opposed pair at 0.965 overlap left apart, 1.0 collapsed) is pinned in
+`SAM.OCCT.UnitTests.SqueezeAndAngledExtendTests`.
+
+**Observability improvement (diagnostics only, geometry byte-identical).** The Clean3D `Diagnostics` output
+already surfaces this rejection, but `{0:P0}` rounding printed it as the unreadable "overlaps only 97% (< 97%)".
+Changed the opposed-overlap rejection format to `P2` in `Panel3DSnapSolver.cs`, so the near-miss now reads
+`Opposed pair overlaps only 96.76% of the larger footprint (< 97.00%)` — legible in Grasshopper. This is a
+display-precision change to one diagnostic string; the full golden-master suite is byte-identical (204/207
+integration pass, 3 perf-skipped) and no geometry/threshold moved. The `CleanReport` separately shows the
+mis-fire (`31f97c71 opposed-collapsed onto 763f6aa3`, moved 0.111 m), and `ValidateSpaces.SuspectedSeparatorPanels`
+names both skins — the whole gap is now traceable from GH without a debugger.
 
 **Per plan §10-P4 ("if a solver defect blocks acceptance, STOP and report instead of patching ad hoc")**, this
 gap is pinned rather than patched: `AcceptanceChain_EastSouthGap_SeparatorPanelsPresentButOverlapJustUnderThreshold`

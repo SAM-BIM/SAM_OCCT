@@ -2917,7 +2917,7 @@ namespace SAM.Geometry.OCCT.Solver
                     if (overlapRatio < OPPOSED_PARTITION_MIN_OVERLAP_RATIO)
                     {
                         diagnostics?.Add(SolverStage.Snap, DiagnosticCode.RejectedCollapse, OcctDiagnosticSeverity.Info,
-                            string.Format("Opposed pair overlaps only {0:P0} of the larger footprint (< {1:P0}) - distinct walls, not one partition.",
+                            string.Format("Opposed pair overlaps only {0:P2} of the larger footprint (< {1:P2}) - distinct walls, not one partition.",
                                 overlapRatio, OPPOSED_PARTITION_MIN_OVERLAP_RATIO),
                             face3D: a.Face3D, toleranceUsed: toleranceDistance);
                         continue;
