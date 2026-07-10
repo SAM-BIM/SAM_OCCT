@@ -111,6 +111,9 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "Diagnostics", NickName = "Diagnostics", Description = "Diagnostics", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "Successful", NickName = "Successful", Description = "Run successful?", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "BestConfig", NickName = "BestConfig", Description = "Best parameter configuration found (when discoverParameters_=true). Format: 'band=X fill=Y dir=Z -> cells=N naked=M'.", Access = GH_ParamAccess.item }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "OptimalBand", NickName = "OptimalBand", Description = "Discovered optimal bucketBetweenLevels (wire to SAMOCCT.Extend3D bucketBetweenLevels_).", Access = GH_ParamAccess.item }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "OptimalFill", NickName = "OptimalFill", Description = "Discovered optimal fillMargin (wire to SAMOCCT.Extend3D fillMargin_).", Access = GH_ParamAccess.item }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "OptimalDirCap", NickName = "OptimalDirCap", Description = "Discovered optimal directionalCapGrow (wire to SAMOCCT.Extend3D directionalCapGrow_).", Access = GH_ParamAccess.item }, ParamVisibility.Voluntary));
                 result.Add(new GH_SAMParam(new GooSAMGeometryParam() { Name = "NakedWires", NickName = "NakedWires", Description = "Naked boundary loops.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "SourceMap", NickName = "SourceMap", Description = "Source-to-output mapping.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "ClosureReport", NickName = "ClosureReport", Description = "Closure summary.", Access = GH_ParamAccess.item }, ParamVisibility.Voluntary));
@@ -231,6 +234,16 @@ namespace SAM.Analytical.Grasshopper.OCCT
             index = Params.IndexOfOutputParam("BestConfig");
             if (index != -1 && discover)
                 dataAccess.SetData(index, discoveryReport.FirstOrDefault(x => x.StartsWith("Best:") || x.StartsWith("ADOPTED:")) ?? "");
+
+            // Numeric outputs for direct wiring to SAMOCCT.Extend3D.
+            index = Params.IndexOfOutputParam("OptimalBand");
+            if (index != -1) dataAccess.SetData(index, bucketBetweenLevels);
+
+            index = Params.IndexOfOutputParam("OptimalFill");
+            if (index != -1) dataAccess.SetData(index, fillMargin);
+
+            index = Params.IndexOfOutputParam("OptimalDirCap");
+            if (index != -1) dataAccess.SetData(index, directionalCapGrow);
 
             index = Params.IndexOfOutputParam("NakedWires");
             if (index != -1)
