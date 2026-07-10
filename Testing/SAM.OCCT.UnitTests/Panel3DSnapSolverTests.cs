@@ -1655,14 +1655,15 @@ namespace SAM.OCCT.UnitTests
         public void Extend_ShortWallUnderFlatCap_RecordsTopMoveMatchingGeometry()
         {
             // A short vertical wall (top z=2.5) under a flat cap at z=3: Extend raises the top to the cap + the
-            // wall overshoot and records ONE top op whose to-value is exactly the new top.
+            // wall overshoot and records ONE applied top op whose to-value is exactly the new top - plus a
+            // Bottom SKIP (P3 §5.4: no cap covers the wall's base either, and that is now recorded, not silent).
             SnappedPanel wall = E3ShortWall();
             List<SnappedPanel> panels = new List<SnappedPanel> { wall, E3FlatCap() };
             List<ExtendRecord> records = new List<ExtendRecord>();
 
             Panel3DSnapSolver.Extend(panels, E3VerticalAngle, 0.05, 1e-6, 0.5, true, records);
 
-            ExtendRecord top = Assert.Single(records);
+            ExtendRecord top = Assert.Single(records, x => x.Outcome == ExtendOutcome.Applied);
             Assert.Equal(ExtendOperationKind.Top, top.Kind);
             Assert.Equal(0, top.PanelIndex);                            // the wall is panel 0
             Assert.Equal(0, top.SourceIndex);
@@ -1673,19 +1674,27 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(3.05, top.ToValue, 3);                        // cap z=3 + 0.05 overshoot
             Assert.False(top.MaxExtendCapped);                         // vertical reach is uncapped
             Assert.NotNull(top.PreviewSegment3D());
+
+            ExtendRecord bottomSkip = Assert.Single(records, x => x.Outcome == ExtendOutcome.Skipped);
+            Assert.Equal(ExtendOperationKind.Bottom, bottomSkip.Kind);
+            Assert.Equal(ExtendSkipReason.NoTargetWithinReach, bottomSkip.SkipReason);
         }
 
         [Fact]
-        public void Extend_WallAboveCap_RecordsNothing()
+        public void Extend_WallAboveCap_RecordsSkipsForBothDirectionsNeverSilent()
         {
-            // Wall already taller than the only cap: no covering cap above it, nothing moves, nothing recorded
-            // (honesty - only actual moves are recorded, never a no-op call).
+            // Wall already taller than the only cap: no covering cap above it (nor below), so nothing moves -
+            // but P3 §5.4 makes that a recorded SKIP at each real decision point, never a silent no-op call.
             List<SnappedPanel> panels = new List<SnappedPanel> { E3ShortWall(topZ: 4.0), E3FlatCap(z: 3.0) };
             List<ExtendRecord> records = new List<ExtendRecord>();
 
             Panel3DSnapSolver.Extend(panels, E3VerticalAngle, 0.05, 1e-6, 0.5, true, records);
 
-            Assert.Empty(records);
+            Assert.Equal(2, records.Count);
+            Assert.All(records, x => Assert.Equal(ExtendOutcome.Skipped, x.Outcome));
+            Assert.All(records, x => Assert.Equal(ExtendSkipReason.NoTargetWithinReach, x.SkipReason));
+            Assert.Contains(records, x => x.Kind == ExtendOperationKind.Top);
+            Assert.Contains(records, x => x.Kind == ExtendOperationKind.Bottom);
         }
 
         [Fact]

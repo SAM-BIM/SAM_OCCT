@@ -79,7 +79,10 @@ namespace SAM.OCCT.UnitTests
             // Act
             List<double> maxExtends = Modify.ResolveMaxExtends(null, sources, out List<ParameterProvenance> provenance);
 
-            // Assert - the stamp wins; the unstamped wall falls back to the solver default (0.4, P2).
+            // Assert - the stamp wins; the unstamped wall falls back to the flat solver default 0.4 m. P3 §5.6's
+            // SetMaxExtends derivation was NOT adopted: its 0.49x-length pre-cap crushed short walls and regressed
+            // the golden masters, so the default stays 0.4 m (byte-identical to pre-P3) and MaxExtend is a
+            // per-panel stamp knob - see Modify.ResolveMaxExtends.
             Assert.Equal(1.25, maxExtends[0], 6);
             Assert.Equal(ParameterProvenance.Stamped, provenance[0]);
             Assert.Equal(0.4, maxExtends[1], 6);

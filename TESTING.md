@@ -1766,3 +1766,50 @@ default is delivered by a **version-gated fallback** (`SolverComponentDefaults.B
 pinned by `SolverComponentDefaultsTests`): a component saved before the input's introducing version
 (0.5.0 / 0.7.0 / 0.6.0 respectively) resolves the absent input to the core default 0, so existing saved GH
 documents never change behavior on plugin update; components placed at or after it resolve to 0.21.
+
+## P3 — directional cap growth, extend skip/risk diagnostics, MaxExtend, input-effect (`feat/cw-p3-extend3d`)
+
+Unit (pure-managed, `Testing/SAM.OCCT.UnitTests`):
+
+- `FillDirectionalTests` — `SnappedPanel.GrowEdgesToWalls`: an edge with a facing wall grows only that edge
+  by its measured gap + overshoot; an edge with no facing wall in reach grows 0 (fail-closed, the D4
+  false-floor guard); a cap with a hole keeps the hole; `Fill(directionalCapGrow: true)` records
+  `walls-directional` on success and falls back to `fixed-margin` with a `LegacyUniformCapGrow` risk flag
+  when no facing wall exists — never silent.
+- `ExtendSkipTests` — a real decision point that leaves a panel untouched is a `Skipped` `ExtendRecord`
+  (e.g. `Fill` with margin <= tolerance -> `FillTooSmall`); the `ExtendRecord.Skip` factory carries the
+  reason/detail; `SolverReportFormat.FormatExtendRecords` routes a Skipped record to
+  `SAM_OCCT_EXTEND3D_SKIP:` and an Applied record with a risk flag to the frozen
+  `SAM_OCCT_EXTEND3D_PANEL:` line plus a `SAM_OCCT_EXTEND3D_RISKY:` line.
+- `MaxExtendDerivationTests` — `Modify.ResolveMaxExtends`: a stamp (or supplied list) wins; an **unstamped**
+  panel falls back to the flat **0.4 m** default (`DEFAULT_MaxExtension`), reported `Default`; an invalid
+  (non-positive) stamp is ignored. This is the regression guard for the P3 decision **not** to adopt the
+  `SetMaxExtends` clone-derivation: its 0.49x-length pre-cap crushed short/segmented walls (~0.1 m) and
+  regressed the managed golden masters, so the default stays flat 0.4 m (byte-identical to pre-P3) and
+  MaxExtend is a per-panel tuning knob. The plan's original section 5.6 derivation wording is superseded by
+  this compatibility decision.
+
+Integration (`Testing/SAM.OCCT.IntegrationTests/ControlledWorkflowExtendTargetIntegrationTests`, managed
+Clean3D/Extend3D — runs everywhere, no native call):
+
+- `ExtendTargets_FixtureChainedRun_CapsNormalizeToGroupDatumsAndWallsReachThem` — on the 9-space fixture's
+  exact chain `Clean3D(0.21) -> Extend3D(inputAlreadyClean: true, 0.21)`, every floor/roof **cap** normalizes
+  onto one of the three group datums 12.24 / 15.29 / 18.34 and none stays on an un-merged raw skin
+  (12.436 / 15.473) — the D3 merged-plane targeting proof. Walls are **not** asserted against the raw datums:
+  a wall whose original top sat at a raw skin (e.g. North0's 15.473 roof, now normalized to the 15.29 cap)
+  legitimately *overshoots* its lowered cap in this pre-resolve view because Extend3D only grows walls; the
+  native split trims that overshoot in Solve3D. The guarantee lives on the caps, not on overshooting wall tops.
+- `ExtendTargets_FixtureChainedRunDirectionalCapGrowOn_NoFalseFloorCoversDoubleHeightColumn` — with
+  `directionalCapGrow: true`, no near-horizontal cap face lands within 0.21 m of the intermediate datum 15.29
+  inside West3's plan footprint (no fabricated false floor in the double-height column).
+- `InputEffect_ChainedRunInputAlreadyClean_CleanStageInputsInertButRunSaysSo` — pins the input-effect
+  contract: on the `inputAlreadyClean = true` handoff, varying the clean-stage inputs (minBucketSize /
+  thicknessFactor / alignColinearOffset / normalizeCapOffset / bucketBetweenLevels) produces **byte-identical
+  geometry** and the run emits a `SAM_OCCT_EXTEND3D_INPUT_INERT:` line, while `fillMargin_` (a live knob on
+  that path) **does** change the geometry. The pinned answer to "changing the input gives the same result":
+  it is by design (Stage A is skipped), and the run now says so.
+
+Golden masters stay **byte-identical with flags off**: `GoldenMasterIntegrationTests`
+(`Solve3D_ManagedPath_...`, `Solve3D_ManagedPath021_...`, `Solve3D_RawPath_...`) is unchanged by P3 — the
+MaxExtend revert restores the pre-P3 signatures exactly (all 15 pinned rows pass), so no golden was
+re-baselined in this phase.

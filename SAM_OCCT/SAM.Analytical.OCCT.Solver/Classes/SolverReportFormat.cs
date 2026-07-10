@@ -73,10 +73,13 @@ namespace SAM.Analytical.OCCT.Solver
         }
 
         /// <summary>
-        /// One coded <c>SAM_OCCT_EXTEND3D_PANEL:</c> line per applied managed extend/fill operation (E3,
-        /// docs/EXTEND3D_ROBUST_HANDOVER.md): the mutated panel (its source Guid + solver index), the operation
-        /// kind, the measured from -&gt; to, the target (cap index + scalar/sloped-plane branch, or the 2D
-        /// plan-loop), the overshoot and the lateral-cap flag. The source Guid is resolved here (the geometry
+        /// One coded line per recorded managed extend/fill decision (E3 + P3, docs/EXTEND3D_ROBUST_HANDOVER.md,
+        /// docs/CONTROLLED_WORKFLOW_PLAN.md §5.4-§5.5): an APPLIED record emits the frozen
+        /// <c>SAM_OCCT_EXTEND3D_PANEL:</c> line (the mutated panel, the operation kind, the measured from -&gt;
+        /// to, the target, the overshoot and the lateral-cap flag) followed by one
+        /// <c>SAM_OCCT_EXTEND3D_RISKY:</c> line per risk flag it carries; a SKIPPED record instead emits
+        /// <c>SAM_OCCT_EXTEND3D_SKIP:</c> (the edge/operation kind, the skip reason and its detail) - the panel
+        /// was found and left untouched, never fabricated. The source Guid is resolved here (the geometry
         /// solver carries only indices); an out-of-range/absent source is reported as "n/a".
         /// </summary>
         public static List<string> FormatExtendRecords(IReadOnlyList<ExtendRecord> extendRecords, IReadOnlyList<Panel> sources)
@@ -89,13 +92,37 @@ namespace SAM.Analytical.OCCT.Solver
                     continue;
                 }
 
-                result.Add(string.Format(
-                    "SAM_OCCT_EXTEND3D_PANEL: panel {0} {1}",
-                    PanelLabel(extendRecord.PanelIndex, extendRecord.SourceIndex, sources),
-                    extendRecord.Describe()));
+                string panelLabel = PanelLabel(extendRecord.PanelIndex, extendRecord.SourceIndex, sources);
+
+                if (extendRecord.Outcome == ExtendOutcome.Skipped)
+                {
+                    result.Add(string.Format("SAM_OCCT_EXTEND3D_SKIP: panel {0} {1}", panelLabel, extendRecord.DescribeSkip()));
+                    continue;
+                }
+
+                result.Add(string.Format("SAM_OCCT_EXTEND3D_PANEL: panel {0} {1}", panelLabel, extendRecord.Describe()));
+                foreach (ExtendRiskFlag riskFlag in extendRecord.RiskFlags)
+                {
+                    result.Add(string.Format("SAM_OCCT_EXTEND3D_RISKY: panel {0} {1}: {2}", panelLabel, KindLabel(extendRecord.Kind), riskFlag));
+                }
             }
 
             return result;
+        }
+
+        /// <summary>The kebab-style edge/operation label used on a <c>SAM_OCCT_EXTEND3D_RISKY:</c> line -
+        /// mirrors <see cref="ExtendRecord.Describe"/>'s own (private) operation-kind text.</summary>
+        private static string KindLabel(ExtendOperationKind kind)
+        {
+            switch (kind)
+            {
+                case ExtendOperationKind.Top: return "top";
+                case ExtendOperationKind.Bottom: return "bottom";
+                case ExtendOperationKind.PlanStart: return "plan-start";
+                case ExtendOperationKind.PlanEnd: return "plan-end";
+                case ExtendOperationKind.CapGrow: return "cap-grow";
+                default: return kind.ToString();
+            }
         }
 
         /// <summary>

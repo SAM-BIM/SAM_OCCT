@@ -2,6 +2,7 @@
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
 using SAM.Geometry.Spatial;
+using System.Collections.Generic;
 
 namespace SAM.Geometry.OCCT.Solver
 {
@@ -71,6 +72,33 @@ namespace SAM.Geometry.OCCT.Solver
         /// always false for the MaxExtend-uncapped vertical extends.</summary>
         public bool MaxExtendCapped { get; }
 
+        /// <summary>Applied (something moved) or Skipped (a decision point found no safe target and left the
+        /// panel untouched) - P3, docs/CONTROLLED_WORKFLOW_PLAN.md §5.4. Defaults to <see cref="ExtendOutcome.Applied"/>
+        /// for every record built through the (frozen) primary constructor; only <see cref="Skip"/> produces a
+        /// <see cref="ExtendOutcome.Skipped"/> record.</summary>
+        public ExtendOutcome Outcome { get; private set; } = ExtendOutcome.Applied;
+
+        /// <summary>Why a <see cref="ExtendOutcome.Skipped"/> record's panel was left untouched; null for an
+        /// Applied record.</summary>
+        public ExtendSkipReason? SkipReason { get; private set; }
+
+        /// <summary>Human-readable detail for a <see cref="ExtendOutcome.Skipped"/> record (e.g. the measured
+        /// gap and the reach that fell short); empty for an Applied record.</summary>
+        public string SkipDetail { get; private set; } = string.Empty;
+
+        private readonly List<ExtendRiskFlag> riskFlags = new List<ExtendRiskFlag>();
+
+        /// <summary>Metadata flags on an APPLIED record worth a reviewer's attention (P3 §5.5) - near a reach
+        /// limit, a fallback to a less precise primitive, a new coplanar overlap. Never populated on a Skipped
+        /// record (a skip already explains itself via <see cref="SkipReason"/>). Empty by default.</summary>
+        public IReadOnlyList<ExtendRiskFlag> RiskFlags => riskFlags;
+
+        /// <summary>Appends a risk flag (P3 §5.5); metadata only - never changes <see cref="Outcome"/>.</summary>
+        public void AddRisk(ExtendRiskFlag riskFlag)
+        {
+            riskFlags.Add(riskFlag);
+        }
+
         public ExtendRecord(
             int panelIndex,
             int sourceIndex,
@@ -101,6 +129,42 @@ namespace SAM.Geometry.OCCT.Solver
             TargetDescription = targetDescription ?? string.Empty;
             Overshoot = overshoot;
             MaxExtendCapped = maxExtendCapped;
+        }
+
+        /// <summary>
+        /// Builds a <see cref="ExtendOutcome.Skipped"/> record (P3 §5.4): a real decision point that found no
+        /// safe target and left the panel exactly where it was. Reuses the frozen primary constructor (so its
+        /// field wiring never drifts from the Applied path) with zeroed measurements, then marks the result
+        /// Skipped - formatters route a Skipped record to <see cref="DescribeSkip"/> instead of <see cref="Describe"/>.
+        /// </summary>
+        public static ExtendRecord Skip(
+            int panelIndex,
+            int sourceIndex,
+            ExtendOperationKind kind,
+            ExtendSkipReason reason,
+            string detail,
+            Point3D at = null)
+        {
+            ExtendRecord record = new ExtendRecord(
+                panelIndex, sourceIndex, kind,
+                0, 0, string.Empty,
+                at, at,
+                -1, -1, string.Empty, string.Empty,
+                0, false)
+            {
+                Outcome = ExtendOutcome.Skipped,
+                SkipReason = reason,
+                SkipDetail = detail ?? string.Empty
+            };
+            return record;
+        }
+
+        /// <summary>The body of the <c>SAM_OCCT_EXTEND3D_SKIP:</c> line AFTER the panel identity - the edge/
+        /// operation kind, the skip reason and its detail. Only meaningful when <see cref="Outcome"/> is
+        /// <see cref="ExtendOutcome.Skipped"/>.</summary>
+        public string DescribeSkip()
+        {
+            return string.Format("{0}: {1} ({2})", KindText(Kind), SkipReason, SkipDetail);
         }
 
         /// <summary>The moved-edge preview segment (<see cref="From"/> -&gt; <see cref="To"/>), or null when this

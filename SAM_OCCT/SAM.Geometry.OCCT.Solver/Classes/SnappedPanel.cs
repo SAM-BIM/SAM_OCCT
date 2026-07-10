@@ -618,6 +618,297 @@ namespace SAM.Geometry.OCCT.Solver
             return GrowOutward(reach, tolerance);
         }
 
+        /// <summary>Half-angle cone (radians) within which a candidate wall's plane normal counts as "facing"
+        /// a cap edge - i.e. the wall runs ALONG the edge (the edge would meet it if grown outward), not
+        /// across it (a side wall, which offers no meaningful outward gap). Mirrors the spirit of
+        /// <see cref="Panel3DSnapSolver"/>'s other classification cones (15-20 degrees).</summary>
+        private const double DirectionalFacingAngleTolerance = 15.0 * (System.Math.PI / 180.0);
+
+        /// <summary>
+        /// Directional analogue of <see cref="GrowOutwardTo"/> (P3, docs/CONTROLLED_WORKFLOW_PLAN.md §5.2):
+        /// instead of offsetting the WHOLE cap boundary uniformly by the single largest in-reach wall gap -
+        /// which can push a mid-level cap bordering a double-height void into that void (the false-floor risk,
+        /// D4) - this grows each STRAIGHT external edge independently, by only its OWN measured gap to the
+        /// nearest wall that actually FACES it (a wall running along the edge, positioned outward, whose own
+        /// extent overlaps the edge's span). An edge with no such wall within <paramref name="maxReach"/> grows
+        /// exactly 0 - it stays on its own original line and can never be dragged into a void by a neighbour's
+        /// gap. Only the shared CORNER with a growing neighbour may slide along that stationary line (a mitred
+        /// per-edge offset: vertex j is the intersection of edge j-1's and edge j's own offset lines). Holes are
+        /// preserved (only the external boundary is rebuilt).
+        /// </summary>
+        /// <param name="walls">Candidate (vertical) wall panels that may bound this cap.</param>
+        /// <param name="maxReach">Upper bound on how far any single edge may grow (the fill margin).</param>
+        /// <param name="overshoot">Small extra growth past each edge's measured gap so the kernel trims a clean edge.</param>
+        /// <returns>True when at least one edge had a facing-wall target AND the rebuilt loop is valid, larger
+        /// and non-self-intersecting; false when no edge has evidence, or the reconstruction is rejected - the
+        /// caller then falls back to <see cref="GrowOutwardTo"/>.</returns>
+        public bool GrowEdgesToWalls(IEnumerable<SnappedPanel> walls, double maxReach, double overshoot, double tolerance)
+        {
+            if (face3D == null || plane == null || walls == null || maxReach <= tolerance)
+            {
+                return false;
+            }
+
+            List<Point3D> boundary3D = BoundaryPoints(face3D);
+            Geometry.Planar.ISegmentable2D externalEdge2D = face3D.ExternalEdge2D as Geometry.Planar.ISegmentable2D;
+            List<Geometry.Planar.Point2D> boundary2D = externalEdge2D?.GetPoints();
+            int n = boundary3D?.Count ?? 0;
+            if (boundary2D == null || boundary2D.Count != n || n < 3)
+            {
+                return false; // not a simple straight-edged polygon this operation understands
+            }
+
+            List<SnappedPanel> wallList = walls.Where(x => x?.Plane != null && x.GetBoundingBox() != null).ToList();
+            if (wallList.Count == 0)
+            {
+                return false;
+            }
+
+            // Outward sense per edge via the 2D vertex-average centroid - robust to either winding without
+            // needing to know this polygon's Orientation convention.
+            double centroidX = 0, centroidY = 0;
+            foreach (Geometry.Planar.Point2D point2D in boundary2D)
+            {
+                centroidX += point2D.X;
+                centroidY += point2D.Y;
+            }
+            Geometry.Planar.Point2D centroid2D = new Geometry.Planar.Point2D(centroidX / n, centroidY / n);
+
+            double[] growth = new double[n];
+            bool anyGrowth = false;
+            for (int i = 0; i < n; i++)
+            {
+                if (!TryOutward2D(boundary2D[i], boundary2D[(i + 1) % n], centroid2D, tolerance, out Geometry.Planar.Vector2D outward2D))
+                {
+                    continue; // degenerate (near-zero-length) edge - no direction, no growth
+                }
+
+                Vector3D outward3D = plane.Convert(outward2D)?.Unit;
+                if (outward3D == null)
+                {
+                    continue;
+                }
+
+                double gap = NearestFacingWallGap(boundary3D[i], boundary3D[(i + 1) % n], outward3D, wallList, maxReach, tolerance);
+                if (gap < 0)
+                {
+                    continue; // no facing wall within reach - this edge grows 0 (D4 false-floor guard)
+                }
+
+                growth[i] = gap + System.Math.Max(overshoot, 0);
+                anyGrowth = true;
+            }
+
+            if (!anyGrowth)
+            {
+                return false; // no edge had evidence at all - let the caller fall back
+            }
+
+            // Mitred per-edge offset: each edge's own (possibly unmoved) infinite line, offset outward by its
+            // own growth; vertex j is the intersection of edge (j-1)'s and edge j's offset lines, so a
+            // zero-growth edge keeps its own line exactly and only its shared corners may slide along it.
+            List<Geometry.Planar.Point2D> offsetStart = new List<Geometry.Planar.Point2D>(n);
+            List<Geometry.Planar.Point2D> offsetEnd = new List<Geometry.Planar.Point2D>(n);
+            for (int i = 0; i < n; i++)
+            {
+                Geometry.Planar.Point2D a2 = boundary2D[i];
+                Geometry.Planar.Point2D b2 = boundary2D[(i + 1) % n];
+                if (growth[i] <= tolerance || !TryOutward2D(a2, b2, centroid2D, tolerance, out Geometry.Planar.Vector2D outward2D))
+                {
+                    offsetStart.Add(a2);
+                    offsetEnd.Add(b2);
+                    continue;
+                }
+
+                Geometry.Planar.Vector2D offset = outward2D * growth[i];
+                offsetStart.Add(a2.GetMoved(offset));
+                offsetEnd.Add(b2.GetMoved(offset));
+            }
+
+            List<Geometry.Planar.Point2D> newVertices = new List<Geometry.Planar.Point2D>(n);
+            for (int j = 0; j < n; j++)
+            {
+                int prev = (j - 1 + n) % n;
+                Geometry.Planar.Point2D intersection = Geometry.Planar.Query.Intersection(
+                    offsetStart[prev], offsetEnd[prev], offsetStart[j], offsetEnd[j], false, tolerance);
+
+                // Parallel offset lines (a straight run of colinear edges, or two zero-growth edges sharing a
+                // line): the shared vertex is just this edge's own (possibly moved) start.
+                newVertices.Add(intersection ?? offsetStart[j]);
+            }
+
+            List<Geometry.Planar.Segment2D> newSegments = new List<Geometry.Planar.Segment2D>(n);
+            for (int j = 0; j < n; j++)
+            {
+                newSegments.Add(new Geometry.Planar.Segment2D(newVertices[j], newVertices[(j + 1) % n]));
+            }
+
+            // Fail closed: a mitred reconstruction that crosses itself (a sharp reflex corner overshooting past
+            // an adjacent edge) is rejected outright - the caller falls back to the uniform GrowOutwardTo rather
+            // than adopting a self-intersecting face.
+            List<Geometry.Planar.Segment2D> selfIntersections = Geometry.Planar.Query.SelfIntersectionSegment2Ds(newSegments, double.MaxValue, tolerance);
+            if (selfIntersections != null && selfIntersections.Count > n)
+            {
+                return false;
+            }
+
+            Geometry.Planar.Polygon2D newPolygon2D = new Geometry.Planar.Polygon2D(newVertices);
+            newPolygon2D.SetOrientation(Geometry.Planar.Query.Orientation(boundary2D));
+
+            int holesBefore = face3D.GetInternalEdge3Ds()?.Count ?? 0;
+            Face3D grown3D = Face3D.Create(plane, newPolygon2D, face3D.InternalEdge2Ds);
+            if (grown3D == null || !grown3D.IsValid())
+            {
+                return false;
+            }
+
+            if (grown3D.GetArea() <= face3D.GetArea() + tolerance)
+            {
+                return false; // the reconstruction did not actually grow the face - let the caller fall back
+            }
+
+            RecordHoleDrop(holesBefore, grown3D, "directional cap grow");
+            Adopt(grown3D);
+            return true;
+        }
+
+        /// <summary>The outward-pointing unit normal (in THIS panel's own plane) of the edge <paramref name="a2"/>
+        /// -&gt; <paramref name="b2"/>, decided by which perpendicular sense points away from <paramref name="centroid2D"/>
+        /// - robust to either polygon winding. False for a degenerate (near-zero-length) edge.</summary>
+        private static bool TryOutward2D(Geometry.Planar.Point2D a2, Geometry.Planar.Point2D b2, Geometry.Planar.Point2D centroid2D, double tolerance, out Geometry.Planar.Vector2D outward2D)
+        {
+            outward2D = null;
+            Geometry.Planar.Vector2D edgeDir2D = new Geometry.Planar.Vector2D(a2, b2);
+            if (edgeDir2D.Length <= tolerance)
+            {
+                return false;
+            }
+
+            edgeDir2D = edgeDir2D.Unit;
+            Geometry.Planar.Vector2D candidate = new Geometry.Planar.Vector2D(edgeDir2D.Y, -edgeDir2D.X);
+            Geometry.Planar.Point2D mid2D = new Geometry.Planar.Point2D(0.5 * (a2.X + b2.X), 0.5 * (a2.Y + b2.Y));
+            Geometry.Planar.Vector2D toMid2D = new Geometry.Planar.Vector2D(centroid2D, mid2D);
+            outward2D = toMid2D * candidate < 0 ? candidate * -1 : candidate;
+            return true;
+        }
+
+        /// <summary>
+        /// The gap (metres, &gt;= 0) from the edge (<paramref name="a3"/> -&gt; <paramref name="b3"/>) to the
+        /// NEAREST wall plane that FACES it - the wall's own normal nearly parallel to <paramref name="outward3D"/>
+        /// (a wall running ALONG the edge, not across it), sitting on the outward side (a positive gap), whose
+        /// own extent along the edge's tangent overlaps the edge's own span, within <paramref name="maxReach"/>.
+        /// The gap is the SMALLER of the two endpoint distances (mirrors <see cref="GrowOutwardTo"/>: "how far
+        /// short at the closest point"), so growing the edge by it reaches the wall everywhere along the span.
+        /// -1 when no wall qualifies - the edge then grows 0 (D4 false-floor guard: an edge bordering open air
+        /// or a void, with nothing facing it, is never dragged along by a neighbour's gap).
+        /// </summary>
+        private static double NearestFacingWallGap(Point3D a3, Point3D b3, Vector3D outward3D, List<SnappedPanel> walls, double maxReach, double tolerance)
+        {
+            Vector3D tangent3D = new Vector3D(b3.X - a3.X, b3.Y - a3.Y, b3.Z - a3.Z);
+            if (tangent3D.Length <= tolerance)
+            {
+                return -1;
+            }
+
+            tangent3D = tangent3D.Unit;
+            double edgeMinT = 0.0;
+            double edgeMaxT = tangent3D.DotProduct(new Vector3D(b3.X - a3.X, b3.Y - a3.Y, b3.Z - a3.Z)); // = edge length (a3 is t=0 by construction)
+            double aOutward = OutwardParameter(a3, outward3D);
+            double bOutward = OutwardParameter(b3, outward3D);
+
+            double minDot = System.Math.Cos(DirectionalFacingAngleTolerance);
+            double best = -1;
+
+            foreach (SnappedPanel wall in walls)
+            {
+                Plane wallPlane = wall.Plane;
+                Vector3D wallNormal = wallPlane?.Normal?.Unit;
+                BoundingBox3D wallBox = wall.GetBoundingBox();
+                if (wallNormal == null || wallBox == null)
+                {
+                    continue;
+                }
+
+                // Facing: the wall's normal is nearly parallel to this edge's outward direction - a wall
+                // running ALONG the edge, which the edge would meet if grown outward - not a side wall.
+                if (System.Math.Abs(wallNormal.DotProduct(outward3D)) < minDot)
+                {
+                    continue;
+                }
+
+                // Plan-extent overlap of the edge's own outward corridor: the wall's bounding box, projected
+                // onto the edge's tangent axis, must overlap the edge's own [minT, maxT] span.
+                if (!TangentOverlap(wallBox, a3, tangent3D, edgeMinT, edgeMaxT, tolerance))
+                {
+                    continue;
+                }
+
+                // Outward side + reach: the wall's own extreme corners, projected onto the outward axis,
+                // give the nearest face of the wall the edge could actually reach.
+                double wallOutward = NearestOutwardCorner(wallBox, outward3D);
+                double gapA = wallOutward - aOutward;
+                double gapB = wallOutward - bOutward;
+                double gap = System.Math.Min(gapA, gapB);
+                if (gap <= tolerance || gap > maxReach + tolerance)
+                {
+                    continue; // behind the edge, or out of reach
+                }
+
+                if (best < 0 || gap < best)
+                {
+                    best = gap;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>A point's coordinate along the outward axis (world-origin-relative; only differences
+        /// between two such values are meaningful).</summary>
+        private static double OutwardParameter(Point3D point3D, Vector3D outward3D)
+        {
+            return outward3D.X * point3D.X + outward3D.Y * point3D.Y + outward3D.Z * point3D.Z;
+        }
+
+        /// <summary>The nearest (smallest) outward-axis coordinate among <paramref name="box"/>'s eight corners -
+        /// the face of the wall's bounding box first met when travelling in the outward direction.</summary>
+        private static double NearestOutwardCorner(BoundingBox3D box, Vector3D outward3D)
+        {
+            double best = double.MaxValue;
+            for (int i = 0; i < 8; i++)
+            {
+                double x = (i & 1) == 0 ? box.Min.X : box.Max.X;
+                double y = (i & 2) == 0 ? box.Min.Y : box.Max.Y;
+                double z = (i & 4) == 0 ? box.Min.Z : box.Max.Z;
+                double parameter = outward3D.X * x + outward3D.Y * y + outward3D.Z * z;
+                if (parameter < best)
+                {
+                    best = parameter;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>True when <paramref name="box"/>'s corners, projected onto the tangent axis through
+        /// <paramref name="origin"/>, overlap [<paramref name="minT"/>, <paramref name="maxT"/>] (expanded by
+        /// <paramref name="tolerance"/>) - the wall's own extent overlaps the edge's span along the edge.</summary>
+        private static bool TangentOverlap(BoundingBox3D box, Point3D origin, Vector3D tangent3D, double minT, double maxT, double tolerance)
+        {
+            double boxMinT = double.MaxValue, boxMaxT = double.MinValue;
+            for (int i = 0; i < 8; i++)
+            {
+                double x = (i & 1) == 0 ? box.Min.X : box.Max.X;
+                double y = (i & 2) == 0 ? box.Min.Y : box.Max.Y;
+                double z = (i & 4) == 0 ? box.Min.Z : box.Max.Z;
+                double parameter = tangent3D.X * (x - origin.X) + tangent3D.Y * (y - origin.Y) + tangent3D.Z * (z - origin.Z);
+                if (parameter < boxMinT) boxMinT = parameter;
+                if (parameter > boxMaxT) boxMaxT = parameter;
+            }
+
+            return boxMinT <= maxT + tolerance && boxMaxT >= minT - tolerance;
+        }
+
         /// <summary>
         /// True when the supporting plane is (near) vertical - the normal lies (near) horizontal,
         /// i.e. |normal.Z| is within <paramref name="angleTolerance"/> of zero. Walls are vertical;

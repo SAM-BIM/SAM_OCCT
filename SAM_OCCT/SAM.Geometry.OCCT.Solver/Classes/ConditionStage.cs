@@ -36,6 +36,9 @@ namespace SAM.Geometry.OCCT.Solver
             public double FillMargin { get; set; } = 0.5;
 
             public double FillOvershoot { get; set; } = 0.05;
+
+            /// <summary>P3 §5.2-§5.3: per-edge evidence-based cap growth. See <see cref="Panel3DSnapSolver.DirectionalCapGrow"/>.</summary>
+            public bool DirectionalCapGrow { get; set; } = false;
         }
 
         /// <summary>
@@ -72,7 +75,7 @@ namespace SAM.Geometry.OCCT.Solver
             // Then grow the caps out to the now-closed walls.
             if (s.FillCapsToWalls)
             {
-                Panel3DSnapSolver.Fill(panels, tol.VerticalAngle, s.FillMargin, tol.Distance, s.FillOvershoot, extendRecords);
+                Panel3DSnapSolver.Fill(panels, tol.VerticalAngle, s.FillMargin, tol.Distance, s.FillOvershoot, extendRecords, s.DirectionalCapGrow);
             }
         }
     }
