@@ -99,6 +99,13 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Raw adoption rejected because a dropped room-dividing partition sits strictly inside an
         /// adopted cell (rooms merged watertight-but-wrong) - the under-split gate (codex #7, P4). Appended at
         /// the end of the enum so existing members keep their ordinal values (public-enum binary contract).</summary>
-        UnderSplit
+        UnderSplit,
+
+        /// <summary>Level-group near-miss (P2, docs/CONTROLLED_WORKFLOW_PLAN.md §4.5): a raw <see cref="LevelFrame"/>
+        /// datum sits just OUTSIDE the <c>bucketBetweenLevels</c> band of a group datum (band &lt; distance &lt;=
+        /// 2×band), so it was NOT merged. Never silent: the diagnostic states exactly what <c>bucketBetweenLevels</c>
+        /// value would merge it, so a user can see a near-miss split without guessing. Appended at the end of the
+        /// enum so existing members keep their ordinal values (public-enum binary contract).</summary>
+        LevelBandNearMiss
     }
 }

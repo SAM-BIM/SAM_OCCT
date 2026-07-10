@@ -390,6 +390,192 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
+        /// Second-stage grouping (P2, docs/CONTROLLED_WORKFLOW_PLAN.md §4.1): merges the raw
+        /// <see cref="Cluster"/> frames into <see cref="LevelGroup"/>s over the user's <paramref name="band"/>
+        /// (<c>bucketBetweenLevels</c>), so the several near-coplanar slab-skin datums a single physical floor
+        /// was imported as (e.g. the fixture's 12.240 m and 12.436 m frames) collapse onto one storey datum for
+        /// cap normalization and wall-to-cap extension. The raw <see cref="Cluster"/> band (0.15 m) is UNCHANGED
+        /// - this is a strictly wider optional grouping ON TOP of the frames, never a wider raw band, so a
+        /// deliberate ~0.25 m split-level landing still survives as its own frame unless the user opts to merge it.
+        /// <para>
+        /// Dominant-area-first and seed-anchored, identical in spirit to <see cref="Cluster"/>: the largest-area
+        /// not-yet-assigned frame seeds a group (its datum becomes the group datum), then every remaining frame
+        /// parallel within <paramref name="coneTolerance"/> whose datum is within <paramref name="band"/>
+        /// perpendicular of the SEED datum joins it. Membership is tested against the seed only (NON-transitive),
+        /// so a group is anchored by its dominant frame and cannot chain across a wide span. Deterministic: the
+        /// seed order (area ↓, elevation ↑, origin, index) is independent of input order, and the returned list
+        /// is sorted by <see cref="LevelGroup.Elevation"/> ascending.
+        /// </para>
+        /// <para>
+        /// When <paramref name="band"/> &lt;= 0 the grouping is the IDENTITY (one group per frame), so the default
+        /// (<c>bucketBetweenLevels = 0</c>) is byte-identical to the raw frames. A near-miss (a frame just outside
+        /// the band of a group datum, <c>band &lt; d &lt;= 2×band</c>) is reported via
+        /// <see cref="DiagnosticCode.LevelBandNearMiss"/> stating the <c>bucketBetweenLevels</c> value that would
+        /// merge it - never silent (capped at <see cref="NearMissDiagnosticCap"/> lines).
+        /// </para>
+        /// </summary>
+        /// <param name="frames">The raw level frames (typically <see cref="Cluster"/>'s output).</param>
+        /// <param name="band">The <c>bucketBetweenLevels</c> merge band (metres); &lt;= 0 groups ≡ frames (identity).</param>
+        /// <param name="coneTolerance">Half-angle of the same-orientation normal cone (radians).</param>
+        /// <param name="diagnostics">Optional sink for the group-count summary and near-miss lines.</param>
+        public static List<LevelGroup> GroupFrames(
+            IReadOnlyList<LevelFrame> frames,
+            double band,
+            double coneTolerance = DEFAULT_NormalConeTolerance,
+            SolverDiagnostics diagnostics = null)
+        {
+            List<LevelGroup> groups = new List<LevelGroup>();
+            if (frames == null || frames.Count == 0)
+            {
+                return groups;
+            }
+
+            // band <= 0: identity - one group per frame (default bucketBetweenLevels = 0 stays == the raw frames).
+            if (band <= 0)
+            {
+                for (int i = 0; i < frames.Count; i++)
+                {
+                    LevelFrame frame = frames[i];
+                    if (frame?.Normal == null)
+                    {
+                        continue;
+                    }
+
+                    groups.Add(new LevelGroup(frame, new List<int> { i }, new List<double> { frame.Elevation }, frame.CapIndices?.Count ?? 0));
+                }
+
+                groups = groups.OrderBy(x => x.Elevation).ToList();
+                diagnostics?.Add(SolverStage.Snap, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info,
+                    string.Format("LevelFrame grouping: {0} level frame(s) -> {1} level group(s) (bucketBetweenLevels={2:0.###} m, identity).", frames.Count, groups.Count, band));
+                return groups;
+            }
+
+            // Deterministic seed order, independent of input order: the dominant (largest-area) frame seeds
+            // first (mirrors Cluster), ties broken by elevation, then origin, then index.
+            List<int> ordered = Enumerable.Range(0, frames.Count)
+                .Where(i => frames[i]?.Normal != null)
+                .OrderByDescending(i => frames[i].DominantArea)
+                .ThenBy(i => frames[i].Elevation)
+                .ThenBy(i => frames[i].Origin.X)
+                .ThenBy(i => frames[i].Origin.Y)
+                .ThenBy(i => frames[i].Origin.Z)
+                .ThenBy(i => i)
+                .ToList();
+
+            double minDot = System.Math.Cos(coneTolerance);
+            HashSet<int> assigned = new HashSet<int>();
+
+            foreach (int seedIndex in ordered)
+            {
+                if (assigned.Contains(seedIndex))
+                {
+                    continue;
+                }
+
+                LevelFrame seed = frames[seedIndex];
+                assigned.Add(seedIndex);
+
+                List<int> members = new List<int> { seedIndex };
+                List<double> memberElevations = new List<double> { seed.Elevation };
+                int capCount = seed.CapIndices?.Count ?? 0;
+
+                foreach (int otherIndex in ordered)
+                {
+                    if (assigned.Contains(otherIndex))
+                    {
+                        continue;
+                    }
+
+                    LevelFrame other = frames[otherIndex];
+
+                    // Same orientation (parallel/anti-parallel within the cone) as the seed datum.
+                    if (System.Math.Abs(seed.Normal.DotProduct(other.Normal)) < minDot)
+                    {
+                        continue;
+                    }
+
+                    // Perpendicular offset of the candidate frame's datum from the SEED datum (measured against
+                    // the seed only - non-transitive); within the band => the same storey datum.
+                    double perpendicular = System.Math.Abs(seed.SignedElevation(other.Origin));
+                    if (perpendicular > band)
+                    {
+                        continue;
+                    }
+
+                    assigned.Add(otherIndex);
+                    members.Add(otherIndex);
+                    memberElevations.Add(other.Elevation);
+                    capCount += other.CapIndices?.Count ?? 0;
+                }
+
+                members.Sort();
+                groups.Add(new LevelGroup(seed, members, memberElevations, capCount));
+            }
+
+            groups = groups
+                .OrderBy(x => x.Elevation)
+                .ThenBy(x => x.Normal.X)
+                .ThenBy(x => x.Normal.Y)
+                .ThenBy(x => x.Normal.Z)
+                .ToList();
+
+            diagnostics?.Add(SolverStage.Snap, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info,
+                string.Format("LevelFrame grouping: {0} level frame(s) -> {1} level group(s) (bucketBetweenLevels={2:0.###} m).", frames.Count, groups.Count, band));
+
+            EmitNearMissDiagnostics(frames, groups, band, minDot, diagnostics);
+
+            return groups;
+        }
+
+        /// <summary>Upper bound on the number of <see cref="DiagnosticCode.LevelBandNearMiss"/> lines
+        /// <see cref="GroupFrames"/> emits per call (docs plan §4.5), so a pathological model cannot flood the
+        /// report.</summary>
+        public const int NearMissDiagnosticCap = 20;
+
+        /// <summary>Emits a <see cref="DiagnosticCode.LevelBandNearMiss"/> line for each frame whose datum sits
+        /// just OUTSIDE a group datum's band (<c>band &lt; d &lt;= 2×band</c>) - it did not merge but nearly did -
+        /// stating the exact <c>bucketBetweenLevels</c> value that would merge it. Capped at
+        /// <see cref="NearMissDiagnosticCap"/>.</summary>
+        private static void EmitNearMissDiagnostics(IReadOnlyList<LevelFrame> frames, List<LevelGroup> groups, double band, double minDot, SolverDiagnostics diagnostics)
+        {
+            if (diagnostics == null || band <= 0)
+            {
+                return;
+            }
+
+            int emitted = 0;
+            for (int g = 0; g < groups.Count && emitted < NearMissDiagnosticCap; g++)
+            {
+                LevelGroup group = groups[g];
+                for (int f = 0; f < frames.Count && emitted < NearMissDiagnosticCap; f++)
+                {
+                    LevelFrame frame = frames[f];
+                    if (frame?.Normal == null || (group.FrameIndices != null && group.FrameIndices.Contains(f)))
+                    {
+                        continue; // a member of this group, or an unusable frame
+                    }
+
+                    if (System.Math.Abs(group.Normal.DotProduct(frame.Normal)) < minDot)
+                    {
+                        continue; // different orientation - not a candidate for this datum at all
+                    }
+
+                    double distance = System.Math.Abs(group.Plane.Distance(frame.Origin));
+                    if (distance <= band || distance > 2.0 * band)
+                    {
+                        continue; // merged already, or too far to be a near-miss
+                    }
+
+                    diagnostics.Add(SolverStage.Snap, DiagnosticCode.LevelBandNearMiss, OcctDiagnosticSeverity.Info,
+                        string.Format("Level frame at {0:0.###} m is {1:0.###} m from group {2} datum ({3:0.###} m, band {4:0.###}) - excluded; raise bucketBetweenLevels to >= {1:0.###} to merge.",
+                            frame.Elevation, distance, g, group.Elevation, band),
+                        point3Ds: new List<Point3D> { frame.Origin }, toleranceUsed: band);
+                    emitted++;
+                }
+            }
+        }
+
+        /// <summary>
         /// Assigns a single cap face to the level frame it belongs to and returns that frame's index in
         /// <paramref name="frames"/>, or -1 when no frame matches (the caller may then seed a new frame). A cap
         /// matches a frame when it is parallel within <paramref name="coneTolerance"/> and its centroid is
@@ -588,7 +774,8 @@ namespace SAM.Geometry.OCCT.Solver
             IReadOnlyList<LevelFrame> frames,
             out int frameIndex,
             double verticalAngleTolerance = DEFAULT_VerticalAngleTolerance,
-            SolverDiagnostics diagnostics = null)
+            SolverDiagnostics diagnostics = null,
+            double elevationBand = DEFAULT_ElevationBand)
         {
             frameIndex = -1;
             Plane plane = face?.GetPlane();
@@ -603,8 +790,10 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             // A cap sits on (and parallel to) a datum; AssignCapToFrame naturally rejects a wall (whose normal
-            // is perpendicular to every datum, failing the parallel cone).
-            int capFrame = AssignCapToFrame(face, frames);
+            // is perpendicular to every datum, failing the parallel cone). The elevationBand is forwarded (P2,
+            // docs plan §4.2) so a cap up to bucketBetweenLevels from a merged group datum is still claimed by
+            // that datum rather than falling to the nearest-datum ambiguity fallback.
+            int capFrame = AssignCapToFrame(face, frames, DEFAULT_NormalConeTolerance, elevationBand);
             if (capFrame >= 0)
             {
                 frameIndex = capFrame;
@@ -612,7 +801,7 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             // Otherwise a wall spans one or more datums (its foot-to-top range straddles them).
-            IReadOnlyList<int> spanned = AssignWallToFrames(face, frames);
+            IReadOnlyList<int> spanned = AssignWallToFrames(face, frames, elevationBand);
             if (spanned.Count > 0)
             {
                 frameIndex = spanned[0];

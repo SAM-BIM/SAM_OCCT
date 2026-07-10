@@ -50,6 +50,24 @@ namespace SAM.Analytical.OCCT.Solver
         /// <summary>The managed pipeline's clustered level datums; empty when <see cref="RawAdopted"/> is true or no cap formed a frame.</summary>
         public IReadOnlyList<LevelFrame> LevelFrames { get; }
 
+        /// <summary>The managed pipeline's level GROUPS (P2, docs/CONTROLLED_WORKFLOW_PLAN.md §4.1) - the storey
+        /// datums the raw <see cref="LevelFrames"/> merged into over <c>bucketBetweenLevels</c>. Identity of
+        /// <see cref="LevelFrames"/> when <c>bucketBetweenLevels = 0</c> (the default). Empty when
+        /// <see cref="RawAdopted"/> is true or no cap formed a frame.</summary>
+        public IReadOnlyList<LevelGroup> LevelGroups { get; }
+
+        /// <summary>Per-decision observability for the managed clean bucket (P2 §4.4): one
+        /// <see cref="CleanRecord"/> per applied Stage A mutation. Empty when the raw solve was adopted or on the
+        /// <c>inputAlreadyClean</c> condition-only path. Use <see cref="FormatCleanReport"/> for the coded
+        /// <c>SAM_OCCT_CLEAN3D_*</c> text lines.</summary>
+        public IReadOnlyList<CleanRecord> CleanRecords { get; }
+
+        /// <summary>The already-formatted CleanReport lines (the <c>SAM_OCCT_CLEAN3D_LEVELS</c>,
+        /// <c>SAM_OCCT_CLEAN3D_LEVELGROUP</c> and per-panel <c>SAM_OCCT_CLEAN3D_PANEL</c> lines, P2 §4). Assembled
+        /// by the analytical layer (it owns the source Guids and the parameter provenance the geometry solver has
+        /// no knowledge of); surfaced verbatim through <see cref="FormatCleanReport"/>.</summary>
+        public IReadOnlyList<string> CleanReportLines { get; }
+
         /// <summary>True when the native OCCT kernel ran the resolve stage.</summary>
         public bool NativeResolved { get; }
 
@@ -103,7 +121,10 @@ namespace SAM.Analytical.OCCT.Solver
             int roundsAccepted = 0,
             ResolvedCellComplex resolvedCellComplex = null,
             IReadOnlyList<ExtendRecord> extendRecords = null,
-            IReadOnlyList<string> extendPanelDiagnostics = null)
+            IReadOnlyList<string> extendPanelDiagnostics = null,
+            IReadOnlyList<LevelGroup> levelGroups = null,
+            IReadOnlyList<CleanRecord> cleanRecords = null,
+            IReadOnlyList<string> cleanReportLines = null)
         {
             RawAdopted = rawAdopted;
             Signature = signature;
@@ -116,6 +137,9 @@ namespace SAM.Analytical.OCCT.Solver
             NakedWires = nakedWires ?? new List<OcctNakedWire>();
             CleanFace3Ds = cleanFace3Ds ?? new List<Face3D>();
             LevelFrames = levelFrames ?? new List<LevelFrame>();
+            LevelGroups = levelGroups ?? new List<LevelGroup>();
+            CleanRecords = cleanRecords ?? new List<CleanRecord>();
+            CleanReportLines = cleanReportLines ?? new List<string>();
             NativeResolved = nativeResolved;
             ResolvedCellCount = resolvedCellCount;
             Rounds = rounds;
@@ -162,6 +186,22 @@ namespace SAM.Analytical.OCCT.Solver
         public List<Geometry.Spatial.Segment3D> ExtendPreviewSegment3Ds()
         {
             return SolverReportFormat.ExtendPreviewSegment3Ds(ExtendRecords);
+        }
+
+        /// <summary>The CleanReport lines (P2 §4): the <c>SAM_OCCT_CLEAN3D_LEVELS</c>/<c>_LEVELGROUP</c> level
+        /// summary and the per-panel <c>SAM_OCCT_CLEAN3D_PANEL</c> observability lines the analytical layer
+        /// assembled (source Guids + resolved parameter values and their provenance joined to each
+        /// <see cref="CleanRecord"/>). Returned verbatim.</summary>
+        public List<string> FormatCleanReport()
+        {
+            return new List<string>(CleanReportLines);
+        }
+
+        /// <summary>One line per level group (P2 §4.1): the group datum elevation, the raw frames it merged, cap
+        /// count, spread and tilt - the <c>SAM_OCCT_CLEAN3D_LEVELGROUP</c> lines.</summary>
+        public List<string> FormatLevelGroups()
+        {
+            return SolverReportFormat.FormatLevelGroups(LevelGroups, LevelFrames);
         }
     }
 }

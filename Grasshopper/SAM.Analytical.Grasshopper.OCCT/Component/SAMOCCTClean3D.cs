@@ -24,7 +24,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("8f2c1a47-6b39-4d2e-9a51-7c0e4b8d3f12");
 
-        public override string LatestComponentVersion => "0.4.0";
+        public override string LatestComponentVersion => "0.5.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -59,6 +59,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 normalizeCapOffset.SetPersistentData(0.3);
                 result.Add(new GH_SAMParam(normalizeCapOffset, ParamVisibility.Voluntary));
 
+                global::Grasshopper.Kernel.Parameters.Param_Number bucketBetweenLevels = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "bucketBetweenLevels_", NickName = "bucketBetweenLevels_", Description = "Level-group merge band (m, P2): merges the several near-coplanar slab-skin datums one physical floor was imported as onto a single storey datum for cap normalization. Wider than the pinned 0.15 m raw frame band, so a deliberate split-level landing survives unless you opt in. 0 = off (raw frames unchanged; default). e.g. 0.21 merges the 0.196/0.183 m gaps of the 9-space fixture (5 raw frames -> 3 level groups). Warn at >= 0.25 (can eat a split-level landing).", Access = GH_ParamAccess.item };
+                bucketBetweenLevels.SetPersistentData(0.0);
+                result.Add(new GH_SAMParam(bucketBetweenLevels, ParamVisibility.Voluntary));
+
                 global::Grasshopper.Kernel.Parameters.Param_Number slitMinGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "slitMinGap_", NickName = "slitMinGap_", Description = "Minimum perpendicular gap (m) of a remaining double-wall/slit to report. Floored at the bucket capture width so only parallel panels OUTSIDE the bucket (not captured/merged by it) are reported.", Access = GH_ParamAccess.item };
                 slitMinGap.SetPersistentData(0.02);
                 result.Add(new GH_SAMParam(slitMinGap, ParamVisibility.Voluntary));
@@ -92,7 +96,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
                 // Phase 8: Stage A reporting, append-only and Voluntary - existing saved definitions keep working.
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "SourceMap", NickName = "SourceMap", Description = "One line per input source: which clean output face(s) it contributed to.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
-                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelFrames", NickName = "LevelFrames", Description = "One line per clustered level datum (elevation, tilt, cap count) cap normalization conditioned onto. Empty when the model formed no frames.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelFrames", NickName = "LevelFrames", Description = "One line per clustered RAW level datum (elevation, tilt, cap count) - the pinned 0.15 m band. Five frames on the 9-space fixture. Empty when the model formed no frames.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+
+                // P2 (docs/CONTROLLED_WORKFLOW_PLAN.md §4): level groups + per-panel clean observability, Voluntary.
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelGroups", NickName = "LevelGroups", Description = "One line per level GROUP (P2): the merged storey datum caps normalize onto (elevation, the raw frames it merged + their elevations, cap count, spread, tilt). With bucketBetweenLevels = 0 this equals LevelFrames (one group per frame); at 0.21 the 9-space fixture's 5 raw frames merge into 3 groups (12.24 / 15.29 / 18.34).", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "CleanReport", NickName = "CleanReport", Description = "Per-panel clean observability (P2): the SAM_OCCT_CLEAN3D_LEVELS/_LEVELGROUP level summary plus one SAM_OCCT_CLEAN3D_PANEL line per applied clean action (opposed-collapsed / snapped-to-backer / cap-normalized / coplanar-merged / dropped-invalid), each with the moved distance, the backer, and the resolved BucketSize / Weight / MaxExtend with their provenance (stamped / derived / floor / default). Recorded at the real decision points - a null recorder is geometry-identical.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
 
                 return result.ToArray();
             }
@@ -151,6 +159,13 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref normalizeCapOffset);
             }
 
+            double bucketBetweenLevels = 0.0;
+            index = Params.IndexOfInputParam("bucketBetweenLevels_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref bucketBetweenLevels);
+            }
+
             double slitMinGap = 0.02;
             index = Params.IndexOfInputParam("slitMinGap_");
             if (index != -1)
@@ -172,7 +187,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref slitMaxOverlap);
             }
 
-            List<Panel> cleanPanels = panels.Clean3D(out List<string> diagnostics, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset);
+            List<Panel> cleanPanels = panels.Clean3D(out List<string> diagnostics, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, bucketBetweenLevels: bucketBetweenLevels);
 
             index = Params.IndexOfOutputParam("Panels");
             if (index != -1)
@@ -220,6 +235,18 @@ namespace SAM.Analytical.Grasshopper.OCCT
             if (index != -1)
             {
                 dataAccess.SetDataList(index, report == null ? null : SolverReportFormat.FormatLevelFrames(report.LevelFrames));
+            }
+
+            index = Params.IndexOfOutputParam("LevelGroups");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, report?.FormatLevelGroups());
+            }
+
+            index = Params.IndexOfOutputParam("CleanReport");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, report?.FormatCleanReport());
             }
         }
 

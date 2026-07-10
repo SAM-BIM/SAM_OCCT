@@ -46,6 +46,15 @@ namespace SAM.Geometry.OCCT.Solver
             /// normalization fallback ran instead). Read-only; does not affect the returned geometry.
             /// </summary>
             public List<LevelFrame> LevelFrames { get; set; } = new List<LevelFrame>();
+
+            /// <summary>
+            /// The level GROUPS (P2, docs/CONTROLLED_WORKFLOW_PLAN.md §4.1) formed by merging
+            /// <see cref="LevelFrames"/> over <c>bucketBetweenLevels</c> - the storey datums caps normalize onto
+            /// when the merge band is set. With the default <c>bucketBetweenLevels = 0</c> this is the identity of
+            /// <see cref="LevelFrames"/> (one group per frame). Read-only reporting capture; does not affect the
+            /// returned geometry beyond selecting the group datum for cap normalization.
+            /// </summary>
+            public List<LevelGroup> LevelGroups { get; set; } = new List<LevelGroup>();
         }
 
         /// <summary>
@@ -70,7 +79,8 @@ namespace SAM.Geometry.OCCT.Solver
             ToleranceBudget tolerances,
             double alignColinearOffset,
             SolverDiagnostics diagnostics = null,
-            int maxIterations = MaxSnapIterations)
+            int maxIterations = MaxSnapIterations,
+            List<CleanRecord> records = null)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -83,7 +93,7 @@ namespace SAM.Geometry.OCCT.Solver
             bool anyChanged;
             do
             {
-                anyChanged = Panel3DSnapSolver.Snap(panels, tol.Angle, tol.ArcAngle, tol.Distance, tol.VerticalAngle, alignColinearOffset);
+                anyChanged = Panel3DSnapSolver.Snap(panels, tol.Angle, tol.ArcAngle, tol.Distance, tol.VerticalAngle, alignColinearOffset, records);
                 iteration++;
             }
             while (anyChanged && iteration < maxIterations);
@@ -109,7 +119,9 @@ namespace SAM.Geometry.OCCT.Solver
             double alignColinearOffset,
             double normalizeCapOffset,
             SolverDiagnostics diagnostics = null,
-            SourceMap sourceMap = null)
+            SourceMap sourceMap = null,
+            double bucketBetweenLevels = 0.0,
+            List<CleanRecord> cleanRecords = null)
         {
             Result result = new Result();
             if (panels == null || panels.Count == 0)
@@ -128,18 +140,19 @@ namespace SAM.Geometry.OCCT.Solver
             // 1b. Collapse back-to-back partitions (facing-away, congruent-footprint skins) before the weighted
             //     bucket snap can pull them onto one side. Runs in the world frame, keyed on opposing-normal
             //     geometry. Now guarded by the separation-sign + overlap-footprint gates (Phase 2).
-            Panel3DSnapSolver.SnapOpposedPartitions(panels, tol.Angle, tol.Distance, diagnostics);
+            Panel3DSnapSolver.SnapOpposedPartitions(panels, tol.Angle, tol.Distance, diagnostics, cleanRecords);
 
             // 2. Bucket snap to a FIXED POINT (Phase 2b) - within-bucket near-parallel, in-plane-overlapping
             //    panels onto one backer plane, and align consecutive vertical wall segments offset by a small
             //    step jog, repeated until nothing changes (see SnapToFixedPoint).
-            result.SnapIterationCount = SnapToFixedPoint(panels, tol, alignColinearOffset, diagnostics);
+            result.SnapIterationCount = SnapToFixedPoint(panels, tol, alignColinearOffset, diagnostics, MaxSnapIterations, cleanRecords);
 
             // 2b. Normalize each level's caps onto that level's own datum plane (Phase 6c). Cluster the current
-            //     cap faces into level frames and normalize per-frame, so a split-level landing (its own frame,
-            //     ~0.25 m above the floor) is never merged onto the main floor the way the flat 0.3 m
-            //     NormalizeCapOffset band would. Falls back to the legacy world-frame band when no cap forms a
-            //     frame (e.g. a wall-only bucket), preserving the pre-6c behaviour there.
+            //     cap faces into RAW level frames (the pinned 0.15 m band - UNCHANGED), then optionally merge
+            //     those frames into LevelGroups over the user's bucketBetweenLevels band (P2, §4.1). A cap
+            //     normalizes onto its GROUP datum (one per storey) when the merge band is set, or onto its raw
+            //     frame datum with the default bucketBetweenLevels = 0 (identity groups). Falls back to the
+            //     legacy world-frame band when no cap forms a frame (e.g. a wall-only bucket).
             List<LevelFrame> capFrames = LevelFrame.Cluster(
                 panels.Where(x => x?.Face3D != null && x.Face3D.IsValid() && x.Plane != null && !x.IsVertical(tol.VerticalAngle))
                     .Select(x => x.Face3D)
@@ -147,9 +160,24 @@ namespace SAM.Geometry.OCCT.Solver
                 LevelFrame.DEFAULT_NormalConeTolerance,
                 LevelFrame.DEFAULT_ElevationBand);
             result.LevelFrames = capFrames;
+            result.LevelGroups = LevelFrame.GroupFrames(capFrames, bucketBetweenLevels, LevelFrame.DEFAULT_NormalConeTolerance, diagnostics);
+
             if (capFrames.Count != 0)
             {
-                Panel3DSnapSolver.NormalizeCaps(panels, capFrames, tol.Angle, tol.Distance, tol.VerticalAngle, diagnostics);
+                if (bucketBetweenLevels > tol.Distance)
+                {
+                    // Feature ON: normalize caps onto the GROUP datums (§4.2). effectiveBand widens the cap->datum
+                    // membership to max(0.15, bucketBetweenLevels) so a cap up to bucketBetweenLevels from a merged
+                    // group datum is claimed by that datum (not the nearest-datum ambiguity fallback).
+                    double effectiveBand = System.Math.Max(LevelFrame.DEFAULT_ElevationBand, bucketBetweenLevels);
+                    List<LevelFrame> groupDatums = result.LevelGroups.Select(x => x.ToDatumFrame()).ToList();
+                    Panel3DSnapSolver.NormalizeCaps(panels, groupDatums, tol.Angle, tol.Distance, tol.VerticalAngle, diagnostics, effectiveBand, cleanRecords);
+                }
+                else
+                {
+                    // Feature OFF (default): the EXACT pre-P2 frame-aware normalization call - byte-identical.
+                    Panel3DSnapSolver.NormalizeCaps(panels, capFrames, tol.Angle, tol.Distance, tol.VerticalAngle, diagnostics, LevelFrame.DEFAULT_ElevationBand, cleanRecords);
+                }
             }
             else
             {
@@ -162,6 +190,16 @@ namespace SAM.Geometry.OCCT.Solver
             // below is the only step that collapses several into one face, so attribution is measured against them.
             List<SnappedPanel> postSnap = panels.Where(x => x?.Face3D != null && x.Face3D.IsValid() && x.Plane != null).ToList();
             List<Face3D> face3Ds = postSnap.Select(x => x.Face3D).ToList();
+
+            // Drops: a panel that turned invalid/degenerate during snap (no valid face/plane) is dropped from the
+            // clean output - recorded so a vanished panel is never silent (§4.4 DroppedInvalid).
+            if (cleanRecords != null)
+            {
+                foreach (SnappedPanel dropped in panels.Where(x => x != null && (x.Face3D == null || !x.Face3D.IsValid() || x.Plane == null)))
+                {
+                    Panel3DSnapSolver.RecordClean(cleanRecords, dropped, null, CleanRecordKind.DroppedInvalid, 0.0);
+                }
+            }
 
             // 3. Coplanar merge - identical call (and fallback) to the legacy CleanBucket, so the geometry is
             //    unchanged; the mapping is recovered afterward by attribution rather than by re-implementing the
@@ -198,6 +236,20 @@ namespace SAM.Geometry.OCCT.Solver
                 double maxExtension = contributors.Count != 0
                     ? contributors.Max(x => x.MaxExtension)
                     : Panel3DSnapSolver.DEFAULT_MaxExtension;
+
+                // Coplanar merge (§4.4 CoplanarMerged): several post-snap panels absorbed into one clean face.
+                // The largest-area contributor is the surviving backer; the rest are recorded as merged onto it.
+                if (cleanRecords != null && contributors.Count > 1)
+                {
+                    SnappedPanel dominant = contributors.OrderByDescending(x => x.GetArea()).First();
+                    foreach (SnappedPanel merged2 in contributors)
+                    {
+                        if (!ReferenceEquals(merged2, dominant))
+                        {
+                            Panel3DSnapSolver.RecordClean(cleanRecords, merged2, dominant, CleanRecordKind.CoplanarMerged, 0.0);
+                        }
+                    }
+                }
 
                 result.CleanFace3Ds.Add(cleanFace3D);
                 result.CleanMaxExtensions.Add(maxExtension);

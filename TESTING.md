@@ -1684,3 +1684,52 @@ the ORIGINAL (uncleaned) panels' 22 raw cap elevations self-contained, its infer
 than Clean3D's own eventual 12.24/15.29/18.34 (e.g. West3's inferred span lands around 12.5/18.3, not
 exactly on the clean datums) - an expected, documented characteristic of the self-contained P1 approach on
 this messy fixture, not a bug; P2's `bucketBetweenLevels` plumbing is what makes the datums precise.
+
+## Level groups, clean records, exact Clean→Extend handoff (P2)
+
+`docs/CONTROLLED_WORKFLOW_PLAN.md` §4/§5.1/§3. **Every new behaviour is off by default (core and GH), so
+all ten golden-master signatures stay byte-identical** — `GoldenMasterIntegrationTests` is unchanged and
+still green (raw + managed paths). The P2 work is exercised by:
+
+**Unit (pure managed, `Testing/SAM.OCCT.UnitTests`):**
+
+- `LevelGroupTests` — `LevelFrame.GroupFrames` (the second-stage grouping over the raw frames, §4.1). The
+  raw `LevelFrame.Cluster`/0.15 band is UNCHANGED (`LevelFrameTests` pins are untouched); `GroupFrames`
+  merges frames dominant-area-first, seed-anchored and **non-transitively**. Covers the EXACT fixture
+  elevations 12.24/12.436/15.29/15.473/18.34 → **band 0.21 gives 3 groups at datums 12.24/15.29/18.34**,
+  0.15 gives 5 (with a near-miss diagnostic), 0 gives 5 (identity, no near-miss); dominant-area beats
+  lower-elevation for the datum; a frame beyond the band from the seed is not chained in via an intermediate
+  frame; shuffle determinism; tilted perpendicular-distance membership.
+- `CleanRecordTests` — the Stage A clean recorder (§4.4). The headline guarantee: **a null recorder is
+  byte-identical to the geometry** (the same clean run with a null recorder and with a live one produces
+  identical clean faces), and the real mutation sites (bucket snap → `SnappedToBacker`, cap normalization →
+  `CapNormalized`) emit their records.
+- `ParameterPrecedenceTests` — the D6 precedence fix (§3): a valid per-panel **stamp always wins** over the
+  derived value, which wins over the default, for BucketSize, Weight and MaxExtend. `ResolveWeights` now
+  derives with `SetWeights(@override: false)` and reads the stamp straight off the source, so a hand-set
+  `SolverParameter.Weight` is no longer clobbered (a stamp-free model derives identically to before). Each
+  resolved value carries a provenance tag (`stamped` / `derived-length` / `derived-thickness` / `min-floor`
+  / `default`) surfaced on the CleanReport. The resolvers are `internal` (InternalsVisibleTo the test
+  assemblies) so they can be asserted directly.
+- `InputAlreadyCleanTests` — the condition-only stage selection (§2). Flag OFF: Stage A runs and merges two
+  overlapping coplanar tiles into one clean face. Flag ON: Stage A is SKIPPED (the tiles pass through
+  unchanged, an identity source map is built, no clean records are produced, a `SAM_OCCT_CLEAN3D_SKIPPED`
+  diagnostic is emitted, and frames/groups are still clustered for reporting).
+
+**Integration (`Testing/SAM.OCCT.IntegrationTests`):**
+
+- `ControlledWorkflowLevelGroupIntegrationTests` — the fixture-level P2 outcomes. Clean3D/Extend3D are the
+  MANAGED pre-resolve passes, so these are plain `[Fact]`s (no native gate) and verify on CI: `Clean3D` on
+  the 9-space fixture with `bucketBetweenLevels: 0.21` yields **5 raw frames → 3 level groups at
+  12.24/15.29/18.34**; the default (0) is the identity; the CleanReport names the `5 -> 3` grouping and the
+  band and records real per-panel actions; and `Extend3D(inputAlreadyClean: true)` skips the second clean
+  (CLEAN-SKIPPED diagnostic, no clean records) while still reporting frames/groups.
+- `ControlledWorkflowBaselineTests` — the P0 baseline harness gains **path C**: the exact P2 handoff
+  `Extend3D(Clean3D(original, 0.21), inputAlreadyClean: true, 0.21)`, dumped alongside paths A/B with its
+  level groups, CleanReport, and the `PATH_C_CLEAN_SKIPPED` confirmation — the parity evidence that the
+  chain no longer double-cleans. Report-only (hard nine-space acceptance is P4).
+
+Grasshopper: `SAMOCCT.Clean3D` (0.4.0 → 0.5.0) and `SAMOCCT.Extend3D` (0.6.0 → 0.7.0) gain
+`bucketBetweenLevels_` (0) — plus `inputAlreadyClean_` (false) on Extend3D — inputs and `LevelGroups` /
+`CleanReport` outputs; `SAMOCCT.Solve3D` (0.5.0 → 0.6.0) gains `bucketBetweenLevels_` and a `LevelGroups`
+output. All new params are Voluntary/defaulted, so saved definitions keep working.

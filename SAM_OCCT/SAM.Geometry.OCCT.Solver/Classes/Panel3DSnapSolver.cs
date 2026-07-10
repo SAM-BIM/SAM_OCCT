@@ -282,6 +282,30 @@ namespace SAM.Geometry.OCCT.Solver
         /// </summary>
         public double NormalizeCapOffset { get; set; } = 0.3;
 
+        /// <summary>
+        /// P2 (docs/CONTROLLED_WORKFLOW_PLAN.md §4): the OPTIONAL level-group merge band (metres) that merges the
+        /// several near-coplanar slab-skin datums a single physical floor was imported as (e.g. the fixture's
+        /// 12.240 m and 12.436 m frames) onto ONE storey datum for cap normalization. Distinct from the raw
+        /// <see cref="LevelFrame.Cluster"/> band (a pinned 0.15 m, UNCHANGED): this is a wider grouping ON TOP of
+        /// the frames (<see cref="LevelFrame.GroupFrames"/>). <b>Default 0 = off</b> (groups ≡ frames), so the
+        /// solver is byte-identical to before P2 unless a caller opts in. Set to e.g. 0.21 to merge the 0.196 m /
+        /// 0.183 m slab-skin gaps of the controlled fixture (5 raw frames -> 3 level groups).
+        /// </summary>
+        public double BucketBetweenLevels { get; set; } = 0.0;
+
+        /// <summary>
+        /// P2 (docs/CONTROLLED_WORKFLOW_PLAN.md §2): condition-only mode for the exact Clean -> Extend handoff.
+        /// When true, the supplied faces are treated as the EXACT Stage A clean result - the managed Snap stage
+        /// (strip/opposed-collapse/bucket-snap/normalize/merge) is SKIPPED, an identity source map is built, the
+        /// stamped BucketSize/Weight/MaxExtend are reused as-is, the level frames/groups are clustered for
+        /// REPORTING ONLY (no normalization), and conditioning (<see cref="ConditionStage"/>) runs directly - so
+        /// a <c>Extend3D(Clean3D(panels))</c> chain does not clean twice. A coded CLEAN-SKIPPED diagnostic
+        /// records that Stage A was bypassed. <b>Default false = off</b>, byte-identical to the legacy double-clean
+        /// path. Only meaningful on the condition passes (<see cref="StopAfterExtend"/>); a full Solve still
+        /// raw-first-then-managed resolves.
+        /// </summary>
+        public bool InputAlreadyClean { get; set; } = false;
+
         /// <summary>Also extend walls up to a sloped roof above (not just horizontal floor caps), so the kernel
         /// can cut them at the pitch and enclose the under-roof space. Default true.</summary>
         public bool ExtendToRoofs { get; set; } = true;
@@ -354,6 +378,24 @@ namespace SAM.Geometry.OCCT.Solver
         /// </summary>
         public IReadOnlyList<LevelFrame> LevelFrames { get; private set; } = new List<LevelFrame>();
 
+        /// <summary>
+        /// The level GROUPS (P2, docs/CONTROLLED_WORKFLOW_PLAN.md §4.1) the managed clean bucket merged its
+        /// <see cref="LevelFrames"/> into over <see cref="BucketBetweenLevels"/> - the storey datums caps
+        /// normalize onto. With the default <see cref="BucketBetweenLevels"/> = 0 this is the identity of
+        /// <see cref="LevelFrames"/> (one group per frame). Empty when <see cref="RawAdopted"/> is true (the raw
+        /// path never clusters caps) or when no cap formed a frame. Read-only reporting capture.
+        /// </summary>
+        public IReadOnlyList<LevelGroup> LevelGroups { get; private set; } = new List<LevelGroup>();
+
+        /// <summary>
+        /// Per-decision observability for the managed clean bucket (P2, docs/CONTROLLED_WORKFLOW_PLAN.md §4.4):
+        /// one <see cref="CleanRecord"/> per applied Stage A mutation (opposed collapse, bucket snap, cap
+        /// normalization, coplanar merge, drop), captured at the REAL mutation site. Populated only on the managed
+        /// path (empty when the raw solve is adopted, and on <see cref="InputAlreadyClean"/> where Stage A is
+        /// skipped). Recording only - a null recorder is byte-identical to the geometry.
+        /// </summary>
+        public IReadOnlyList<CleanRecord> CleanRecords { get; private set; } = new List<CleanRecord>();
+
         /// <summary>The face set fed to the native MakerVolume - after the clean bucket, fill, extend and the
         /// coplanar pre-merge ("after bucket merge"). Exposed for visual debugging of the pre-resolve state.</summary>
         public List<Face3D> BucketMergedFace3Ds { get; private set; } = new List<Face3D>();
@@ -417,6 +459,8 @@ namespace SAM.Geometry.OCCT.Solver
             ResolvedCellCount = 0;
             Cells = new List<SolverCell>();
             LevelFrames = new List<LevelFrame>();
+            LevelGroups = new List<LevelGroup>();
+            CleanRecords = new List<CleanRecord>();
             ExtendRecords = new List<ExtendRecord>();
             Diagnostics = new SolverDiagnostics();
             Signature = null;
@@ -465,10 +509,20 @@ namespace SAM.Geometry.OCCT.Solver
             // SnapStage additionally attributes each clean face to the source panels that merged into it, so
             // its MaxExtend is carried by source identity (snapResult.CleanMaxExtensions), not list position -
             // the fix for the positional-MaxExtend bug in the pre-Phase-2 re-Register below.
+            //
+            // P2 (§2): InputAlreadyClean SKIPS Stage A entirely - the supplied faces are treated as the exact
+            // clean result (identity source map, stamped parameters reused, frames/groups clustered for reporting
+            // only), so a Extend3D(Clean3D(panels)) chain does not clean twice. Byte-identical to the legacy
+            // double-clean path when false (the default).
             SourceMap snapSourceMap = new SourceMap();
-            SnapStage.Result snapResult = SnapStage.Clean(SnappedPanels, tolerances, AlignColinearOffset, NormalizeCapOffset, Diagnostics, snapSourceMap);
+            List<CleanRecord> cleanRecordSink = new List<CleanRecord>();
+            SnapStage.Result snapResult = InputAlreadyClean
+                ? BuildConditionOnlyResult(SnappedPanels, maxExtensions_Adjusted, snapSourceMap)
+                : SnapStage.Clean(SnappedPanels, tolerances, AlignColinearOffset, NormalizeCapOffset, Diagnostics, snapSourceMap, BucketBetweenLevels, cleanRecordSink);
             CleanFace3Ds = snapResult.CleanFace3Ds;
             LevelFrames = snapResult.LevelFrames;
+            LevelGroups = snapResult.LevelGroups;
+            CleanRecords = cleanRecordSink;
 
             if (StopAfterClean)
             {
@@ -651,6 +705,50 @@ namespace SAM.Geometry.OCCT.Solver
             FinalizeAndValidate(resolvedFace3Ds, patchFace3Ds, retainedFace3Ds, retainResult.RetainedSourceIndices, resolvedSourceMap, resolveResult.ResolvedCellCount, options);
 
             DetectStackedSlabInterfaces(); // Phase 6d: observational - detect/verify/diagnose, no geometry change
+        }
+
+        /// <summary>
+        /// P2 (docs/CONTROLLED_WORKFLOW_PLAN.md §2): builds the condition-only <see cref="SnapStage.Result"/> for
+        /// <see cref="InputAlreadyClean"/> WITHOUT running any Stage A snap/normalize/merge. The supplied panels
+        /// are treated as the EXACT clean result: an identity clean-face-per-source mapping, the stamped MaxExtend
+        /// reused verbatim, and the level frames/groups clustered for REPORTING ONLY (no cap normalization moves
+        /// any geometry). Emits a coded CLEAN-SKIPPED diagnostic so the handoff is never silent. The conditioning
+        /// (<see cref="ConditionStage"/>) then runs directly on these faces, exactly as it would on Stage A output.
+        /// </summary>
+        private SnapStage.Result BuildConditionOnlyResult(List<SnappedPanel> panels, List<double> maxExtensions, SourceMap sourceMap)
+        {
+            SnapStage.Result result = new SnapStage.Result { SnapIterationCount = 0 };
+
+            for (int i = 0; i < panels.Count; i++)
+            {
+                SnappedPanel panel = panels[i];
+                Face3D face3D = panel?.Face3D;
+                if (face3D == null || !face3D.IsValid())
+                {
+                    continue; // an invalid supplied face is not "clean"; skip it rather than fabricate one
+                }
+
+                result.CleanFace3Ds.Add(face3D);
+                result.CleanMaxExtensions.Add(maxExtensions != null && i < maxExtensions.Count ? maxExtensions[i] : DEFAULT_MaxExtension);
+                result.SourceIndicesPerFace.Add(new List<int> { i });
+                sourceMap?.Record(i, new FaceKey(result.CleanFace3Ds.Count - 1), Provenance.Snapped); // identity source map
+            }
+
+            // Level frames/groups clustered for REPORTING ONLY - no NormalizeCaps runs, so no geometry moves.
+            List<LevelFrame> capFrames = LevelFrame.Cluster(
+                panels.Where(x => x?.Face3D != null && x.Face3D.IsValid() && x.Plane != null && !x.IsVertical(VerticalAngleTolerance))
+                    .Select(x => x.Face3D)
+                    .ToList(),
+                LevelFrame.DEFAULT_NormalConeTolerance,
+                LevelFrame.DEFAULT_ElevationBand);
+            result.LevelFrames = capFrames;
+            result.LevelGroups = LevelFrame.GroupFrames(capFrames, BucketBetweenLevels, LevelFrame.DEFAULT_NormalConeTolerance, Diagnostics);
+
+            Diagnostics.Add(SolverStage.Snap, DiagnosticCode.AdoptedLevel, OcctDiagnosticSeverity.Info,
+                string.Format("SAM_OCCT_CLEAN3D_SKIPPED: inputAlreadyClean=true - Stage A snap/normalize/merge skipped; {0} supplied panel(s) treated as the exact clean result (identity source map, stamped parameters reused, frames/groups clustered for reporting only).",
+                    result.CleanFace3Ds.Count));
+
+            return result;
         }
 
         /// <summary>
@@ -2506,7 +2604,26 @@ namespace SAM.Geometry.OCCT.Solver
         /// reason. Largest-area first, so the outer (larger) skin is projected onto its smaller partner's plane
         /// (the fragile room's side, which the post-resolve fill cannot re-grow); each face is consumed once.
         /// </summary>
-        public static void SnapOpposedPartitions(List<SnappedPanel> panels, double toleranceAngle, double toleranceDistance, SolverDiagnostics diagnostics = null)
+        /// <summary>
+        /// Appends a <see cref="CleanRecord"/> for a Stage A clean mutation, keyed by the panels' representative
+        /// source-face indices (their first <see cref="SnappedPanel.SourceIndices"/>). A NO-OP when
+        /// <paramref name="records"/> is null - the null-recorder geometry-parity guarantee
+        /// (docs/CONTROLLED_WORKFLOW_PLAN.md §4.4): recording is a pure side effect on an optional sink and never
+        /// touches the geometry.
+        /// </summary>
+        internal static void RecordClean(List<CleanRecord> records, SnappedPanel panel, SnappedPanel backer, CleanRecordKind kind, double distanceMoved, int levelGroupIndex = -1)
+        {
+            if (records == null || panel == null)
+            {
+                return;
+            }
+
+            int sourceIndex = RepresentativeSource(panel);
+            int backerIndex = backer == null || ReferenceEquals(panel, backer) ? -1 : RepresentativeSource(backer);
+            records.Add(new CleanRecord(sourceIndex, backerIndex, kind, distanceMoved, levelGroupIndex));
+        }
+
+        public static void SnapOpposedPartitions(List<SnappedPanel> panels, double toleranceAngle, double toleranceDistance, SolverDiagnostics diagnostics = null, List<CleanRecord> records = null)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -2579,8 +2696,10 @@ namespace SAM.Geometry.OCCT.Solver
 
                     // Project the larger skin onto the smaller skin's plane (the fragile room's side), and mark
                     // the smaller skin consumed (a no-op self-projection) so the weighted snap leaves it put.
+                    double collapseDistance = a.PerpendicularSeparation(b); // captured before the move
                     a.SnapToBacker(b.Plane);
                     b.SnapToBacker(b.Plane);
+                    RecordClean(records, a, b, CleanRecordKind.OpposedCollapsed, collapseDistance);
                     break; // a is consumed; move to the next a
                 }
             }
@@ -2656,7 +2775,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// </para>
         /// </summary>
         /// <returns>True when at least one panel moved this pass - the fixed-point loop's convergence signal.</returns>
-        public static bool Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance = Tolerance.Distance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3)
+        public static bool Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance = Tolerance.Distance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3, List<CleanRecord> records = null)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -2752,13 +2871,19 @@ namespace SAM.Geometry.OCCT.Solver
                         if (candidateMoved)
                         {
                             candidate.GrowBucket(halfOffset);
+                            RecordClean(records, candidate, backer, CleanRecordKind.SnappedToBacker, halfOffset);
                         }
 
                         anyChanged = anyChanged || backerMoved || candidateMoved;
                     }
                     else
                     {
-                        anyChanged = candidate.SnapToBacker(backer.Plane) || anyChanged;
+                        double snapDistance = backer.PerpendicularSeparation(candidate); // captured before the move
+                        if (candidate.SnapToBacker(backer.Plane))
+                        {
+                            RecordClean(records, candidate, backer, CleanRecordKind.SnappedToBacker, snapDistance);
+                            anyChanged = true;
+                        }
                     }
                 }
             }
@@ -2852,7 +2977,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// A frame with a single cap is a no-op. When <paramref name="frames"/> is null/empty the caller falls
         /// back to the legacy world-frame overload.
         /// </summary>
-        public static void NormalizeCaps(List<SnappedPanel> panels, IReadOnlyList<LevelFrame> frames, double toleranceAngle, double toleranceDistance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), SolverDiagnostics diagnostics = null)
+        public static void NormalizeCaps(List<SnappedPanel> panels, IReadOnlyList<LevelFrame> frames, double toleranceAngle, double toleranceDistance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), SolverDiagnostics diagnostics = null, double elevationBand = LevelFrame.DEFAULT_ElevationBand, List<CleanRecord> records = null)
         {
             if (panels == null || panels.Count < 2 || frames == null || frames.Count == 0)
             {
@@ -2872,7 +2997,7 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
-                FaceRole role = LevelFrame.ClassifyFace(panel.Face3D, frames, out int frameIndex, verticalAngleTolerance, diagnostics);
+                FaceRole role = LevelFrame.ClassifyFace(panel.Face3D, frames, out int frameIndex, verticalAngleTolerance, diagnostics, elevationBand);
                 if (role != FaceRole.Cap || frameIndex < 0)
                 {
                     continue;
@@ -2915,7 +3040,12 @@ namespace SAM.Geometry.OCCT.Solver
 
                     if (backer.IsParallelWith(candidate, toleranceAngle))
                     {
-                        candidate.SnapToBacker(backer.Plane);
+                        Point3D candidateCentre = candidate.GetBoundingBox()?.GetCentroid();
+                        double capDistance = candidateCentre == null ? 0.0 : System.Math.Abs(backer.Plane.Distance(candidateCentre)); // before the move
+                        if (candidate.SnapToBacker(backer.Plane))
+                        {
+                            RecordClean(records, candidate, backer, CleanRecordKind.CapNormalized, capDistance, entry.Key);
+                        }
                     }
                 }
             }

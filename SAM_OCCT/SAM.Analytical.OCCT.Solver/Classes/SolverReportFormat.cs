@@ -175,6 +175,126 @@ namespace SAM.Analytical.OCCT.Solver
             return result;
         }
 
+        /// <summary>One <c>SAM_OCCT_CLEAN3D_LEVELGROUP</c> line per level group (P2,
+        /// docs/CONTROLLED_WORKFLOW_PLAN.md §4.1): the group datum elevation, the raw frame indices it merged and
+        /// their elevations, the total cap count, the perpendicular spread and the tilt.</summary>
+        public static List<string> FormatLevelGroups(IReadOnlyList<LevelGroup> levelGroups, IReadOnlyList<LevelFrame> levelFrames)
+        {
+            List<string> result = new List<string>();
+            if (levelGroups == null)
+            {
+                return result;
+            }
+
+            for (int i = 0; i < levelGroups.Count; i++)
+            {
+                LevelGroup group = levelGroups[i];
+                if (group == null)
+                {
+                    continue;
+                }
+
+                string frames = string.Join(",", group.FrameIndices ?? new List<int>());
+                string elevations = string.Join(", ", (group.MemberElevations ?? new List<double>()).Select(x => string.Format("{0:0.###}", x)));
+                result.Add(string.Format(
+                    "SAM_OCCT_CLEAN3D_LEVELGROUP: group {0}: elevation {1:0.###} m, frames [{2}] ({3}), {4} cap(s), spread {5:0.###} m, tilt {6:0.#} deg",
+                    i, group.Elevation, frames, elevations, group.CapCount, group.Spread, group.TiltAngle * (180.0 / System.Math.PI)));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// The full CleanReport (P2 §4): a <c>SAM_OCCT_CLEAN3D_LEVELS</c> summary (raw frame count -> group count
+        /// + the <c>bucketBetweenLevels</c> band), the per-group <c>SAM_OCCT_CLEAN3D_LEVELGROUP</c> lines, and one
+        /// <c>SAM_OCCT_CLEAN3D_PANEL</c> line per <see cref="CleanRecord"/> - the mutated panel (source Guid +
+        /// index), the clean action, the distance moved onto its backer, and the resolved BucketSize/Weight/
+        /// MaxExtend with their <see cref="ParameterProvenance"/> tags (the parameter reporting the geometry
+        /// solver cannot do - it carries no Guids or provenance). The value/provenance lists are index-aligned to
+        /// <paramref name="sources"/>.
+        /// </summary>
+        public static List<string> FormatCleanReport(
+            IReadOnlyList<CleanRecord> cleanRecords,
+            IReadOnlyList<LevelGroup> levelGroups,
+            IReadOnlyList<LevelFrame> levelFrames,
+            IReadOnlyList<Panel> sources,
+            IReadOnlyList<double> bucketValues,
+            IReadOnlyList<ParameterProvenance> bucketProvenance,
+            IReadOnlyList<double> weightValues,
+            IReadOnlyList<ParameterProvenance> weightProvenance,
+            IReadOnlyList<double> maxExtendValues,
+            IReadOnlyList<ParameterProvenance> maxExtendProvenance,
+            double bucketBetweenLevels)
+        {
+            List<string> result = new List<string>();
+
+            int frameCount = levelFrames?.Count ?? 0;
+            int groupCount = levelGroups?.Count ?? 0;
+            result.Add(string.Format(
+                "SAM_OCCT_CLEAN3D_LEVELS: {0} raw level frame(s) -> {1} level group(s) (bucketBetweenLevels={2:0.###} m).",
+                frameCount, groupCount, bucketBetweenLevels));
+
+            result.AddRange(FormatLevelGroups(levelGroups, levelFrames));
+
+            foreach (CleanRecord cleanRecord in cleanRecords ?? new List<CleanRecord>())
+            {
+                if (cleanRecord == null)
+                {
+                    continue;
+                }
+
+                System.Text.StringBuilder line = new System.Text.StringBuilder();
+                line.Append(string.Format("SAM_OCCT_CLEAN3D_PANEL: panel {0} {1}",
+                    CleanPanelLabel(cleanRecord.SourceIndex, sources), cleanRecord.KindText()));
+
+                if (cleanRecord.BackerSourceIndex >= 0)
+                {
+                    line.Append(string.Format("; moved {0:0.###} m onto {1}", cleanRecord.DistanceMoved, CleanPanelLabel(cleanRecord.BackerSourceIndex, sources)));
+                }
+                else if (cleanRecord.Kind != CleanRecordKind.DroppedInvalid)
+                {
+                    line.Append(string.Format("; moved {0:0.###} m", cleanRecord.DistanceMoved));
+                }
+
+                line.Append(string.Format("; bucket {0}; weight {1}; maxExtend {2}",
+                    ValueTag(cleanRecord.SourceIndex, bucketValues, bucketProvenance),
+                    ValueTag(cleanRecord.SourceIndex, weightValues, weightProvenance),
+                    ValueTag(cleanRecord.SourceIndex, maxExtendValues, maxExtendProvenance)));
+
+                if (cleanRecord.LevelGroupIndex >= 0)
+                {
+                    line.Append(string.Format("; group {0}", cleanRecord.LevelGroupIndex));
+                }
+
+                result.Add(line.ToString());
+            }
+
+            return result;
+        }
+
+        /// <summary>"{source Guid} (#{sourceIndex})" for a clean record's panel; "n/a (#idx)" when the source
+        /// index is out of range or the panel is absent.</summary>
+        private static string CleanPanelLabel(int sourceIndex, IReadOnlyList<Panel> sources)
+        {
+            string guid = sourceIndex >= 0 && sources != null && sourceIndex < sources.Count && sources[sourceIndex] != null
+                ? sources[sourceIndex].Guid.ToString()
+                : "n/a";
+            return string.Format("{0} (#{1})", guid, sourceIndex);
+        }
+
+        /// <summary>"{value:0.###} ({provenance-tag})" for a resolved parameter at <paramref name="sourceIndex"/>,
+        /// or "n/a" when the index is out of range.</summary>
+        private static string ValueTag(int sourceIndex, IReadOnlyList<double> values, IReadOnlyList<ParameterProvenance> provenance)
+        {
+            if (sourceIndex < 0 || values == null || sourceIndex >= values.Count)
+            {
+                return "n/a";
+            }
+
+            string tag = provenance != null && sourceIndex < provenance.Count ? provenance[sourceIndex].ToTag() : "n/a";
+            return string.Format("{0:0.###} ({1})", values[sourceIndex], tag);
+        }
+
         /// <summary>
         /// One line per cell: index, volume, centre, and its classified role when <paramref name="cellRoles"/>
         /// is supplied and index-aligned to <paramref name="cells"/> (else "not classified").

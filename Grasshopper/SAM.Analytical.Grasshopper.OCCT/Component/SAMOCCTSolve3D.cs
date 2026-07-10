@@ -25,7 +25,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("3d6b9e02-4a17-4c8d-b5e3-1f9a2c7d4e8b");
 
-        public override string LatestComponentVersion => "0.5.0";
+        public override string LatestComponentVersion => "0.6.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -59,6 +59,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Number normalizeCapOffset = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "normalizeCapOffset_", NickName = "normalizeCapOffset_", Description = "Max perpendicular offset (m) within which a level's floor/roof tiles are normalized onto one plane (the dominant cap's). Collapses the small plane differences left when several imported roof/floor tiles over one space are merged at slightly different tilts/elevations, so the kernel can close the cell. Floors and roofs separate automatically. 0 = disable. Default 0.3.", Access = GH_ParamAccess.item };
                 normalizeCapOffset.SetPersistentData(0.3);
                 result.Add(new GH_SAMParam(normalizeCapOffset, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number bucketBetweenLevels = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "bucketBetweenLevels_", NickName = "bucketBetweenLevels_", Description = "Level-group merge band (m, P2): merges the several near-coplanar slab-skin datums one physical floor was imported as onto a single storey datum for cap normalization. Wider than the pinned 0.15 m raw frame band; 0 = off (default). Only affects the managed pipeline (a raw-first-adopted solve never clusters caps).", Access = GH_ParamAccess.item };
+                bucketBetweenLevels.SetPersistentData(0.0);
+                result.Add(new GH_SAMParam(bucketBetweenLevels, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number slitMinGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "slitMinGap_", NickName = "slitMinGap_", Description = "Minimum perpendicular gap (m) of a remaining double-wall/slit to report in the slits diagnostics.", Access = GH_ParamAccess.item };
                 slitMinGap.SetPersistentData(0.02);
@@ -110,7 +114,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "CellClassification", NickName = "CellClassification", Description = "Interior/Exterior/Sliver/Unknown role of each resolved cell, index-aligned with Cells. Empty unless classifyCells_ is true.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
                 result.Add(new GH_SAMParam(new GooSAMGeometryParam() { Name = "NakedWires", NickName = "NakedWires", Description = "Residual naked (free) boundary loops as polylines (closed where the loop closes on itself).", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "SourceMap", NickName = "SourceMap", Description = "One line per input source: which resolved output face(s) it contributed to, and how (provenance).", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
-                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelFrames", NickName = "LevelFrames", Description = "One line per clustered level datum (elevation, tilt, cap count) the managed pipeline conditioned onto. Empty when the raw-first attempt was adopted or the model formed no frames.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelFrames", NickName = "LevelFrames", Description = "One line per clustered RAW level datum (elevation, tilt, cap count) the managed pipeline conditioned onto. Empty when the raw-first attempt was adopted or the model formed no frames.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "LevelGroups", NickName = "LevelGroups", Description = "One line per level GROUP (P2): the merged storey datum caps normalize onto (elevation, the raw frames it merged, cap count, spread, tilt). Equals LevelFrames when bucketBetweenLevels = 0. Empty when the raw-first attempt was adopted or the model formed no frames.", Access = GH_ParamAccess.list }, ParamVisibility.Voluntary));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "ClosureReport", NickName = "ClosureReport", Description = "Human-readable summary of the solve: adopted path, raw/final closure signatures, AutoTune rounds, diagnostics counts, level frames.", Access = GH_ParamAccess.item }, ParamVisibility.Voluntary));
 
                 // P3 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): the CellComplex the solve adopted, exposed as a
@@ -180,6 +185,13 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref normalizeCapOffset);
             }
 
+            double bucketBetweenLevels = 0.0;
+            index = Params.IndexOfInputParam("bucketBetweenLevels_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref bucketBetweenLevels);
+            }
+
             double slitMinGap = 0.02;
             index = Params.IndexOfInputParam("slitMinGap_");
             if (index != -1)
@@ -217,7 +229,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
             // weights/maxExtends null => read SolverParameter.Weight / SolverParameter.MaxExtend off each
             // panel (the same parameters SAMAnalytical.Visualize shows), so they can be tuned per panel.
-            List<Panel> resolvedPanels = panels.Solve3D(out List<Point3D> nakedPoint3Ds, out List<string> diagnostics, out _, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, classifyCells: classifyCells, minCellVolume: minCellVolume);
+            List<Panel> resolvedPanels = panels.Solve3D(out List<Point3D> nakedPoint3Ds, out List<string> diagnostics, out _, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, classifyCells: classifyCells, minCellVolume: minCellVolume, bucketBetweenLevels: bucketBetweenLevels);
 
             // P3 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): stamp every output panel with this solve's SolveId
             // (PanelProvenanceParameter), and attach the SAME roster to the CellComplex output, so
@@ -324,6 +336,12 @@ namespace SAM.Analytical.Grasshopper.OCCT
             if (index != -1)
             {
                 dataAccess.SetDataList(index, report == null ? null : SolverReportFormat.FormatLevelFrames(report.LevelFrames));
+            }
+
+            index = Params.IndexOfOutputParam("LevelGroups");
+            if (index != -1)
+            {
+                dataAccess.SetDataList(index, report?.FormatLevelGroups());
             }
 
             index = Params.IndexOfOutputParam("ClosureReport");
