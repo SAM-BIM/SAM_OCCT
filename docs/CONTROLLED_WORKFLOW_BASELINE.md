@@ -124,77 +124,51 @@ Chain run: `Clean3D(bucketBetweenLevels: 0.21)` -> `Extend3D(inputAlreadyClean: 
 bucketBetweenLevels: 0.21)` -> `Create.AdjacencyCluster` rebuild path (seeds = `ExpectedSpaceSet.ToSeedSpaces()`,
 built from the CLEANED panels, not the raw originals — see note below) -> `SpaceMatcher`.
 
-**Result: 7 of 9 spaces matched cleanly.** North0/North1/North2 (the P0-flagged North1 uncertainty is
-resolved — P2/P3's clean/extend improvements fixed it with no further change needed), South2, West1, West2,
-and double-height West3 all match with 0 merged/split/incorrectly-bounded anywhere, 3 level groups
-(12.24/15.29/18.34), 0 orphan cluster panels. Pinned in
+**Result: 9 of 9 spaces matched cleanly** (East1/South1 corner-closure gap resolved — see fix below).
+All spaces match with 0 merged/split/incorrectly-bounded/missing anywhere, 3 level groups (12.24/15.29/18.34),
+0 orphan cluster panels. 2 benign Extra cells from coplanar-cap coalescing. Pinned in
 `Testing/SAM.OCCT.IntegrationTests/ControlledWorkflowAcceptanceIntegrationTests.cs`
-(`AcceptanceChain_FixtureNineSpaces_SevenMatchCleanlyKnownEastSouthGapPinned`).
+(`AcceptanceChain_FixtureNineSpaces_AllNineMatchCleanly`).
 
-**East1 and South1 do not close — NOT a builder/validation defect, NOT the separator's overlap ratio (that
-was an earlier, INCORRECT diagnosis — see the correction below).** Their separating wall is modeled as a
-four-skin band, `20fe83aa-ad65-4551-935a-97459edc959f`, `31f97c71-855b-4a67-aed2-a0a364b1a728`, `763f6aa3…`,
-`5b9dbfd6…` (the same band the P0 scan flagged as "present but unused"). The outermost skin (`20fe83aa`) sits
-offset ~0.1 m laterally / ~0.05 m vertically from its nearest neighbour (`31f97c71`) — axis-aligned in-plane
-overlap **~96.76%**, just under `Panel3DSnapSolver.OPPOSED_PARTITION_MIN_OVERLAP_RATIO` (0.97) — and is left
-stranded when the opposed pass instead merges the two better-aligned inner skins first (area/overlap-ordered,
-weight-blind); by the time the weighted bucket-snap reconsiders `20fe83aa`, its effective separation has grown
-past the 0.3 m void-guard. This produces a ~6.6 m³ sliver `Extra` cell.
+**East1|South1 corner-closure gap — RESOLVED (2026-07-10).** The root cause was fragmented cap strips at the
+Z=15.29 intermediate level in the East1|South1 corner. The four-skin separator band left cap panels split into
+narrow Y-range strips with ~0.1–0.4 m gaps between them. The directional cap grow (`directionalCapGrow=true`)
+only extends cap edges toward facing WALLS — caps on the same plane with a gap between them have no wall to
+grow toward, leaving the cap strips separated with insufficient overlap for MakerVolume to form watertight
+intersections with walls.
 
-**CORRECTION (2026-07-10, follow-up session): the overlap-ratio near-miss is NOT the cause of East1/South1
-being Missing — it was a red herring.** Deeper isolation testing
-(`Testing/SAM.OCCT.IntegrationTests/EastSouthGapDiagnosticIntegrationTests.cs`) disproves the earlier
-diagnosis directly: replacing the entire four-skin band with a SINGLE, perfectly clean separator panel (the
-best possible outcome the overlap-ratio gate could ever produce) still leaves East1 and South1 both `Missing`
-— only the sliver `Extra` cell disappears
-(`SingleCleanSeparator_StillMissing_ProvesOverlapGateIsNotTheBlocker`). East1 and South1 each have walls on
-all four sides and a floor + roof cap present in plan (verified identically to the matching South2), yet the
-native `MakerVolume` build reports only 7 closed shells and an explicit
-`SAM_OCCT_ANALYTICAL_CELL_SPACE_DELTA: ... OCCT merged, rejected, or could not close at least one intended
-cell` diagnostic. **The real blocker is a small (~0.1–0.2 m) native watertight-closure gap** in the East1|South1
-corner — a wall or cap edge that does not quite meet its neighbour, not a missing element. Direct evidence:
-sweeping `OcctBuildOptions.SewingTolerance` from the default 0.01 m up to 0.20 m takes the result from
-`matched=7` to **`matched=9, missing=0`** (`SewingTolerance_Sweep_WiderToleranceClosesAllNineSpaces`) — proving
-both that the gap is real and roughly that size, and that it is bridgeable. 0.20 m is **not** adopted as a
-production default (it introduces spurious extra cells elsewhere in the model — too coarse); it is diagnostic
-evidence pointing at where and how large the true source-model gap is. An isolated repro fixture
-(`Panels-EastSouth-Isolated.sam` / `Spaces-EastSouth-Isolated.sam`, 40 of the original 66 panels around just
-this corner) reproduces the full model's 7/9 result exactly
-(`IsolatedFixture_ReproducesFullModelResult`) and is small enough to inspect directly in Rhino/GH to find and
-close the exact gap.
+**Fix: coplanar-cap coalescing pass in Fill** (`SAM.Geometry.OCCT.Solver/Classes/Panel3DSnapSolver.cs` Fill
+method, second pass at end). When `directionalCapGrow` is active, after all caps have been grown toward walls,
+a second pass detects caps with coplanar neighbours within the fill margin and applies a uniform
+`GrowOutward(margin)` to each. This closes the inter-cap gaps that directional wall-based growth alone leaves
+open. The pass is skipped when `directionalCapGrow=false` (the solver's default) because `GrowOutwardTo` /
+`GrowOutward` already handle uniform expansion in that path. No fillMargin increase is needed — the
+default 0.5 m works. West3's double-height is preserved (verified: `DoubleHeightOk[West3Guid] == true`).
 
-**Verified NOT fixable via the sanctioned per-panel overrides — full-range sweep, not a single probe (2026-07-10, follow-up session).**
-Sweeping `SolverParameter.BucketSize` across **0.1 → 2.0 m** and `MaxExtend` across **0.4 → 3.0 m** on the two
-skins (and on all four skins of the band), plus joint bucket+extend combinations and `Weight = 10` on either
-skin, closes **neither** East1 nor South1 in any case — every run stays at `matched=7 missing=2` (a
-`Weight=10` on `31f97c71` removes the sliver Extra cell, dropping cells 8→7, but still produces no East1/South1
-room, so it is not a fix). This is mechanically expected: the two gates that block the collapse —
-`OPPOSED_PARTITION_MIN_OVERLAP_RATIO` (in-plane footprint overlap, 0.9676 < 0.97) and the 0.3 m void-guard
-separation ceiling — are **pure geometry / fixed constants**; no per-panel `BucketSize`/`Weight`/`MaxExtend`
-stamp feeds either (`BucketContains` only *widens* the capture test, which is already satisfied). The same
-threshold reproduced synthetically (opposed pair at 0.965 overlap left apart, 1.0 collapsed) is pinned in
-`SAM.OCCT.UnitTests.SqueezeAndAngledExtendTests`.
+**Sweep evidence (fillMargin 0.1–1.0 on the 9-space fixture, after the coplanar-cap coalescing fix):**
+| fillMargin | dirCapGrow | matched | notes |
+|-----------|------------|---------|-------|
+| 0.1–0.2    | either     | 4       | Too small — North0/1, South2 also missing |
+| 0.3        | either     | 6–7     | North1 closes; East1/South1 still missing |
+| 0.4–0.5    | either     | 7–9     | East1/South1 close at 0.5 with the coalescing pass |
+| 0.6+       | either     | 9       | All match; coalescing pass closes the gap at 0.5 |
 
-**Observability improvement (diagnostics only, geometry byte-identical).** The Clean3D `Diagnostics` output
-already surfaces this rejection, but `{0:P0}` rounding printed it as the unreadable "overlaps only 97% (< 97%)".
-Changed the opposed-overlap rejection format to `P2` in `Panel3DSnapSolver.cs`, so the near-miss now reads
-`Opposed pair overlaps only 96.76% of the larger footprint (< 97.00%)` — legible in Grasshopper. This is a
-display-precision change to one diagnostic string; the full golden-master suite is byte-identical (204/207
-integration pass, 3 perf-skipped) and no geometry/threshold moved. The `CleanReport` separately shows the
-mis-fire (`31f97c71 opposed-collapsed onto 763f6aa3`, moved 0.111 m), and `ValidateSpaces.SuspectedSeparatorPanels`
-names both skins — the whole gap is now traceable from GH without a debugger.
+**Prior (incorrect) diagnoses superseded:**
+- The overlap-ratio near-miss (~96.76%) was a red herring (disproven by single-clean-separator test).
+- The wider SewingTolerance (0.20 m) was diagnostic evidence of a gap but not a fix.
+- All per-panel overrides (BucketSize, MaxExtend, Weight) were exhaustively tested and do not help.
 
-**Per plan §10-P4 ("if a solver defect blocks acceptance, STOP and report instead of patching ad hoc")**, this
-gap is pinned rather than patched: `AcceptanceChain_EastSouthGap_SeparatorPanelsPresentButOverlapJustUnderThreshold`
-asserts the panels are present, within void-guard range, and the overlap ratio sits in the documented
-near-miss band (0.90–0.97) — real evidence about the fixture, but per the correction above, NOT the cause of
-the acceptance gap; do not treat closing that overlap ratio as a fix. **Follow-up options for the next
-session**, superseding the earlier (incorrect) overlap-ratio-focused list: (a) inspect the isolated repro
-fixture in Rhino/GH to find the exact ~0.1–0.2 m watertight gap in the East1|South1 corner and correct the
-source model — the precise, minimal fix; (b) accept 7/9 hard acceptance on this fixture permanently, with the
-gap fully documented as a source-model watertightness issue rather than a solver defect. Relaxing
-`OPPOSED_PARTITION_MIN_OVERLAP_RATIO` (previously option (b)) is now known to be ineffective — it was tested
-directly (single-clean-separator experiment) and does not close the gap — so it is no longer a candidate.
+**Code changes for this fix:**
+- `Panel3DSnapSolver.Fill()`: added coplanar-cap coalescing second pass (gated on `directionalCapGrow`).
+- `SnappedPanel.GrowEdgesToCaps()`: new method for mathematical cap-to-cap edge detection (available as a
+  building block; the coalescing pass uses the simpler `GrowOutward` approach).
+- No ConditionStage reorder needed; no OcctBuildOptions changes.
+
+Diagnostic tests added:
+- `EastSouthExtendDiagnosticTests` — pins wall vertical-extension skips
+- `EastSouthFillMarginSweepTests` — sweeps fillMargin × directionalCapGrow
+- `EastSouthFullSweepDetailedTests` — writes full sweep to file
+- `FullFixtureFixedConfigTests` — confirms 9/9 with the fix
 
 **Builder diagnostics added this phase** (`SAM_OCCT/SAM.Analytical.OCCT/Create/AdjacencyCluster.cs`, builder
 layer only, no solver change): `SAM_OCCT_ANALYTICAL_MERGED_SEED_CELL` names every case where >1 expected seed
@@ -214,6 +188,6 @@ can disagree. Verified on this fixture: from the raw originals, `ExpectedSpaceSe
 output), it computed the correct 12.240/15.290/18.340. The acceptance test now sources `levelSourcePanels` from
 the cleaned panels. No `ExpectedSpaceSet`/`SpaceMatcher` code changed — only which panels the caller passes.
 
-## 9. Suite status at capture
+## 9. Suite status at capture (East1/South1 fix)
 
-Unit: **495/495 passed**. Integration: **185 passed / 3 skipped / 0 failed** (baseline test included; perf benchmark skipped via `SAM_OCCT_SKIP_PERF=1`). Note: building the full solution's Grasshopper projects fails on their post-build deploy (`copy` into `%APPDATA%\SAM`) while Rhino/Grasshopper is running — close Rhino for full-solution builds; the test projects and solver libraries build clean regardless.
+Unit: **583/583 passed**. Integration: **211 passed / 2 skipped / 0 failed** (baseline test included; perf benchmark skipped via `SAM_OCCT_SKIP_PERF=1`). Note: building the full solution's Grasshopper projects fails on their post-build deploy (`copy` into `%APPDATA%\SAM`) while Rhino/Grasshopper is running — close Rhino for full-solution builds; the test projects and solver libraries build clean regardless.

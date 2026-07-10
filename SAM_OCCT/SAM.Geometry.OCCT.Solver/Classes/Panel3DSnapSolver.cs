@@ -2656,14 +2656,23 @@ namespace SAM.Geometry.OCCT.Solver
 
                 double areaBefore = panel.GetArea();
 
-                string targetKind;
+                bool grewToWalls = false;
+                string wallKind = null;
                 if (directionalCapGrow && panel.GrowEdgesToWalls(walls, margin, overshoot, toleranceDistance))
                 {
-                    targetKind = "walls-directional";
+                    wallKind = "walls-directional";
+                    grewToWalls = true;
                 }
                 else if (panel.GrowOutwardTo(walls, margin, overshoot, toleranceDistance))
                 {
-                    targetKind = "walls-measured";
+                    wallKind = "walls-measured";
+                    grewToWalls = true;
+                }
+
+                string targetKind;
+                if (grewToWalls)
+                {
+                    targetKind = wallKind;
                 }
                 else if (panel.GrowOutward(margin, toleranceDistance))
                 {
@@ -2703,7 +2712,7 @@ namespace SAM.Geometry.OCCT.Solver
                     -1, -1, targetKind, string.Empty,
                     overshoot, false);
 
-                if (directionalCapGrow && targetKind != "walls-directional")
+                if (directionalCapGrow && targetKind != null && !targetKind.StartsWith("walls-directional"))
                 {
                     // Directional growth was requested but this cap did not get it - visible, not silent.
                     record.AddRisk(ExtendRiskFlag.LegacyUniformCapGrow);
@@ -2715,6 +2724,50 @@ namespace SAM.Geometry.OCCT.Solver
                 }
 
                 records.Add(record);
+            }
+
+            // Second pass (directionalCapGrow only): when directional wall-based growth is active,
+            // caps only grow toward facing walls — inter-cap regions may be left with insufficient
+            // overlap for MakerVolume to form watertight intersections. A targeted uniform growth
+            // for caps that have coplanar neighbours within the margin closes these gaps without
+            // the blind full-model overshoot of raising fillMargin. Skipped when directionalCapGrow
+            // is false because GrowOutwardTo/GrowOutward already handle uniform expansion.
+            if (directionalCapGrow)
+            {
+                for (int i = 0; i < caps.Count; i++)
+                {
+                    SnappedPanel cap = caps[i];
+                    BoundingBox3D capBox = cap.GetBoundingBox();
+                    if (capBox == null) continue;
+
+                    bool hasCoplanarNeighbour = false;
+                    for (int j = 0; j < caps.Count; j++)
+                    {
+                        if (i == j) continue;
+                        SnappedPanel other = caps[j];
+                        if (!cap.IsCoplanarWith(other, Core.Tolerance.Angle, 0.01)) continue;
+                        BoundingBox3D otherBox = other.GetBoundingBox();
+                        if (otherBox == null) continue;
+
+                        double gapX = System.Math.Max(0,
+                            System.Math.Max(capBox.Min.X - otherBox.Max.X, otherBox.Min.X - capBox.Max.X));
+                        double gapY = System.Math.Max(0,
+                            System.Math.Max(capBox.Min.Y - otherBox.Max.Y, otherBox.Min.Y - capBox.Max.Y));
+
+                        // Neighbour within reach: overlap in at least one axis and within margin in the other.
+                        if ((gapX <= toleranceDistance && gapY <= margin + toleranceDistance)
+                            || (gapY <= toleranceDistance && gapX <= margin + toleranceDistance))
+                        {
+                            hasCoplanarNeighbour = true;
+                            break;
+                        }
+                    }
+
+                    if (hasCoplanarNeighbour)
+                    {
+                        cap.GrowOutward(margin, toleranceDistance);
+                    }
+                }
             }
         }
 

@@ -772,6 +772,200 @@ namespace SAM.Geometry.OCCT.Solver
             return true;
         }
 
+        /// <summary>
+        /// Cap-to-cap analogue of <see cref="GrowEdgesToWalls"/>: grows each straight external edge of this
+        /// cap toward the nearest FACING edge of another coplanar cap (an edge whose outward direction
+        /// opposes this edge's outward direction — two caps on the same plane with a gap between them).
+        /// Each edge grows independently by only its own measured gap to the facing cap edge plus overshoot.
+        /// An edge with no facing cap edge within <paramref name="maxReach"/> grows exactly 0.
+        /// </summary>
+        /// <param name="caps">All caps (non-vertical panels), including this one (skipped by identity).</param>
+        /// <param name="maxReach">Upper bound on how far any single edge may grow (the fill margin).</param>
+        /// <param name="overshoot">Small extra growth past the measured gap so the kernel trims cleanly.</param>
+        /// <param name="tolerance">Linear tolerance for degenerate-edge and overlap checks.</param>
+        /// <returns>True when at least one edge grew toward a facing cap edge.</returns>
+        public bool GrowEdgesToCaps(IEnumerable<SnappedPanel> caps, double maxReach, double overshoot, double tolerance)
+        {
+            if (face3D == null || plane == null || caps == null || maxReach <= tolerance)
+            {
+                return false;
+            }
+
+            List<Point3D> boundary3D = BoundaryPoints(face3D);
+            Geometry.Planar.ISegmentable2D externalEdge2D = face3D.ExternalEdge2D as Geometry.Planar.ISegmentable2D;
+            List<Geometry.Planar.Point2D> boundary2D = externalEdge2D?.GetPoints();
+            int n = boundary3D?.Count ?? 0;
+            if (boundary2D == null || boundary2D.Count != n || n < 3)
+            {
+                return false;
+            }
+
+            // Other caps on the same plane (within tolerance), excluding this one.
+            List<SnappedPanel> otherCaps = caps
+                .Where(x => x != null && !ReferenceEquals(x, this) && x.Plane != null && IsCoplanarWith(x, Core.Tolerance.Angle, 0.01))
+                .Where(x => x.GetBoundingBox() != null)
+                .ToList();
+
+            if (otherCaps.Count == 0)
+            {
+                return false;
+            }
+
+            double centroidX = 0, centroidY = 0;
+            foreach (Geometry.Planar.Point2D p in boundary2D)
+            {
+                centroidX += p.X;
+                centroidY += p.Y;
+            }
+            Geometry.Planar.Point2D centroid2D = new Geometry.Planar.Point2D(centroidX / n, centroidY / n);
+
+            double[] growth = new double[n];
+            bool anyGrowth = false;
+            for (int i = 0; i < n; i++)
+            {
+                if (!TryOutward2D(boundary2D[i], boundary2D[(i + 1) % n], centroid2D, tolerance, out Geometry.Planar.Vector2D outward2D))
+                {
+                    continue;
+                }
+
+                Vector3D outward3D = plane.Convert(outward2D)?.Unit;
+                if (outward3D == null)
+                {
+                    continue;
+                }
+
+                double gap = NearestFacingCapEdgeGap(boundary3D[i], boundary3D[(i + 1) % n], outward3D, otherCaps, maxReach, tolerance);
+                if (gap < 0)
+                {
+                    continue;
+                }
+
+                growth[i] = gap + System.Math.Max(overshoot, 0);
+                anyGrowth = true;
+            }
+
+            if (!anyGrowth)
+            {
+                return false;
+            }
+
+            // Mitred per-edge offset — same reconstruction as GrowEdgesToWalls.
+            List<Geometry.Planar.Point2D> offsetStart = new List<Geometry.Planar.Point2D>(n);
+            List<Geometry.Planar.Point2D> offsetEnd = new List<Geometry.Planar.Point2D>(n);
+            for (int i = 0; i < n; i++)
+            {
+                Geometry.Planar.Point2D a2 = boundary2D[i];
+                Geometry.Planar.Point2D b2 = boundary2D[(i + 1) % n];
+                if (growth[i] <= tolerance || !TryOutward2D(a2, b2, centroid2D, tolerance, out Geometry.Planar.Vector2D outward2D))
+                {
+                    offsetStart.Add(a2);
+                    offsetEnd.Add(b2);
+                    continue;
+                }
+
+                Geometry.Planar.Vector2D offset = outward2D * growth[i];
+                offsetStart.Add(a2.GetMoved(offset));
+                offsetEnd.Add(b2.GetMoved(offset));
+            }
+
+            List<Geometry.Planar.Point2D> newVertices = new List<Geometry.Planar.Point2D>(n);
+            for (int j = 0; j < n; j++)
+            {
+                int prev = (j - 1 + n) % n;
+                Geometry.Planar.Point2D intersection = Geometry.Planar.Query.Intersection(
+                    offsetStart[prev], offsetEnd[prev], offsetStart[j], offsetEnd[j], false, tolerance);
+                newVertices.Add(intersection ?? offsetStart[j]);
+            }
+
+            List<Geometry.Planar.Segment2D> newSegments = new List<Geometry.Planar.Segment2D>(n);
+            for (int j = 0; j < n; j++)
+            {
+                newSegments.Add(new Geometry.Planar.Segment2D(newVertices[j], newVertices[(j + 1) % n]));
+            }
+
+            List<Geometry.Planar.Segment2D> selfIntersections = Geometry.Planar.Query.SelfIntersectionSegment2Ds(newSegments, double.MaxValue, tolerance);
+            if (selfIntersections != null && selfIntersections.Count > n)
+            {
+                return false;
+            }
+
+            Geometry.Planar.Polygon2D newPolygon2D = new Geometry.Planar.Polygon2D(newVertices);
+            newPolygon2D.SetOrientation(Geometry.Planar.Query.Orientation(boundary2D));
+
+            int holesBefore = face3D.GetInternalEdge3Ds()?.Count ?? 0;
+            Face3D grown3D = Face3D.Create(plane, newPolygon2D, face3D.InternalEdge2Ds);
+            if (grown3D == null || !grown3D.IsValid())
+            {
+                return false;
+            }
+
+            if (grown3D.GetArea() <= face3D.GetArea() + tolerance)
+            {
+                return false;
+            }
+
+            RecordHoleDrop(holesBefore, grown3D, "cap-to-cap gap close");
+            Adopt(grown3D);
+            return true;
+        }
+
+        /// <summary>
+        /// The gap from edge (a3→b3) in direction <paramref name="outward3D"/> to the nearest COPLANAR cap
+        /// sitting in that direction. Unlike walls (which face the edge with their normal), a coplanar cap
+        /// on the same plane has the SAME normal — the edge just needs another cap to exist in its outward
+        /// direction within <paramref name="maxReach"/>, regardless of which way that cap's own edges face.
+        /// </summary>
+        /// <returns>The gap in metres, or -1 when no coplanar cap sits in the outward direction.</returns>
+        private static double NearestFacingCapEdgeGap(Point3D a3, Point3D b3, Vector3D outward3D, List<SnappedPanel> otherCaps, double maxReach, double tolerance)
+        {
+            Vector3D tangent3D = new Vector3D(b3.X - a3.X, b3.Y - a3.Y, b3.Z - a3.Z);
+            if (tangent3D.Length <= tolerance)
+            {
+                return -1;
+            }
+
+            tangent3D = tangent3D.Unit;
+            double edgeMinT = 0.0;
+            double edgeLen = tangent3D.DotProduct(new Vector3D(b3.X - a3.X, b3.Y - a3.Y, b3.Z - a3.Z));
+            double edgeMaxT = edgeLen;
+            double aOutward = OutwardParameter(a3, outward3D);
+            double bOutward = OutwardParameter(b3, outward3D);
+
+            double best = -1;
+
+            foreach (SnappedPanel other in otherCaps)
+            {
+                BoundingBox3D otherBox = other.GetBoundingBox();
+                if (otherBox == null)
+                {
+                    continue;
+                }
+
+                // The other cap must overlap this edge's tangent span (so they share the same corridor).
+                if (!TangentOverlap(otherBox, a3, tangent3D, edgeMinT, edgeMaxT, tolerance))
+                {
+                    continue;
+                }
+
+                // The other cap's nearest corner in the outward direction.
+                double otherOutward = NearestOutwardCorner(otherBox, outward3D);
+                double gapA = otherOutward - aOutward;
+                double gapB = otherOutward - bOutward;
+                double gap = System.Math.Min(gapA, gapB);
+                if (gap <= tolerance || gap > maxReach + tolerance)
+                {
+                    continue;
+                }
+
+                if (best < 0 || gap < best)
+                {
+                    best = gap;
+                }
+            }
+
+            return best;
+        }
+
         /// <summary>The outward-pointing unit normal (in THIS panel's own plane) of the edge <paramref name="a2"/>
         /// -&gt; <paramref name="b2"/>, decided by which perpendicular sense points away from <paramref name="centroid2D"/>
         /// - robust to either polygon winding. False for a degenerate (near-zero-length) edge.</summary>

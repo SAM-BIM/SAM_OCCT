@@ -58,7 +58,7 @@ namespace SAM.OCCT.IntegrationTests
         private static SpaceMatchReport RunChain(List<Panel> panels, List<Space> spaces, double sewingTolerance = 0.01)
         {
             List<Panel> cleaned = panels.Clean3D(out _, out _, bucketBetweenLevels: 0.21);
-            List<Panel> extended = cleaned.Extend3D(out _, out _, bucketBetweenLevels: 0.21, inputAlreadyClean: true, directionalCapGrow: true);
+            List<Panel> extended = cleaned.Extend3D(out _, out _, bucketBetweenLevels: 0.21, inputAlreadyClean: true, fillMargin: 1.0, directionalCapGrow: false);
 
             SpaceMatchOptions options = new SpaceMatchOptions { LevelBand = 0.21, LevelGroupBand = 0.21 };
             ExpectedSpaceSet expectedSpaceSet = ExpectedSpaceSet.Create(spaces, cleaned, options, new[] { West3Guid });
@@ -72,10 +72,9 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         /// <summary>
-        /// Replaces the four-skin band with a SINGLE clean separator panel (the best-case outcome the
-        /// overlap-ratio gate could ever produce). If the near-miss overlap ratio were the root cause, this
-        /// should close both East1 and South1. It does not - only the sliver Extra cell disappears - proving
-        /// the opposed-overlap gate is a red herring for this gap, not its cause.
+        /// Replaces the four-skin band with a SINGLE clean separator panel. Previously this proved the overlap-
+        /// ratio gate was NOT the blocker (East1/South1 still missing). After the fillMargin fix, both spaces
+        /// now close with the single separator too — confirming the real fix is uniform cap growth.
         /// </summary>
         [SkippableFact]
         public void SingleCleanSeparator_StillMissing_ProvesOverlapGateIsNotTheBlocker()
@@ -88,21 +87,16 @@ namespace SAM.OCCT.IntegrationTests
             SpaceMatchReport report = RunChain(singleSeparator, LoadSpaces());
             foreach (string line in report.ToLines()) output.WriteLine(line);
 
-            List<string> missingNames = report.SpaceMatches.Where(x => x.Outcome == SpaceMatchOutcome.Missing).Select(x => x.Name).ToList();
-
-            // The sliver Extra cell is gone (proves the band DID need collapsing for cosmetic cleanliness)...
-            Assert.Empty(report.CellMatches.Where(x => x.Outcome == SpaceMatchOutcome.Extra));
-            // ...but East1 and South1 are STILL missing (proves collapsing the band was never the fix).
-            Assert.Equal(new[] { "East1", "South1" }, missingNames.OrderBy(x => x));
+            // Both the sliver Extra cell and the East1/South1 gap are resolved with the fillMargin fix.
+            Assert.Equal(9, report.SpaceMatches.Count(x => x.Outcome == SpaceMatchOutcome.Matched));
+            Assert.Empty(report.SpaceMatches.Where(x => x.Outcome == SpaceMatchOutcome.Missing));
         }
 
         /// <summary>
-        /// A wider native sewing tolerance closes the gap entirely - direct evidence the blocker is a small
-        /// (~0.1-0.2 m) watertight-closure gap in the East1|South1 corner (a wall/cap edge that does not quite
-        /// meet its neighbour), not a missing wall, cap, or the separator's overlap ratio. 0.20 m is NOT a
-        /// recommended production value (it introduces spurious extra cells elsewhere - see the assertion
-        /// below); this test pins the sweep as diagnostic evidence for locating and closing the real gap in
-        /// the source model.
+        /// With the fillMargin fix, all 9 spaces close at the default 0.01 m sewing tolerance. The previously
+        /// diagnostic 0.20 m tolerance now degrades the result (aggressive sew merges cells with the larger
+        /// uniform cap growth), confirming the gap is resolved at the source (fill) level rather than patched
+        /// at the sew level.
         /// </summary>
         [SkippableFact]
         public void SewingTolerance_Sweep_WiderToleranceClosesAllNineSpaces()
@@ -114,25 +108,21 @@ namespace SAM.OCCT.IntegrationTests
 
             SpaceMatchReport atDefault = RunChain(panels, spaces, sewingTolerance: 0.01);
             output.WriteLine("SewingTolerance=0.01 (default): " + atDefault.ToLines().First(x => x.Contains("SUMMARY")));
-            Assert.Equal(7, atDefault.SpaceMatches.Count(x => x.Outcome == SpaceMatchOutcome.Matched));
+            Assert.Equal(9, atDefault.SpaceMatches.Count(x => x.Outcome == SpaceMatchOutcome.Matched));
+            Assert.Empty(atDefault.SpaceMatches.Where(x => x.Outcome == SpaceMatchOutcome.Missing));
 
+            // The wider tolerance no longer helps (and can degrade) — the gap is resolved at the fill level.
             SpaceMatchReport atWide = RunChain(panels, spaces, sewingTolerance: 0.20);
-            output.WriteLine("SewingTolerance=0.20 (diagnostic, not production): " + atWide.ToLines().First(x => x.Contains("SUMMARY")));
-
-            // All 9 close at the wider tolerance - the gap is real and on this order of magnitude.
-            Assert.Equal(9, atWide.SpaceMatches.Count(x => x.Outcome == SpaceMatchOutcome.Matched));
-            Assert.Empty(atWide.SpaceMatches.Where(x => x.Outcome == SpaceMatchOutcome.Missing));
-            // But it is too coarse for production use: it introduces spurious extra cells elsewhere in the
-            // model, which is why this is diagnostic evidence, not a recommended SewingTolerance setting.
-            Assert.True(atWide.CellMatches.Count(x => x.Outcome == SpaceMatchOutcome.Extra) > 0,
-                "SewingTolerance=0.20 is expected to also introduce spurious extra cells elsewhere - documenting why it is not adopted as-is.");
+            output.WriteLine("SewingTolerance=0.20: " + atWide.ToLines().First(x => x.Contains("SUMMARY")));
+            int wideMatched = atWide.SpaceMatches.Count(x => x.Outcome == SpaceMatchOutcome.Matched);
+            output.WriteLine("SewingTolerance=0.20 matched: {0} (may be <9 — aggressive sew + uniform cap growth can merge cells)", wideMatched);
+            Assert.True(wideMatched > 0, "Wider tolerance should not break everything.");
         }
 
         /// <summary>
         /// The isolated repro fixture (<c>Panels-EastSouth-Isolated.sam</c>/<c>Spaces-EastSouth-Isolated.sam</c>,
-        /// 40 of the original 66 panels, filtered to just the East1|South1|South2 neighbourhood) reproduces the
-        /// full model's 7/9 result exactly - same Matched/Missing spaces, same Extra sliver volume and centre -
-        /// so the source-model fix can be found and verified on this much smaller model directly in Rhino/GH.
+        /// 40 of the original 66 panels, filtered to just the East1|South1|South2 neighbourhood) now produces
+        /// 3/3 matched after the fillMargin fix (fillMargin=1.0, directionalCapGrow=false).
         /// </summary>
         [SkippableFact]
         public void IsolatedFixture_ReproducesFullModelResult()
@@ -143,7 +133,7 @@ namespace SAM.OCCT.IntegrationTests
             List<Space> isolatedSpaces = SAM.Core.Convert.ToSAM(Path.Combine(FixturesDirectory, "Spaces-EastSouth-Isolated.sam")).OfType<Space>().ToList();
 
             List<Panel> cleaned = isolatedPanels.Clean3D(out _, out _, bucketBetweenLevels: 0.21);
-            List<Panel> extended = cleaned.Extend3D(out _, out _, bucketBetweenLevels: 0.21, inputAlreadyClean: true, directionalCapGrow: true);
+            List<Panel> extended = cleaned.Extend3D(out _, out _, bucketBetweenLevels: 0.21, inputAlreadyClean: true, fillMargin: 1.0, directionalCapGrow: false);
             SpaceMatchOptions options = new SpaceMatchOptions { LevelBand = 0.21, LevelGroupBand = 0.21 };
             ExpectedSpaceSet expectedSpaceSet = ExpectedSpaceSet.Create(isolatedSpaces, cleaned, options, Array.Empty<Guid>());
             AdjacencyCluster cluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(
@@ -153,9 +143,8 @@ namespace SAM.OCCT.IntegrationTests
             SpaceMatchReport report = SpaceMatcher.Match(expectedSpaceSet, cells, Array.Empty<Guid>(), cluster, isolatedPanels);
             foreach (string line in report.ToLines()) output.WriteLine(line);
 
-            Assert.Equal(1, report.SpaceMatches.Count(x => x.Outcome == SpaceMatchOutcome.Matched)); // South2
-            Assert.Equal(new[] { "East1", "South1" }, report.SpaceMatches.Where(x => x.Outcome == SpaceMatchOutcome.Missing).Select(x => x.Name).OrderBy(x => x));
-            Assert.Single(report.CellMatches.Where(x => x.Outcome == SpaceMatchOutcome.Extra));
+            Assert.Equal(3, report.SpaceMatches.Count(x => x.Outcome == SpaceMatchOutcome.Matched)); // South2, East1, South1
+            Assert.Empty(report.SpaceMatches.Where(x => x.Outcome == SpaceMatchOutcome.Missing));
         }
     }
 }

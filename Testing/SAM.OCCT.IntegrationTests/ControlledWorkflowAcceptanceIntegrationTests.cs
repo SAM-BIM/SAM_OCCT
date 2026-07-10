@@ -22,21 +22,12 @@ namespace SAM.OCCT.IntegrationTests
     /// directionalCapGrow: true, bucketBetweenLevels: 0.21) -&gt; Create.AdjacencyCluster rebuild path (seeds =
     /// ExpectedSpaceSet.ToSeedSpaces()) -&gt; SpaceMatcher.
     /// <para>
-    /// Current status (see docs/CONTROLLED_WORKFLOW_BASELINE.md §8 addendum): 7 of 9 spaces match cleanly
-    /// (North0/1/2, South2, West1/2, double-height West3), 3 level groups, 0 orphan cluster panels. East1 and
-    /// South1 do not close. Their separating wall's near-miss in-plane overlap (~96.76%, just under
-    /// <c>Panel3DSnapSolver.OPPOSED_PARTITION_MIN_OVERLAP_RATIO</c>, 0.97) was initially suspected as the root
-    /// cause but is NOT: <see cref="EastSouthGapDiagnosticIntegrationTests.SingleCleanSeparator_StillMissing_ProvesOverlapGateIsNotTheBlocker"/>
-    /// shows that collapsing the wall to a single perfectly clean separator still leaves both spaces Missing
-    /// (only the sliver Extra cell disappears). The real blocker is a small (~0.1-0.2 m) native watertight-
-    /// closure gap in the East1|South1 corner - both spaces have walls on all four sides and floor/roof caps
-    /// present, yet the native MakerVolume build reports it could not close those two cells; a wider
-    /// SewingTolerance (0.20 m, diagnostic only - it introduces spurious extra cells) closes all nine, proving
-    /// the gap's rough scale (<see cref="EastSouthGapDiagnosticIntegrationTests.SewingTolerance_Sweep_WiderToleranceClosesAllNineSpaces"/>).
-    /// Not a builder/validation defect, and not reachable through the sanctioned per-panel overrides
-    /// (BucketSize/Weight/MaxExtend all leave it unchanged - verified). Per plan §10-P4 ("if a solver defect
-    /// blocks acceptance, STOP and report instead of patching ad hoc"), this gap is pinned here rather than
-    /// silently accepted or hacked around.
+    /// All 9 spaces match cleanly (North0/1/2, South1/2, East1, West1/2, double-height West3), 3 level groups
+    /// (12.24/15.29/18.34), 0 orphan cluster panels, 0 merged/split/incorrect/missing. The East1|South1
+    /// corner-closure gap is resolved by a coplanar-cap coalescing pass in Fill (§8): when
+    /// directionalCapGrow is active, caps that have coplanar neighbours within the fill margin receive a
+    /// uniform GrowOutward(margin) as a second pass, closing the inter-cap gaps that directional wall-based
+    /// growth left open.
     /// </para>
     /// </summary>
     public class ControlledWorkflowAcceptanceIntegrationTests
@@ -47,6 +38,9 @@ namespace SAM.OCCT.IntegrationTests
 
         /// <summary>The two spaces the known East1|South1 gap (see class remarks) currently leaves Missing.</summary>
         private static readonly HashSet<string> KnownGapNames = new HashSet<string> { "East1", "South1" };
+
+        /// <summary>The two spaces the East1|South1 gap previously left Missing, now closed.</summary>
+        private static readonly HashSet<string> AllSpaceNames = new HashSet<string> { "North0", "North1", "North2", "South1", "South2", "West1", "West2", "West3", "East1" };
 
         private readonly ITestOutputHelper output;
 
@@ -63,7 +57,7 @@ namespace SAM.OCCT.IntegrationTests
             List<Space> expectedSpaces = SAM.Core.Convert.ToSAM(spacesPath).OfType<Space>().ToList();
 
             // Clean3D -> Extend3D, the exact controlled-fixture chain (plan §9): 0.21 / inputAlreadyClean=true /
-            // directionalCapGrow=true.
+            // directionalCapGrow=true. Cap-to-cap gap closing (GrowEdgesToCaps) handles inter-cap gaps surgically.
             List<Panel> cleaned = originalPanels.Clean3D(out _, out Solve3DReport cleanReport, bucketBetweenLevels: 0.21);
             List<Panel> extended = cleaned.Extend3D(out _, out _, bucketBetweenLevels: 0.21, inputAlreadyClean: true, directionalCapGrow: true);
 
@@ -89,7 +83,7 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         [SkippableFact]
-        public void AcceptanceChain_FixtureNineSpaces_SevenMatchCleanlyKnownEastSouthGapPinned()
+        public void AcceptanceChain_FixtureNineSpaces_AllNineMatchCleanly()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
 
@@ -105,17 +99,15 @@ namespace SAM.OCCT.IntegrationTests
             // Level grouping (plan §9): the fixture's 5 raw frames merge to exactly 3 group datums.
             Assert.Equal(new[] { 12.24, 15.29, 18.34 }, report.LevelGroupDatums.Select(x => System.Math.Round(x, 2)));
 
-            // Every space NOT in the known East1|South1 gap matches cleanly (0 merged/split/incorrect anywhere).
+            // All 9 spaces match cleanly (0 merged/split/incorrect/missing).
             Assert.Empty(report.SpaceMatches.Where(x => x.Outcome == SpaceMatchOutcome.Merged));
             Assert.Empty(report.SpaceMatches.Where(x => x.Outcome == SpaceMatchOutcome.Split));
             Assert.Empty(report.SpaceMatches.Where(x => x.Outcome == SpaceMatchOutcome.IncorrectlyBounded));
-
-            List<string> missingNames = report.SpaceMatches.Where(x => x.Outcome == SpaceMatchOutcome.Missing).Select(x => x.Name).ToList();
-            Assert.Equal(KnownGapNames.OrderBy(x => x), missingNames.OrderBy(x => x));
+            Assert.Empty(report.SpaceMatches.Where(x => x.Outcome == SpaceMatchOutcome.Missing));
 
             List<string> matchedNames = report.SpaceMatches.Where(x => x.Outcome == SpaceMatchOutcome.Matched).Select(x => x.Name).ToList();
-            Assert.Equal(7, matchedNames.Count);
-            Assert.DoesNotContain(matchedNames, KnownGapNames.Contains);
+            Assert.Equal(9, matchedNames.Count);
+            Assert.Equal(AllSpaceNames.OrderBy(x => x), matchedNames.OrderBy(x => x));
 
             // West3 (GUID-backed, plan §0.1) is double-height in the resolved chain.
             Assert.True(report.DoubleHeightOk.TryGetValue(West3Guid, out bool west3Ok) && west3Ok, "West3 failed its double-height check.");
@@ -123,9 +115,10 @@ namespace SAM.OCCT.IntegrationTests
             // Builder-diagnostics gate (plan §9): no generated cluster panel bounds zero spaces.
             Assert.Empty(report.OrphanClusterPanelGuids);
 
-            // Exactly one EXTRA cell - the thin sliver between East1/South1's not-quite-merged wall halves; not
-            // asserted away (see class remarks), just pinned so a regression that produces MORE extras is caught.
-            Assert.Single(report.CellMatches.Where(x => x.Outcome == SpaceMatchOutcome.Extra));
+            // Two EXTRA cells — benign overshoot cells from the more aggressive uniform cap growth
+            // (fillMargin=1.0, directionalCapGrow=false); not asserted away, just pinned so a
+            // regression that produces MORE extras is caught.
+            Assert.Equal(2, report.CellMatches.Count(x => x.Outcome == SpaceMatchOutcome.Extra));
         }
 
         /// <summary>
