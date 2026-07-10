@@ -1633,3 +1633,54 @@ locations, orphan/unused panels, and a separator scan for merged/missing pairs -
 ```powershell
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~ControlledWorkflowBaselineTests" --logger "console;verbosity=detailed"
 ```
+
+## SpaceMatcher validation harness (P1)
+
+`docs/CONTROLLED_WORKFLOW_PLAN.md` §6 GUID-based matcher, pure managed
+(`SAM_OCCT/SAM.Analytical.OCCT.Solver/{Enums,Classes}/`) - no OCCT DLL required, so its own tests live
+in `Testing/SAM.OCCT.UnitTests`:
+
+- `ExpectedSpaceSet` - GUID-keyed expected spaces; hard-fails (throws) on an empty/multiline name or a
+  duplicate Guid; a duplicate NAME warns and gets a disambiguated `Name#n` report label instead. Level
+  groups are inferred self-contained from a supplied panel set's cap faces
+  (`LevelFrame.Cluster` + a dominant-area-first, non-transitive 1-D merge at
+  `SpaceMatchOptions.LevelGroupBand`) - independent of any Clean3D/Extend3D `bucketBetweenLevels`
+  plumbing, so P1 does not depend on P2. Each expected space gets a vertical span from those datums;
+  double-height spaces (GUID-backed, never inferred from a location) skip the intermediate datum their
+  location sits near. Tests: `ExpectedSpaceSetTests.cs`.
+- `SpaceMatcher.Match` - the containment matrix mirrors `AdjacencyCluster`'s own `FindSeedSpace`
+  predicate (`Shell.Inside(location, silverSpacing, tolerance) || Shell.On(location, tolerance)`) but is
+  independent of the builder's own (greedy, first-fit) space matching. Classifies every expected space as
+  Matched/Merged/Missing/Split/IncorrectlyBounded, and every generated cell not hosting an expected space
+  as Extra; a double-height space additionally fails (as Split) if its matched cell carries an unexpected
+  near-horizontal boundary face at an intermediate level-group datum inside its own footprint. Boundary
+  ambiguity resolves deterministically to the nearest cell centre, then lowest index. Tests:
+  `SpaceMatcherTests.cs` (1:1 match, merged pair, missing-with-distance, null location, extra cell,
+  undersized-cell-with-partner split, span-overshoot-with-no-partner incorrectly-bounded, boundary
+  determinism, double-height ok/violated, stable `SUMMARY`/`LEVELS` report lines).
+- `SeparatorPanelFinder` - for a merged pair, scans a panel set for a vertical separator strictly between
+  the two locations, requiring it cover the pair's full expected floor-to-ceiling span (not just the
+  narrow band between the two seed elevations) and classifies it Candidate (full lateral coverage) /
+  Partial (a `SpaceMatchOptions.LateralMargin` near-miss) / Absent. Tests: `SeparatorPanelFinderTests.cs`.
+- `PanelContributionFinder` - `OrphanClusterPanels` (`cluster.GetSpaces(panel)` empty) vs
+  `UnusedInputPanels` (a geometric coplanar-overlap test against the cluster's own faces, since the
+  builder mints fresh panel identities and an input panel's Guid never appears in the built cluster).
+- `SpaceMatchReport.Valid` is true only when there is no Missing/Merged/Split/IncorrectlyBounded space,
+  no Extra cell, every requested double-height check passes, and there are no orphan cluster panels
+  (unused/merged-away source panels are warnings only). `ToLines()` emits the stable, greppable
+  `SAM_OCCT_SPACEMATCH: <KIND> ...` lines the plan documents.
+
+`SAMOCCT.ValidateSpaces` (`Grasshopper/SAM.Analytical.Grasshopper.OCCT/Component/SAMOCCTValidateSpaces.cs`,
+v1.0.0) wires an `_adjacencyCluster` + `_expectedSpaces` through `CellGeometry.FromCluster` +
+`SpaceMatcher.Match`; `sourcePanels_`/`doubleHeightSpaces_` are optional and enable the panel-contribution
+and double-height outputs. It re-derives the cluster's cell shells itself rather than trusting whatever
+space matching the builder performed - `CreateAdjacencyCluster`'s `spaces_` input only steers its rebuild
+path and seeds names, it is not a validation reference.
+
+`ControlledWorkflowBaselineTests` now also runs `SpaceMatcher` (independently of its own hand-rolled
+containment/classification code) against both extend paths and prints the full `SpaceMatchReport.ToLines()`
+output (`SPACEMATCH:` lines) - report-only, no new assertions. Because P1's level-group inference reads
+the ORIGINAL (uncleaned) panels' 22 raw cap elevations self-contained, its inferred datums are less precise
+than Clean3D's own eventual 12.24/15.29/18.34 (e.g. West3's inferred span lands around 12.5/18.3, not
+exactly on the clean datums) - an expected, documented characteristic of the self-contained P1 approach on
+this messy fixture, not a bug; P2's `bucketBetweenLevels` plumbing is what makes the datums precise.

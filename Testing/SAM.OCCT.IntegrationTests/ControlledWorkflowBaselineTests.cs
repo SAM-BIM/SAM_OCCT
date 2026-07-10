@@ -388,6 +388,23 @@ namespace SAM.OCCT.IntegrationTests
                 }
             }
 
+            // (P1) SpaceMatcher: the reusable GUID-based matcher (docs/CONTROLLED_WORKFLOW_PLAN.md §6), run
+            // independently of the hand-rolled containment/classification logic above - its own report is
+            // the P1 harness's explanation of this same baseline. Report-only, like the rest of this test:
+            // no assertions on SpaceMatchReport.Valid (hard acceptance arrives with P4).
+            try
+            {
+                ExpectedSpaceSet expectedSpaceSet = ExpectedSpaceSet.Create(expectedSpaces, originalPanels, null, new[] { west3.Guid });
+                List<CellGeometry> cellGeometries = CellGeometry.FromComplex(result);
+                SpaceMatchReport spaceMatchReport = SpaceMatcher.Match(expectedSpaceSet, cellGeometries, new[] { west3.Guid }, cluster, originalPanels);
+                WriteLines("SPACEMATCH", spaceMatchReport.ToLines(), 200);
+                output.WriteLine("SPACEMATCH_VALID: {0}", spaceMatchReport.Valid);
+            }
+            catch (ArgumentException exception)
+            {
+                output.WriteLine("SPACEMATCH_ERROR: {0}", exception.Message);
+            }
+
             output.WriteLine("");
         }
 
