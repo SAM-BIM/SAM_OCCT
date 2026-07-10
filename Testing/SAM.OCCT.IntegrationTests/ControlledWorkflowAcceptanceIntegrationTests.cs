@@ -22,14 +22,21 @@ namespace SAM.OCCT.IntegrationTests
     /// directionalCapGrow: true, bucketBetweenLevels: 0.21) -&gt; Create.AdjacencyCluster rebuild path (seeds =
     /// ExpectedSpaceSet.ToSeedSpaces()) -&gt; SpaceMatcher.
     /// <para>
-    /// Current status (see docs/CONTROLLED_WORKFLOW_BASELINE.md §9 addendum): 7 of 9 spaces match cleanly
+    /// Current status (see docs/CONTROLLED_WORKFLOW_BASELINE.md §8 addendum): 7 of 9 spaces match cleanly
     /// (North0/1/2, South2, West1/2, double-height West3), 3 level groups, 0 orphan cluster panels. East1 and
-    /// South1 do not close: their separating wall is modeled as two panels (20fe83aa / 31f97c71) offset just
-    /// enough that their in-plane overlap (~96.7%) narrowly misses <c>Panel3DSnapSolver.
-    /// OPPOSED_PARTITION_MIN_OVERLAP_RATIO</c> (0.97) - a solver-threshold edge case, not a builder/validation
-    /// defect, and not reachable through the sanctioned per-panel overrides (BucketSize/Weight/MaxExtend all
-    /// leave it unchanged - verified). Per plan §10-P4 ("if a solver defect blocks acceptance, STOP and report
-    /// instead of patching ad hoc"), this gap is pinned here rather than silently accepted or hacked around.
+    /// South1 do not close. Their separating wall's near-miss in-plane overlap (~96.76%, just under
+    /// <c>Panel3DSnapSolver.OPPOSED_PARTITION_MIN_OVERLAP_RATIO</c>, 0.97) was initially suspected as the root
+    /// cause but is NOT: <see cref="EastSouthGapDiagnosticIntegrationTests.SingleCleanSeparator_StillMissing_ProvesOverlapGateIsNotTheBlocker"/>
+    /// shows that collapsing the wall to a single perfectly clean separator still leaves both spaces Missing
+    /// (only the sliver Extra cell disappears). The real blocker is a small (~0.1-0.2 m) native watertight-
+    /// closure gap in the East1|South1 corner - both spaces have walls on all four sides and floor/roof caps
+    /// present, yet the native MakerVolume build reports it could not close those two cells; a wider
+    /// SewingTolerance (0.20 m, diagnostic only - it introduces spurious extra cells) closes all nine, proving
+    /// the gap's rough scale (<see cref="EastSouthGapDiagnosticIntegrationTests.SewingTolerance_Sweep_WiderToleranceClosesAllNineSpaces"/>).
+    /// Not a builder/validation defect, and not reachable through the sanctioned per-panel overrides
+    /// (BucketSize/Weight/MaxExtend all leave it unchanged - verified). Per plan §10-P4 ("if a solver defect
+    /// blocks acceptance, STOP and report instead of patching ad hoc"), this gap is pinned here rather than
+    /// silently accepted or hacked around.
     /// </para>
     /// </summary>
     public class ControlledWorkflowAcceptanceIntegrationTests
@@ -122,9 +129,12 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         /// <summary>
-        /// Documents the East1|South1 root cause precisely (class remarks): the wall panels 20fe83aa/31f97c71
-        /// are present in the input and directly candidate for the separation, but their footprint overlap sits
-        /// just under the solver's opposed-collapse floor. Pinned as evidence, not asserted as a pass.
+        /// Pins one real (but NOT causal, see class remarks + <see cref="EastSouthGapDiagnosticIntegrationTests"/>)
+        /// feature of the fixture: the wall panels 20fe83aa/31f97c71 are present in the input and directly
+        /// candidate for the separation, and their footprint overlap sits just under the solver's
+        /// opposed-collapse floor. This is real evidence about the fixture's geometry, not asserted as a pass -
+        /// but collapsing this pair does not close East1|South1 (proven elsewhere), so do not treat this test
+        /// as pinning the root cause.
         /// </summary>
         [SkippableFact]
         public void AcceptanceChain_EastSouthGap_SeparatorPanelsPresentButOverlapJustUnderThreshold()
