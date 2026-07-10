@@ -118,6 +118,68 @@ Separator scan (vertical panel strictly between the two locations, requiring the
 2. **P3:** wall-to-cap extension on the 3 merged datums; the x≈3.3–3.7 partitions (South1|South2, North1|North0, North1|North2, East1|South2) must reach floor+ceiling or emit skip/risk records saying why not; no cap growth into West3's column (z≈15.29 within its footprint).
 3. **P4:** 9 cells / 9 matched / 0 missing / 0 merged / 0 split / 0 extra / West3 (GUID `02a1ae27…`) double-height true / 0 orphan cluster panels — on this original fixture, **contingent on North1's separator question (§5) resolving** in P2/P3's favor; otherwise P4 must decide (with the real matcher, not this diagnostic) whether North1 needs a corrected panel or whether an existing wall simply isn't reaching where expected.
 
-## 8. Suite status at capture
+## 8. P4 addendum (2026-07-10, `feat/cw-p4-acceptance`) — hard acceptance status on the chain
+
+Chain run: `Clean3D(bucketBetweenLevels: 0.21)` -> `Extend3D(inputAlreadyClean: true, directionalCapGrow: true,
+bucketBetweenLevels: 0.21)` -> `Create.AdjacencyCluster` rebuild path (seeds = `ExpectedSpaceSet.ToSeedSpaces()`,
+built from the CLEANED panels, not the raw originals — see note below) -> `SpaceMatcher`.
+
+**Result: 7 of 9 spaces matched cleanly.** North0/North1/North2 (the P0-flagged North1 uncertainty is
+resolved — P2/P3's clean/extend improvements fixed it with no further change needed), South2, West1, West2,
+and double-height West3 all match with 0 merged/split/incorrectly-bounded anywhere, 3 level groups
+(12.24/15.29/18.34), 0 orphan cluster panels. Pinned in
+`Testing/SAM.OCCT.IntegrationTests/ControlledWorkflowAcceptanceIntegrationTests.cs`
+(`AcceptanceChain_FixtureNineSpaces_SevenMatchCleanlyKnownEastSouthGapPinned`).
+
+**East1 and South1 do not close — root cause identified, NOT a builder/validation defect.** Their separating
+wall is modeled as two panels, `20fe83aa-ad65-4551-935a-97459edc959f` and `31f97c71-855b-4a67-aed2-a0a364b1a728`
+(the same pair the P0 scan flagged as "present but unused" in the four-skin band). Both are present in the
+input, at a separation of ~0.22 m (well inside the void-guard's collapse range), but offset ~0.1 m laterally /
+~0.05 m vertically — their axis-aligned in-plane overlap is **~96.7%**, just under
+`Panel3DSnapSolver.OPPOSED_PARTITION_MIN_OVERLAP_RATIO` (0.97), so `SnapOpposedPartitions` never collapses them
+onto one plane. By the time the later iterative bucket-snap pass (`Panel3DSnapSolver.Snap`) considers the pair,
+the effective separation has grown past the 0.3 m void-guard ceiling (one side already moved during an earlier
+merge with a third skin), so the general snap also declines — correctly, by that guard's own design (it exists
+to protect genuine voids/shafts from being deleted). The visible symptom is a ~6.6 m³ sliver `Extra` cell
+between East1 and South1's expected locations, both reported `Missing`.
+
+**Verified NOT fixable via the sanctioned per-panel overrides**: stamping `SolverParameter.BucketSize` up to
+0.5 m on the standalone panel (`20fe83aa`) — a distance/capture-width lever — had **zero effect** (confirmed by
+re-running the chain with the stamp applied; identical CleanReport, identical cell count). This is consistent
+with the failure being the overlap-ratio/void-guard *gate*, not a capture-distance shortfall; none of
+`BucketSize`/`Weight`/`MaxExtend` (the only per-panel stamps the plan sanctions) influence
+`OPPOSED_PARTITION_MIN_OVERLAP_RATIO` or the void-guard's separation ceiling.
+
+**Per plan §10-P4 ("if a solver defect blocks acceptance, STOP and report instead of patching ad hoc")**, this
+gap is pinned rather than patched: `AcceptanceChain_EastSouthGap_SeparatorPanelsPresentButOverlapJustUnderThreshold`
+asserts the panels are present, within void-guard range, and the overlap ratio sits in the documented
+near-miss band (0.90–0.97). Decision (confirmed with the user 2026-07-10): document as a known gap rather than
+touch `Panel3DSnapSolver.cs`'s global threshold (would need full golden-master re-verification and is P2/P3
+solver-owned scope) or request a corrected fixture. **Follow-up options for the next session**, in order of
+likely least risk: (a) request a re-export with `20fe83aa`/`31f97c71` nudged to >=97% overlap (fastest, no
+solver code touched); (b) a carefully scoped, separately-reviewed relaxation of
+`OPPOSED_PARTITION_MIN_OVERLAP_RATIO` (e.g. to ~0.95) proven against the full golden-master + Extend3D
+regression suites before being adopted; (c) leave as documented and accept 7/9 hard acceptance on this fixture
+permanently.
+
+**Builder diagnostics added this phase** (`SAM_OCCT/SAM.Analytical.OCCT/Create/AdjacencyCluster.cs`, builder
+layer only, no solver change): `SAM_OCCT_ANALYTICAL_MERGED_SEED_CELL` names every case where >1 expected seed
+space lands in one built cell (previously `FindSeedSpace` silently kept only the first — D7); and
+`SAM_OCCT_ANALYTICAL_ZERO_RELATION_PANELS` lists (up to 20) the Guids of cluster panels bounding zero spaces,
+alongside the pre-existing aggregate `SAM_OCCT_ANALYTICAL_PARITY` count.
+
+**`ExpectedSpaceSet` level-datum source correction** (validation layer,
+`SAM_OCCT/SAM.Analytical.OCCT.Solver/Classes/ExpectedSpaceSet.cs` usage — no class-code change, a call-site
+correction): the P1-era design fed `ExpectedSpaceSet.Create` the raw ORIGINAL input panels so its own
+independent `LevelFrame.Cluster` + 1-D merge could work "self-contained... independent of P2 plumbing." Now
+that P2 exists, this diverges from reality: `SnapStage.Clean`'s raw-frame clustering runs on panels already
+processed by `StripInternalEdges`/`SnapOpposedPartitions`/`SnapToFixedPoint`, never on the untouched originals,
+so the two clusterings see materially different input (22 raw slab-skin elevations vs. the post-snap set) and
+can disagree. Verified on this fixture: from the raw originals, `ExpectedSpaceSet` computed 4 groups at
+12.160/12.503/15.210/18.260 — none matching the real built-cell datums; from the CLEANED panels (Clean3D's own
+output), it computed the correct 12.240/15.290/18.340. The acceptance test now sources `levelSourcePanels` from
+the cleaned panels. No `ExpectedSpaceSet`/`SpaceMatcher` code changed — only which panels the caller passes.
+
+## 9. Suite status at capture
 
 Unit: **495/495 passed**. Integration: **185 passed / 3 skipped / 0 failed** (baseline test included; perf benchmark skipped via `SAM_OCCT_SKIP_PERF=1`). Note: building the full solution's Grasshopper projects fails on their post-build deploy (`copy` into `%APPDATA%\SAM`) while Rhino/Grasshopper is running — close Rhino for full-solution builds; the test projects and solver libraries build clean regardless.
