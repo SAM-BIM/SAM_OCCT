@@ -109,18 +109,23 @@ namespace SAM.OCCT.IntegrationTests
             Assert.NotNull(report);
             Assert.NotEmpty(report.ExtendRecords);
 
-            // The coded lines surface through the same diagnostics list the report path uses.
+            // The coded lines surface through the same diagnostics list the report path uses - one
+            // SAM_OCCT_EXTEND3D_PANEL: line per Applied record, one SAM_OCCT_EXTEND3D_SKIP: per Skipped
+            // record (P3 §5.4: a decision point that left a panel untouched is now recorded with why, never a
+            // silent no-op).
+            List<ExtendRecord> applied = report.ExtendRecords.Where(r => r.Outcome == ExtendOutcome.Applied).ToList();
+            List<ExtendRecord> skipped = report.ExtendRecords.Where(r => r.Outcome == ExtendOutcome.Skipped).ToList();
+            Assert.NotEmpty(applied);
             Assert.Contains(diagnostics, d => d.StartsWith("SAM_OCCT_EXTEND3D_PANEL:"));
-            Assert.Equal(
-                report.ExtendRecords.Count,
-                diagnostics.Count(d => d.StartsWith("SAM_OCCT_EXTEND3D_PANEL:")));
+            Assert.Equal(applied.Count, diagnostics.Count(d => d.StartsWith("SAM_OCCT_EXTEND3D_PANEL:")));
+            Assert.Equal(skipped.Count, diagnostics.Count(d => d.StartsWith("SAM_OCCT_EXTEND3D_SKIP:")));
 
-            // Honesty: every record is an ACTUAL move (from != to), never a no-op call.
-            Assert.All(report.ExtendRecords, r => Assert.True(System.Math.Abs(r.ToValue - r.FromValue) > 1e-6,
+            // Honesty: every APPLIED record is an ACTUAL move (from != to), never a no-op call.
+            Assert.All(applied, r => Assert.True(System.Math.Abs(r.ToValue - r.FromValue) > 1e-6,
                 string.Format("record {0} on panel #{1} has from == to ({2})", r.Kind, r.PanelIndex, r.FromValue)));
 
             // The walls were extended UP to the roof (cap z = 3 + 0.05 overshoot = 3.05).
-            List<ExtendRecord> topMoves = report.ExtendRecords.Where(r => r.Kind == ExtendOperationKind.Top).ToList();
+            List<ExtendRecord> topMoves = applied.Where(r => r.Kind == ExtendOperationKind.Top).ToList();
             Assert.NotEmpty(topMoves);
             Assert.All(topMoves, r =>
             {

@@ -524,8 +524,42 @@ namespace SAM.Geometry.OCCT.Solver
                 string.Format("LevelFrame grouping: {0} level frame(s) -> {1} level group(s) (bucketBetweenLevels={2:0.###} m).", frames.Count, groups.Count, band));
 
             EmitNearMissDiagnostics(frames, groups, band, minDot, diagnostics);
+            EmitOverMergeDiagnostics(groups, diagnostics);
 
             return groups;
+        }
+
+        /// <summary>Spread (m) above which a <see cref="LevelGroup"/>'s member frames are wide enough apart that
+        /// <c>bucketBetweenLevels</c> may be eating a genuine split-level landing rather than merging a single
+        /// physical floor's slab-skin datums (docs plan §5 risk #3). The fixture's intended merge (0.196 m) sits
+        /// comfortably below this; a band pushed to merge frames 0.25 m or more apart gets a Clean-side warning,
+        /// never a rejection.</summary>
+        public const double OverMergeSpreadWarning = 0.25;
+
+        /// <summary>Emits a <see cref="DiagnosticCode.LevelGroupOverMerge"/> warning for every multi-frame group
+        /// whose <see cref="LevelGroup.Spread"/> is at or above <see cref="OverMergeSpreadWarning"/> - visibility
+        /// on a wide merge, never a block.</summary>
+        private static void EmitOverMergeDiagnostics(List<LevelGroup> groups, SolverDiagnostics diagnostics)
+        {
+            if (diagnostics == null)
+            {
+                return;
+            }
+
+            for (int g = 0; g < groups.Count; g++)
+            {
+                LevelGroup group = groups[g];
+                if (group.FrameIndices.Count < 2 || group.Spread < OverMergeSpreadWarning)
+                {
+                    continue;
+                }
+
+                diagnostics.Add(SolverStage.Snap, DiagnosticCode.LevelGroupOverMerge, OcctDiagnosticSeverity.Warning,
+                    string.Format(CultureInfo.InvariantCulture,
+                        "group {0}: member frames span {1:0.000} m (>= {2:0.000} m) - this may be merging a genuine split-level landing rather than one floor's slab-skin noise; review bucketBetweenLevels.",
+                        g, group.Spread, OverMergeSpreadWarning),
+                    point3Ds: new List<Point3D> { group.Origin }, toleranceUsed: group.Spread);
+            }
         }
 
         /// <summary>Upper bound on the number of <see cref="DiagnosticCode.LevelBandNearMiss"/> lines

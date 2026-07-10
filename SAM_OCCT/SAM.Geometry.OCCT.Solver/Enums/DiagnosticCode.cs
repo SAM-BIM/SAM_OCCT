@@ -106,6 +106,16 @@ namespace SAM.Geometry.OCCT.Solver
         /// 2×band), so it was NOT merged. Never silent: the diagnostic states exactly what <c>bucketBetweenLevels</c>
         /// value would merge it, so a user can see a near-miss split without guessing. Appended at the end of the
         /// enum so existing members keep their ordinal values (public-enum binary contract).</summary>
-        LevelBandNearMiss
+        LevelBandNearMiss,
+
+        /// <summary>
+        /// P3 (docs/CONTROLLED_WORKFLOW_PLAN.md §5, risk #3): a <see cref="LevelGroup"/>'s member frames span
+        /// more than <see cref="LevelFrame.OverMergeSpreadWarning"/> - wide enough that <c>bucketBetweenLevels</c>
+        /// may be merging a genuine split-level landing rather than a single physical floor's slab-skin noise.
+        /// Never blocks the merge (the user's chosen band is honoured); this is visibility, not a rejection.
+        /// Appended at the end of the enum so existing members keep their ordinal values (public-enum binary
+        /// contract).
+        /// </summary>
+        LevelGroupOverMerge
     }
 }

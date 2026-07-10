@@ -378,9 +378,10 @@ namespace SAM.Analytical.OCCT.Solver
             double alignColinearOffset = 0.3,
             double normalizeCapOffset = 0.3,
             double bucketBetweenLevels = 0.0,
-            bool inputAlreadyClean = false)
+            bool inputAlreadyClean = false,
+            bool directionalCapGrow = false)
         {
-            return Extend3D(panels, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, fillMargin, alignColinearOffset, normalizeCapOffset, bucketBetweenLevels, inputAlreadyClean);
+            return Extend3D(panels, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, fillMargin, alignColinearOffset, normalizeCapOffset, bucketBetweenLevels, inputAlreadyClean, directionalCapGrow);
         }
 
         /// <summary>
@@ -403,7 +404,8 @@ namespace SAM.Analytical.OCCT.Solver
             double alignColinearOffset = 0.3,
             double normalizeCapOffset = 0.3,
             double bucketBetweenLevels = 0.0,
-            bool inputAlreadyClean = false)
+            bool inputAlreadyClean = false,
+            bool directionalCapGrow = false)
         {
             diagnostics = new List<string>();
             report = null;
@@ -432,7 +434,8 @@ namespace SAM.Analytical.OCCT.Solver
                 AlignColinearOffset = alignColinearOffset,
                 NormalizeCapOffset = normalizeCapOffset,
                 BucketBetweenLevels = bucketBetweenLevels,
-                InputAlreadyClean = inputAlreadyClean
+                InputAlreadyClean = inputAlreadyClean,
+                DirectionalCapGrow = directionalCapGrow
             };
             solver.Execute(null);
 
@@ -455,6 +458,10 @@ namespace SAM.Analytical.OCCT.Solver
                 "SAM_OCCT_EXTEND3D_RESULT: Filled/extended {0} panel(s) into {1} panel(s) (pre-resolve; the split runs in Solve3D).",
                 face3Ds.Count,
                 result.Count));
+
+            // Truthful input-effect notes: which changed inputs had no geometric effect this run and why (so a
+            // re-run with a different value that produces identical geometry is explained, never silent).
+            AppendInputEffectDiagnostics(diagnostics, sources, inputAlreadyClean, "SAM_OCCT_EXTEND3D");
 
             // Plan-closure check: how many wall ends are still open after the managed extend. Non-zero means
             // the wall loops do not close there, so floors/roofs cannot fill a closed polysurface - raise
@@ -537,7 +544,8 @@ namespace SAM.Analytical.OCCT.Solver
             double alignColinearOffset = 0.3,
             double normalizeCapOffset = 0.3,
             double bucketBetweenLevels = 0.0,
-            bool inputAlreadyClean = false)
+            bool inputAlreadyClean = false,
+            bool directionalCapGrow = false)
         {
             openEndPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
@@ -559,7 +567,8 @@ namespace SAM.Analytical.OCCT.Solver
                 AlignColinearOffset = alignColinearOffset,
                 NormalizeCapOffset = normalizeCapOffset,
                 BucketBetweenLevels = bucketBetweenLevels,
-                InputAlreadyClean = inputAlreadyClean
+                InputAlreadyClean = inputAlreadyClean,
+                DirectionalCapGrow = directionalCapGrow
             };
             solver.Execute(null);
 
@@ -572,6 +581,8 @@ namespace SAM.Analytical.OCCT.Solver
                 "SAM_OCCT_OPENPANELS3D_RESULT: {0} wall(s) still open in plan ({1} open end(s)); raise MaxExtend or bucket size on these and re-run.",
                 result.Count,
                 openEndPoint3Ds.Count));
+
+            AppendInputEffectDiagnostics(diagnostics, sources, inputAlreadyClean, "SAM_OCCT_OPENPANELS3D");
 
             // E3 observability: the same per-panel extend summary + hole-drop lines Extend3D surfaces, so the
             // open-ends diagnostic run shows how far each wall was extended (and toward what) before measuring.
@@ -799,11 +810,10 @@ namespace SAM.Analytical.OCCT.Solver
 
         /// <summary>
         /// Resolves the per-panel lateral extend reach (<c>SolverParameter.MaxExtend</c>): the caller's list
-        /// when supplied, otherwise the value already stamped on each panel by the Solver's
-        /// <c>SetMaxExtends</c> workflow, falling back to <see cref="Panel3DSnapSolver.DEFAULT_MaxExtension"/>
-        /// (0.4 m) when a panel carries none. Reads the panels read-only; nothing is mutated. Using the same
-        /// <see cref="SolverParameter.MaxExtend"/> the 2D Solver uses lets the reach be tuned (and seen via
-        /// <c>SAMAnalytical.Visualize</c>) exactly as in the Solver.
+        /// when supplied, otherwise a valid stamp on the panel, otherwise the flat solver default
+        /// <see cref="Panel3DSnapSolver.DEFAULT_MaxExtension"/> (0.4 m). Reads the panels read-only; nothing is
+        /// mutated. Using the same <see cref="SolverParameter.MaxExtend"/> the 2D Solver uses lets the reach be
+        /// tuned (and seen via <c>SAMAnalytical.Visualize</c>) exactly as in the Solver.
         /// </summary>
         private static List<double> ResolveMaxExtends(IEnumerable<double> maxExtends, List<Panel> sources)
         {
@@ -813,10 +823,22 @@ namespace SAM.Analytical.OCCT.Solver
         /// <summary>
         /// As <see cref="ResolveMaxExtends(IEnumerable{double}, List{Panel})"/>, additionally reporting the
         /// provenance of each resolved value for the CleanReport (§3). A valid per-panel
-        /// <c>SolverParameter.MaxExtend</c> stamp wins (<see cref="ParameterProvenance.Stamped"/>); otherwise the
-        /// solver default 0.4 m (<see cref="ParameterProvenance.Default"/>). The <c>SetMaxExtends</c>-derived
-        /// fallback (<see cref="ParameterProvenance.DerivedLength"/>) arrives in P3 - until then an unstamped
-        /// panel is a plain default, reported honestly.
+        /// <c>SolverParameter.MaxExtend</c> stamp wins (<see cref="ParameterProvenance.Stamped"/>), read straight
+        /// off the SOURCE; otherwise the flat solver default 0.4 m (<see cref="ParameterProvenance.Default"/>).
+        /// <para>
+        /// <b>P3 decision (docs/CONTROLLED_WORKFLOW_PLAN.md §5.6, revised):</b> the plan's first wording asked the
+        /// unstamped fallback to derive via <c>SetMaxExtends</c> (mirroring <see cref="ResolveWeights(IEnumerable{double}, List{Panel}, out List{ParameterProvenance})"/>).
+        /// That derivation pre-caps the reach at 0.49x each panel's own in-plane length (the
+        /// <c>EXTENSION_LIMIT_LENGTH_RATIO</c>, measured on a horizontal slice), which crushes short/segmented wall
+        /// panels to ~0.1 m and REGRESSED managed-pipeline closure on the golden masters (whole-level-tilted
+        /// 22 -&gt; 16 cells, new naked edges). Per the plan's own step-5 rule (regression -&gt; keep the default)
+        /// and the "do not change defaults" directive, the unstamped fallback stays the flat 0.4 m default -
+        /// byte-identical to pre-P3 - so MaxExtend is a per-panel tuning knob (<c>SolverParameter.MaxExtend</c> via
+        /// SolverProperties), and the 0.49x length-ratio cap applies only at the lateral extension operation itself
+        /// (its intended home, not the derivation). The <c>EXTEND3D_SKIP</c>/<c>_RISKY</c> records
+        /// (<c>CappedByLengthRatio</c>/<c>MaxExtendLimited</c>/<c>LengthRatioLimited</c>) surface whether a stamped
+        /// reach is the binding limit, so the tuning is never a guess.
+        /// </para>
         /// </summary>
         internal static List<double> ResolveMaxExtends(IEnumerable<double> maxExtends, List<Panel> sources, out List<ParameterProvenance> provenance)
         {
@@ -893,6 +915,55 @@ namespace SAM.Analytical.OCCT.Solver
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Honest input-effect notes for the extend/open passes (docs/CONTROLLED_WORKFLOW_PLAN.md §5, the
+        /// "generic solution - each input's effect must be visible" review item). A GH input a user changed but
+        /// that had NO geometric effect on THIS run is reported rather than silently ignored, so re-running with
+        /// a different value and seeing the same geometry is explained, never a mystery. Both cases are provable
+        /// from the pipeline, not guessed:
+        /// <list type="bullet">
+        /// <item><c>inputAlreadyClean = true</c> skips Stage A entirely (<see cref="Geometry.OCCT.Solver.Panel3DSnapSolver.InputAlreadyClean"/>),
+        /// so every clean-stage input - <c>minBucketSize_</c>, <c>thicknessFactor_</c>, <c>alignColinearOffset_</c>,
+        /// <c>normalizeCapOffset_</c> - is geometry-inert, and <c>bucketBetweenLevels_</c> only clusters the
+        /// level groups for reporting (no cap normalization moves). Only <c>fillMargin_</c> and
+        /// <c>directionalCapGrow_</c> change the fill/extend geometry on that path.</item>
+        /// <item>a panel carrying a <see cref="SolverParameter.BucketSize"/> stamp overrides
+        /// <c>minBucketSize_</c>/<c>thicknessFactor_</c> for itself (the stamp wins in <see cref="BucketSize"/>),
+        /// so those two inputs move only the UNSTAMPED panels.</item>
+        /// </list>
+        /// Emits nothing on the plain path (no stamps, <c>inputAlreadyClean=false</c>) where every input is live.
+        /// </summary>
+        private static void AppendInputEffectDiagnostics(List<string> diagnostics, List<Panel> sources, bool inputAlreadyClean, string prefix)
+        {
+            if (diagnostics == null)
+            {
+                return;
+            }
+
+            if (inputAlreadyClean)
+            {
+                diagnostics.Add(prefix + "_INPUT_INERT: inputAlreadyClean=true -> Stage A (clean bucket) skipped; minBucketSize_, thicknessFactor_, alignColinearOffset_, normalizeCapOffset_ had NO geometric effect this run, and bucketBetweenLevels_ affected LevelGroups reporting only (caps were normalized upstream by Clean3D). Only fillMargin_ and directionalCapGrow_ change the fill/extend geometry on the inputAlreadyClean path.");
+                return;
+            }
+
+            int total = sources?.Count ?? 0;
+            int stampedBuckets = 0;
+            foreach (Panel panel in sources ?? new List<Panel>())
+            {
+                if (panel != null && panel.TryGetValue(SolverParameter.BucketSize, out double bucketSize) && !double.IsNaN(bucketSize) && bucketSize > 0)
+                {
+                    stampedBuckets++;
+                }
+            }
+
+            if (stampedBuckets > 0)
+            {
+                diagnostics.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    prefix + "_INPUT_OVERRIDDEN: {0} of {1} panel(s) carry a SolverParameter.BucketSize stamp -> minBucketSize_/thicknessFactor_ are overridden for those panel(s) (the per-panel stamp wins; tune it via SAM_Solver SolverProperties). They still move the {2} unstamped panel(s).",
+                    stampedBuckets, total, total - stampedBuckets));
+            }
         }
 
         /// <summary>

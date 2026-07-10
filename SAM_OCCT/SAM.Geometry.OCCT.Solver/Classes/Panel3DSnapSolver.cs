@@ -142,6 +142,18 @@ namespace SAM.Geometry.OCCT.Solver
         public double FillOvershoot { get; set; } = 0.05;
 
         /// <summary>
+        /// P3 (docs/CONTROLLED_WORKFLOW_PLAN.md §5.2-§5.3): per-edge evidence-based cap growth. When true,
+        /// <see cref="Fill"/> tries <see cref="SnappedPanel.GrowEdgesToWalls"/> first for every cap - each
+        /// straight external edge grows only by its OWN measured gap to a wall that actually faces it; an edge
+        /// with no facing wall in reach grows exactly 0, so a cap bordering a double-height void can never be
+        /// pushed into it (the false-floor risk, D4). Falls back to the legacy uniform
+        /// <see cref="SnappedPanel.GrowOutwardTo"/>/<see cref="SnappedPanel.GrowOutward"/> only when the
+        /// per-edge reconstruction itself finds no evidence or fails validation - never a silent guess. Default
+        /// false (the legacy uniform grow, byte-identical to pre-P3 behaviour).
+        /// </summary>
+        public bool DirectionalCapGrow { get; set; } = false;
+
+        /// <summary>
         /// Re-attach any face the native MakerVolume dropped - walls AND caps (floors/roofs) alike. The
         /// kernel returns only faces that bound a closed cell, so a face whose cell fails to form (e.g. a
         /// stepped/tilted region the kernel cannot close, or a roof lid the cells cap off) is silently
@@ -597,7 +609,8 @@ namespace SAM.Geometry.OCCT.Solver
                     ExtendToRoofs = ExtendToRoofs,
                     FillCapsToWalls = FillCapsToWalls,
                     FillMargin = FillMargin,
-                    FillOvershoot = FillOvershoot
+                    FillOvershoot = FillOvershoot,
+                    DirectionalCapGrow = DirectionalCapGrow
                 },
                 tolerances,
                 extendRecords);
@@ -1895,6 +1908,33 @@ namespace SAM.Geometry.OCCT.Solver
                 maxExtensions.Add(System.Math.Max(0, wall.MaxExtension));
             }
 
+            // Real decision point (P3 §5.4): a wall whose own length caps its lateral reach
+            // (EXTENSION_LIMIT_LENGTH_RATIO) at or below tolerance cannot move regardless of MaxExtend -
+            // recorded once per such wall (both plan ends) rather than silently falling through to the
+            // generic "unchanged" branch below.
+            bool[] lengthCapped = new bool[walls.Count];
+            if (records != null)
+            {
+                for (int i = 0; i < walls.Count; i++)
+                {
+                    double length = lines[i].GetLength();
+                    double cap = System.Math.Min(maxExtensions[i], length * EXTENSION_LIMIT_LENGTH_RATIO);
+                    if (cap > toleranceDistance)
+                    {
+                        continue;
+                    }
+
+                    lengthCapped[i] = true;
+                    string detail = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        "length {0:0.###} m x ratio {1:0.##} = {2:0.###} m reach", length, EXTENSION_LIMIT_LENGTH_RATIO, cap);
+                    Geometry.Planar.Point2D start2D = lines[i].GetStart();
+                    Geometry.Planar.Point2D end2D = lines[i].GetEnd();
+                    double baseZ = feet[i].GetStart().Z;
+                    records.Add(ExtendRecord.Skip(wallPanelIndices[i], RepresentativeSource(walls[i]), ExtendOperationKind.PlanStart, ExtendSkipReason.CappedByLengthRatio, detail, new Point3D(start2D.X, start2D.Y, baseZ)));
+                    records.Add(ExtendRecord.Skip(wallPanelIndices[i], RepresentativeSource(walls[i]), ExtendOperationKind.PlanEnd, ExtendSkipReason.CappedByLengthRatio, detail, new Point3D(end2D.X, end2D.Y, baseZ)));
+                }
+            }
+
             List<Geometry.Planar.Segment2D> resolved;
             try
             {
@@ -1927,6 +1967,11 @@ namespace SAM.Geometry.OCCT.Solver
                 // Unchanged within tolerance -> leave the wall exactly where it was (no needless move).
                 if (rStart.Distance(oStart) <= toleranceDistance && rEnd.Distance(oEnd) <= toleranceDistance)
                 {
+                    if (records != null && !lengthCapped[i])
+                    {
+                        RecordUnchangedPlanEnds(records, walls[i], wallPanelIndices[i], oStart, oEnd, i, lines, feet[i].GetStart().Z, maxExtensions[i], toleranceDistance);
+                    }
+
                     continue;
                 }
 
@@ -1966,6 +2011,53 @@ namespace SAM.Geometry.OCCT.Solver
             }
         }
 
+        /// <summary>Real decision point (P3 §5.4) for a plan end the 2D plan-loop solver left exactly where it
+        /// was: per end, either it already touches another wall's line within tolerance
+        /// (<see cref="ExtendSkipReason.AlreadyMeetsTarget"/>), or no other wall's line lies within this
+        /// wall's own reach at all (<see cref="ExtendSkipReason.NoTargetWithinReach"/>). Recording only.</summary>
+        private static void RecordUnchangedPlanEnds(
+            List<ExtendRecord> records, SnappedPanel wall, int panelIndex,
+            Geometry.Planar.Point2D oStart, Geometry.Planar.Point2D oEnd,
+            int self, List<Geometry.Planar.Segment2D> lines, double baseZ, double reach, double toleranceDistance)
+        {
+            RecordUnchangedPlanEnd(records, wall, panelIndex, oStart, ExtendOperationKind.PlanStart, self, lines, baseZ, reach, toleranceDistance);
+            RecordUnchangedPlanEnd(records, wall, panelIndex, oEnd, ExtendOperationKind.PlanEnd, self, lines, baseZ, reach, toleranceDistance);
+        }
+
+        private static void RecordUnchangedPlanEnd(
+            List<ExtendRecord> records, SnappedPanel wall, int panelIndex, Geometry.Planar.Point2D endpoint,
+            ExtendOperationKind kind, int self, List<Geometry.Planar.Segment2D> lines, double baseZ, double reach, double toleranceDistance)
+        {
+            double nearest = double.MaxValue;
+            for (int k = 0; k < lines.Count; k++)
+            {
+                if (k == self)
+                {
+                    continue;
+                }
+
+                Geometry.Planar.Point2D a = lines[k].GetStart();
+                Geometry.Planar.Point2D b = lines[k].GetEnd();
+                double distance = PlanDistancePointToSegment(endpoint.X, endpoint.Y, a.X, a.Y, b.X, b.Y);
+                if (distance < nearest)
+                {
+                    nearest = distance;
+                }
+            }
+
+            Point3D at = new Point3D(endpoint.X, endpoint.Y, baseZ);
+            if (nearest <= toleranceDistance)
+            {
+                records.Add(ExtendRecord.Skip(panelIndex, RepresentativeSource(wall), kind, ExtendSkipReason.AlreadyMeetsTarget,
+                    string.Format(System.Globalization.CultureInfo.InvariantCulture, "already meets a neighbouring wall within {0:0.###} m", toleranceDistance), at));
+            }
+            else
+            {
+                records.Add(ExtendRecord.Skip(panelIndex, RepresentativeSource(wall), kind, ExtendSkipReason.NoTargetWithinReach,
+                    string.Format(System.Globalization.CultureInfo.InvariantCulture, "nearest wall {0:0.###} m away, reach {1:0.###} m", nearest == double.MaxValue ? -1 : nearest, reach), at));
+            }
+        }
+
         /// <summary>E3 observability for a lateral foot move (<see cref="SnappedPanel.SetVerticalFootprint"/>):
         /// emits one <see cref="ExtendRecord"/> per plan end that actually moved (start and/or end), measured as
         /// the plan parameter along the wall axis relative to the original start. The lateral-capped flag is set
@@ -1992,13 +2084,16 @@ namespace SAM.Geometry.OCCT.Solver
             {
                 bool extended = startParam < -toleranceDistance;
                 double extensionDistance = extended ? -startParam : 0;
-                records.Add(new ExtendRecord(
+                bool capped = extended && cap > toleranceDistance && extensionDistance >= cap - toleranceDistance;
+                ExtendRecord record = new ExtendRecord(
                     panelIndex, sourceIndex, ExtendOperationKind.PlanStart,
                     0, nsParam, "plan",
                     new Point3D(oStart.X, oStart.Y, baseZ), new Point3D(nsX, nsY, baseZ),
                     -1, -1, "walls", "2D plan-loop junction",
                     extended ? overshoot : 0,
-                    extended && cap > toleranceDistance && extensionDistance >= cap - toleranceDistance));
+                    capped);
+                AddLateralRiskFlags(record, wall, extended, extensionDistance, cap, length);
+                records.Add(record);
             }
 
             // END end (original plan parameter == length).
@@ -2006,13 +2101,41 @@ namespace SAM.Geometry.OCCT.Solver
             {
                 bool extended = endParam > length + toleranceDistance;
                 double extensionDistance = extended ? endParam - length : 0;
-                records.Add(new ExtendRecord(
+                bool capped = extended && cap > toleranceDistance && extensionDistance >= cap - toleranceDistance;
+                ExtendRecord record = new ExtendRecord(
                     panelIndex, sourceIndex, ExtendOperationKind.PlanEnd,
                     length, neParam, "plan",
                     new Point3D(oEnd.X, oEnd.Y, baseZ), new Point3D(neX, neY, baseZ),
                     -1, -1, "walls", "2D plan-loop junction",
                     extended ? overshoot : 0,
-                    extended && cap > toleranceDistance && extensionDistance >= cap - toleranceDistance));
+                    capped);
+                AddLateralRiskFlags(record, wall, extended, extensionDistance, cap, length);
+                records.Add(record);
+            }
+        }
+
+        /// <summary>P3 §5.5: metadata on an applied lateral (wall-to-wall) move - near its available reach
+        /// (<see cref="ExtendRiskFlag.NearReachLimit"/>, &gt;= 90% of <paramref name="cap"/>), and, when it
+        /// actually reached the cap, WHICH term bound it - the panel's own <c>MaxExtend</c>
+        /// (<see cref="ExtendRiskFlag.MaxExtendLimited"/>) or the length-ratio cap
+        /// (<see cref="ExtendRiskFlag.LengthRatioLimited"/>).</summary>
+        private static void AddLateralRiskFlags(ExtendRecord record, SnappedPanel wall, bool extended, double extensionDistance, double cap, double length)
+        {
+            if (!extended || cap <= 0)
+            {
+                return;
+            }
+
+            if (extensionDistance >= 0.9 * cap)
+            {
+                record.AddRisk(ExtendRiskFlag.NearReachLimit);
+            }
+
+            if (extensionDistance >= cap - Core.Tolerance.Distance)
+            {
+                double maxExtensionTerm = System.Math.Max(0, wall.MaxExtension);
+                double lengthRatioTerm = length * EXTENSION_LIMIT_LENGTH_RATIO;
+                record.AddRisk(maxExtensionTerm <= lengthRatioTerm ? ExtendRiskFlag.MaxExtendLimited : ExtendRiskFlag.LengthRatioLimited);
             }
         }
 
@@ -2263,6 +2386,14 @@ namespace SAM.Geometry.OCCT.Solver
             int capIndex = NearestCoveringCap(wallBox, centreX, centreY, capBoxes, capPlanes, toleranceDistance, up, wallExtreme);
             if (capIndex < 0)
             {
+                if (records != null)
+                {
+                    records.Add(ExtendRecord.Skip(
+                        wallPanelIndex, RepresentativeSource(wall), up ? ExtendOperationKind.Top : ExtendOperationKind.Bottom,
+                        ExtendSkipReason.NoTargetWithinReach,
+                        string.Format(System.Globalization.CultureInfo.InvariantCulture, "no cap covers this wall {0}", up ? "above" : "below")));
+                }
+
                 return;
             }
 
@@ -2337,14 +2468,23 @@ namespace SAM.Geometry.OCCT.Solver
 
             double fromValue = up ? preBox.Max.Z : preBox.Min.Z;
             double toValue = up ? postBox.Max.Z : postBox.Min.Z;
+            double capExtremeZ = up ? capBox.Max.Z : capBox.Min.Z;
             if (System.Math.Abs(toValue - fromValue) <= toleranceDistance)
             {
-                return; // no-op: the wall already reached the cap, or the (clamped) target did not clear it
+                // Real no-op branch (P3 §5.4): either the wall already reached the cap's real surface before
+                // this call (AlreadyMeetsTarget), or a target existed but the (possibly clamped) geometric
+                // construction did not actually clear the wall's extreme (DegenerateGeometry) - never silent.
+                bool alreadyMet = up ? fromValue >= capExtremeZ - toleranceDistance : fromValue <= capExtremeZ + toleranceDistance;
+                records.Add(ExtendRecord.Skip(
+                    wallPanelIndex, RepresentativeSource(wall), up ? ExtendOperationKind.Top : ExtendOperationKind.Bottom,
+                    alreadyMet ? ExtendSkipReason.AlreadyMeetsTarget : ExtendSkipReason.DegenerateGeometry,
+                    string.Format(System.Globalization.CultureInfo.InvariantCulture, "wall {0} {1:0.###}, cap {2:0.###}", up ? "top" : "base", fromValue, capExtremeZ),
+                    new Point3D(0.5 * (preBox.Min.X + preBox.Max.X), 0.5 * (preBox.Min.Y + preBox.Max.Y), fromValue)));
+                return;
             }
 
             double centreX = 0.5 * (preBox.Min.X + preBox.Max.X);
             double centreY = 0.5 * (preBox.Min.Y + preBox.Max.Y);
-            double capExtremeZ = up ? capBox.Max.Z : capBox.Min.Z;
 
             int targetPanelIndex = capPanelIndices != null && capIndex >= 0 && capIndex < capPanelIndices.Count ? capPanelIndices[capIndex] : -1;
             int targetSourceIndex = capSourceIndices != null && capIndex >= 0 && capIndex < capSourceIndices.Count ? capSourceIndices[capIndex] : -1;
@@ -2469,9 +2609,12 @@ namespace SAM.Geometry.OCCT.Solver
         /// overshoots the surrounding walls, closing the floor/roof-to-wall gaps that otherwise leave naked
         /// edges and prevent any cell from closing. The native resolve trims the overshoot back at the walls.
         /// </summary>
-        public static void Fill(List<SnappedPanel> panels, double verticalAngleTolerance, double margin, double toleranceDistance, double overshoot = 0.05, List<ExtendRecord> records = null)
+        /// <param name="directionalCapGrow">P3 §5.2-§5.3: when true, try the per-edge evidence-based
+        /// <see cref="SnappedPanel.GrowEdgesToWalls"/> before the legacy uniform grows (never in place of the
+        /// fallback chain - only ahead of it). Default false.</param>
+        public static void Fill(List<SnappedPanel> panels, double verticalAngleTolerance, double margin, double toleranceDistance, double overshoot = 0.05, List<ExtendRecord> records = null, bool directionalCapGrow = false)
         {
-            if (panels == null || panels.Count == 0 || margin <= toleranceDistance)
+            if (panels == null || panels.Count == 0)
             {
                 return;
             }
@@ -2480,6 +2623,28 @@ namespace SAM.Geometry.OCCT.Solver
             // the full margin) lets a cap reach exactly the walls it is short of and no further - the kernel
             // trims the small overshoot. A cap with no wall in reach falls back to the fixed-margin grow.
             List<SnappedPanel> walls = panels.Where(x => x.IsVertical(verticalAngleTolerance)).ToList();
+            List<SnappedPanel> caps = panels.Where(x => !x.IsVertical(verticalAngleTolerance)).ToList();
+
+            if (margin <= toleranceDistance)
+            {
+                // Real decision point (P3 §5.4): the configured margin/reach has nothing meaningful to grow by -
+                // every cap is left untouched, recorded rather than silently returning.
+                if (records != null)
+                {
+                    for (int panelIndex = 0; panelIndex < panels.Count; panelIndex++)
+                    {
+                        if (!panels[panelIndex].IsVertical(verticalAngleTolerance))
+                        {
+                            records.Add(ExtendRecord.Skip(
+                                panelIndex, RepresentativeSource(panels[panelIndex]), ExtendOperationKind.CapGrow,
+                                ExtendSkipReason.FillTooSmall,
+                                string.Format(System.Globalization.CultureInfo.InvariantCulture, "margin {0:0.###} m <= tolerance {1:0.###} m", margin, toleranceDistance)));
+                        }
+                    }
+                }
+
+                return;
+            }
 
             for (int panelIndex = 0; panelIndex < panels.Count; panelIndex++)
             {
@@ -2489,31 +2654,95 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
-                double areaBefore = records != null ? panel.GetArea() : 0;
+                double areaBefore = panel.GetArea();
 
-                bool measured = panel.GrowOutwardTo(walls, margin, overshoot, toleranceDistance);
-                if (!measured)
+                string targetKind;
+                if (directionalCapGrow && panel.GrowEdgesToWalls(walls, margin, overshoot, toleranceDistance))
                 {
-                    panel.GrowOutward(margin, toleranceDistance);
+                    targetKind = "walls-directional";
+                }
+                else if (panel.GrowOutwardTo(walls, margin, overshoot, toleranceDistance))
+                {
+                    targetKind = "walls-measured";
+                }
+                else if (panel.GrowOutward(margin, toleranceDistance))
+                {
+                    targetKind = "fixed-margin";
+                }
+                else
+                {
+                    targetKind = null;
+                }
+
+                double areaAfter = panel.GetArea();
+                bool grew = areaAfter > areaBefore + toleranceDistance;
+
+                if (records == null)
+                {
+                    continue;
+                }
+
+                if (!grew)
+                {
+                    // No wall was in reach for the whole-cap fallback either, or the fixed-margin offset itself
+                    // failed (a degenerate boundary) - a real no-op, recorded rather than silently skipped.
+                    ExtendSkipReason reason = targetKind == null ? ExtendSkipReason.DegenerateGeometry : ExtendSkipReason.NoTargetWithinReach;
+                    records.Add(ExtendRecord.Skip(
+                        panelIndex, RepresentativeSource(panel), ExtendOperationKind.CapGrow, reason,
+                        string.Format(System.Globalization.CultureInfo.InvariantCulture, "no wall within reach {0:0.###} m", margin)));
+                    continue;
                 }
 
                 // E3: record the cap grow (area before -> after). A cap grow is an in-plane offset of the whole
-                // boundary - no single moved edge - so it carries no preview segment (null From/To); the measured
-                // grow tells the reviewer which caps reached their walls (measured) vs fell back to fixed-margin.
-                if (records != null)
+                // boundary - no single moved edge - so it carries no preview segment (null From/To); the target
+                // kind tells the reviewer which mode actually reached this cap.
+                ExtendRecord record = new ExtendRecord(
+                    panelIndex, RepresentativeSource(panel), ExtendOperationKind.CapGrow,
+                    areaBefore, areaAfter, "area",
+                    null, null,
+                    -1, -1, targetKind, string.Empty,
+                    overshoot, false);
+
+                if (directionalCapGrow && targetKind != "walls-directional")
                 {
-                    double areaAfter = panel.GetArea();
-                    if (areaAfter > areaBefore + toleranceDistance)
-                    {
-                        records.Add(new ExtendRecord(
-                            panelIndex, RepresentativeSource(panel), ExtendOperationKind.CapGrow,
-                            areaBefore, areaAfter, "area",
-                            null, null,
-                            -1, -1, measured ? "walls-measured" : "fixed-margin", string.Empty,
-                            overshoot, false));
-                    }
+                    // Directional growth was requested but this cap did not get it - visible, not silent.
+                    record.AddRisk(ExtendRiskFlag.LegacyUniformCapGrow);
+                }
+
+                if (HasNewCoplanarOverlap(panel, caps))
+                {
+                    record.AddRisk(ExtendRiskFlag.NewCoplanarOverlap);
+                }
+
+                records.Add(record);
+            }
+        }
+
+        /// <summary>P3 §5.5 (<see cref="ExtendRiskFlag.NewCoplanarOverlap"/>): true when <paramref name="grown"/>,
+        /// after its cap grow, now shares in-plane surface (<see cref="SnappedPanel.OverlapsInPlane"/>) with
+        /// another cap on (near-)the same plane - two different caps growing toward each other and now
+        /// overlapping is worth a reviewer's attention, even though nothing here blocks the move.</summary>
+        private static bool HasNewCoplanarOverlap(SnappedPanel grown, List<SnappedPanel> caps)
+        {
+            foreach (SnappedPanel other in caps)
+            {
+                if (ReferenceEquals(other, grown) || other?.Plane == null)
+                {
+                    continue;
+                }
+
+                if (!grown.IsCoplanarWith(other, Core.Tolerance.Angle, 0.05))
+                {
+                    continue;
+                }
+
+                if (grown.OverlapsInPlane(other, Core.Tolerance.Distance))
+                {
+                    return true;
                 }
             }
+
+            return false;
         }
 
         /// <summary>True when the two boxes overlap in the XY (plan) projection within a tolerance.</summary>

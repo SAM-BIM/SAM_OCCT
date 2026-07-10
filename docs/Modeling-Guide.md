@@ -496,6 +496,34 @@ byte-identical legacy behaviour.
   `derived-thickness` / `min-floor` / `default`). Recorded at the real decision points — never inferred from
   a geometry diff.
 
+### `directionalCapGrow_` — grow each cap edge only toward a wall that faces it (Extend3D, P3)
+
+When a floor/roof cap is short of its surrounding walls, `Extend3D` grows it outward to close the gap. The
+legacy grow (`directionalCapGrow_ = false`, default) offsets the **whole** cap boundary uniformly by the
+largest in-reach wall gap — which can push a mid-level cap that borders a double-height void **into** that
+void and fabricate a false intermediate floor. Set `directionalCapGrow_ = true` to grow **each straight
+edge independently**, by only its own measured gap to a wall that actually faces it; an edge with no facing
+wall in reach grows **exactly 0**, so a cap bordering a void is never dragged into it. If the per-edge
+reconstruction finds no evidence or fails validation, it falls back to the legacy grow and flags the record
+`LegacyUniformCapGrow` (visible, never silent).
+
+### `ExtendReport` SKIP / RISKY lines — why a panel did or didn't move (P3)
+
+`Extend3D`'s `ExtendReport` now records every extend/fill **decision**, not only the moves:
+
+- `SAM_OCCT_EXTEND3D_PANEL:` — an applied move (frozen format): which edge moved, from → to, toward what target.
+- `SAM_OCCT_EXTEND3D_SKIP:` — a real decision point that left a panel **untouched**, with the reason:
+  `NoTargetWithinReach` / `AlreadyMeetsTarget` / `CappedByLengthRatio` / `TargetAmbiguous` /
+  `DegenerateGeometry` / `FillTooSmall`. A panel that stayed put is now traceable, never a silent no-op.
+- `SAM_OCCT_EXTEND3D_RISKY:` — metadata on an applied move worth a look: `NearReachLimit`,
+  `MaxExtendLimited`, `LengthRatioLimited`, `NewCoplanarOverlap`, `LegacyUniformCapGrow`.
+
+**Tuning MaxExtend with these lines:** a wall's lateral reach is `min(MaxExtend, 0.49 × the wall's own
+length)`. If a wall will not close its plan loop, check its line: `MaxExtendLimited` means raising
+`SolverParameter.MaxExtend` (via SolverProperties) will help; `LengthRatioLimited` or `CappedByLengthRatio`
+means the wall is too short for its own reach and more `MaxExtend` will **not** help — split/lengthen the
+wall or fix the neighbour instead. The unstamped default reach is a flat **0.4 m** (a per-panel stamp wins).
+
 ### Parameter precedence (bake → SolverProperties → rerun)
 
 A valid **per-panel stamp always wins** over the derived value, which wins over the solver default — for
@@ -503,6 +531,28 @@ BucketSize, Weight **and** MaxExtend. To tune a problem panel: run with defaults
 the panel to Rhino, assign `SolverParameter.BucketSize` / `Weight` / `Max Extend` with SAM_Solver's
 **SolverProperties** component, and rerun. The provenance tag on each CleanReport line confirms your stamp
 was honoured (it reads `stamped`).
+
+### Which Extend3D input actually changes the geometry? (the input-effect matrix)
+
+An input that has **no effect** on a given run is reported, not silently ignored — so re-running with a
+different value and seeing identical geometry is explained. `Extend3D` emits a
+`SAM_OCCT_EXTEND3D_INPUT_INERT:` line when the mode makes an input inert, and a
+`SAM_OCCT_EXTEND3D_INPUT_OVERRIDDEN:` line when a per-panel stamp overrides one. The two paths differ
+sharply:
+
+| Input | Standalone (`inputAlreadyClean = false`) | Chained (`inputAlreadyClean = true`, the Clean3D → Extend3D handoff) |
+|---|---|---|
+| `minBucketSize_`, `thicknessFactor_` | live — **unless** a panel carries a `BucketSize` stamp (then that panel is overridden) | **inert** (Stage A skipped) — tune on the upstream Clean3D instead |
+| `alignColinearOffset_`, `normalizeCapOffset_` | live (clean-stage) | **inert** (Stage A skipped) — tune on Clean3D |
+| `bucketBetweenLevels_` | live (cap normalization + extend targets) | **reporting-only** (`LevelGroups`) — the caps were already normalized by Clean3D |
+| `fillMargin_` | live (how far caps grow) | **live** |
+| `directionalCapGrow_` | live (per-edge vs uniform cap grow) | **live** |
+| per-panel `SolverParameter.MaxExtend` stamp | live (lateral wall reach) | live |
+
+**Key point for the controlled chain:** on the `inputAlreadyClean = true` handoff, only `fillMargin_`,
+`directionalCapGrow_` and the per-panel stamps change the Extend3D geometry. Everything that shapes the
+clean bucket and the level grouping must be set on the **Clean3D** component upstream — Extend3D is only
+conditioning the already-clean panels. The `INPUT_INERT` diagnostic on each run states this explicitly.
 
 ## Large Building Strategy
 
