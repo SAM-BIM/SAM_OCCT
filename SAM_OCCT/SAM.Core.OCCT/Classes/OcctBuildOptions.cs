@@ -61,6 +61,17 @@ namespace SAM.Core.OCCT
         /// </summary>
         public OcctGlueMode GlueMode { get; set; } = OcctGlueMode.Off;
 
+        /// <summary>
+        /// When true, overlapping coplanar faces are merged before the native
+        /// volume build (mirrors <c>ResolveStage</c>'s coplanar pre-merge).
+        /// This is the managed analogue of <see cref="SewBeforeBuild"/>: where
+        /// sew joins near-touching edges, this merge collapses overlapping
+        /// coplanar faces — the two faces of a grown cap that now overlap
+        /// their neighbour, or an extended wall that crosses a cap plane — into
+        /// one clean surface. Default false preserves the direct build path.
+        /// </summary>
+        public bool MergeCoplanarBeforeBuild { get; set; } = false;
+
         public OcctBuildOptions()
         {
         }
@@ -82,6 +93,7 @@ namespace SAM.Core.OCCT
             SewBeforeBuild = occtBuildOptions.SewBeforeBuild;
             MaxSewFaceCount = occtBuildOptions.MaxSewFaceCount;
             GlueMode = occtBuildOptions.GlueMode;
+            MergeCoplanarBeforeBuild = occtBuildOptions.MergeCoplanarBeforeBuild;
         }
 
         /// <summary>

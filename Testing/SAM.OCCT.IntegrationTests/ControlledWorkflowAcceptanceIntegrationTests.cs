@@ -77,7 +77,7 @@ namespace SAM.OCCT.IntegrationTests
                 extended,
                 out OcctCellComplexResult result,
                 log,
-                new OcctBuildOptions { Tolerance = Tolerance.Distance, FuzzyTolerance = Tolerance.MacroDistance, AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01 });
+                new OcctBuildOptions { Tolerance = Tolerance.Distance, FuzzyTolerance = Tolerance.MacroDistance, AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01, MergeCoplanarBeforeBuild = true });
 
             return (extended, expectedSpaceSet, cluster, result, originalPanels);
         }

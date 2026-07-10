@@ -162,7 +162,47 @@ default 0.5 m works. West3's double-height is preserved (verified: `DoubleHeight
 - `Panel3DSnapSolver.Fill()`: added coplanar-cap coalescing second pass (gated on `directionalCapGrow`).
 - `SnappedPanel.GrowEdgesToCaps()`: new method for mathematical cap-to-cap edge detection (available as a
   building block; the coalescing pass uses the simpler `GrowOutward` approach).
-- No ConditionStage reorder needed; no OcctBuildOptions changes.
+- `OcctBuildOptions.MergeCoplanarBeforeBuild`: new option for managed coplanar pre-merge before native build.
+- `Create.Shells()`: wires `MergeCoplanarBeforeBuild` to run `MergeCoplanarFace3Ds` before MakerVolume.
+- No ConditionStage reorder needed; no fillMargin increase needed.
+
+### Pipeline optimization review (2026-07-10)
+
+A systematic comparison of the controlled workflow (`Clean3D → Extend3D → AdjacencyCluster`) against the
+solver pipeline (`Solve3D`) identified these gaps and optimizations:
+
+**Gap in the AdjacencyCluster path (now closed):** The solver's `ResolveStage` runs a managed coplanar
+pre-merge (`MergeCoplanarFace3Ds`) BEFORE the native MakerVolume build. This collapses overlapping coplanar
+faces from the fill/extend step, which is what lets the kernel form a zoned cell complex. The AdjacencyCluster
+path (`CellComplexByPanels → Create.Shells`) had no equivalent — overshooting faces went directly to
+MakerVolume without pre-merge. **New `OcctBuildOptions.MergeCoplanarBeforeBuild`** adds this step, gated
+behind a flag (default off, enabled for the controlled workflow chain).
+
+**Gap in cap growth (now closed):** The solver's `HealStage.SewV2` performs an adaptive residual sew with
+tolerance capping and fusion veto after MakerVolume. The AdjacencyCluster path has `SewBeforeBuild` (pre-build
+sew) but no post-build adaptive sew. The coplanar-cap coalescing pass (above) addresses the root cause at
+the managed level, before the native build.
+
+**Investigated but NOT changed:**
+- `NearestCoveringCap` plan overlap tolerance: the geometric tolerance (1e-6 m) is overly strict for
+  building-scale models. Increasing it to `MacroDistance` (0.001 m) or 0.01 m changes the wall-to-cap
+  matching for Face3D-home and AdjacencyCluster-home fixtures, causing golden-master regressions. Left for
+  a future focused PR with fixture re-baselining.
+- ConditionStage order (Fill before Extend): tested but not needed — the coplanar-cap coalescing pass
+  addresses the same gap without reordering.
+- SewV2 port to AdjacencyCluster path: deferred. The pre-build sew (SewBeforeBuild) + managed pre-merge
+  (MergeCoplanarBeforeBuild) + coplanar-cap coalescing provide three layers of defense.
+
+**Notable pipeline differences (Solve3D has these, AdjacencyCluster does not):**
+- `HealStage.RetainDroppedV2` — re-adds clean geometry for dropped sources. Not applicable: AdjacencyCluster
+  doesn't compare source-vs-output faces; SpaceMatcher handles cell matching differently.
+- `GapFill.FromNakedWires` — patches residual naked-boundary loops. Not applicable: AdjacencyCluster
+  produces cells via its own MakerVolume call which shouldn't leave naked loops.
+- `PanelReconstruction.Build` with aperture re-hosting — Solve3D uses source-aware Guid policy. The
+  controlled workflow uses `BuildPanels` (simpler attribution). Not a gap: the controlled workflow's
+  output is the AdjacencyCluster, not rebuilt panels.
+- `ConsolidationRebuild` — final `Create.Shells` over resolved+patches+retained. Not applicable:
+  AdjacencyCluster already does its own `Create.Shells` as the primary build.
 
 Diagnostic tests added:
 - `EastSouthExtendDiagnosticTests` — pins wall vertical-extension skips
@@ -188,6 +228,6 @@ can disagree. Verified on this fixture: from the raw originals, `ExpectedSpaceSe
 output), it computed the correct 12.240/15.290/18.340. The acceptance test now sources `levelSourcePanels` from
 the cleaned panels. No `ExpectedSpaceSet`/`SpaceMatcher` code changed — only which panels the caller passes.
 
-## 9. Suite status at capture (East1/South1 fix)
+## 9. Suite status at capture (optimizations)
 
-Unit: **583/583 passed**. Integration: **211 passed / 2 skipped / 0 failed** (baseline test included; perf benchmark skipped via `SAM_OCCT_SKIP_PERF=1`). Note: building the full solution's Grasshopper projects fails on their post-build deploy (`copy` into `%APPDATA%\SAM`) while Rhino/Grasshopper is running — close Rhino for full-solution builds; the test projects and solver libraries build clean regardless.
+Unit: **583/583 passed**. Integration: **213 passed / 2 skipped / 0 failed**.
