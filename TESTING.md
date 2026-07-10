@@ -1147,6 +1147,15 @@ mismatch, without touching solver geometry or any adoption gate. Two changes:
    (`AvoidInternalShapes=false, SewBeforeBuild=true, SewingTolerance=0.01`). Both components now use
    the solver-matched recipe by default (`SAMOCCTCreateAdjacencyClusterByShells`'s `sew_` toggle
    default flipped from `false` to `true`; it stays overridable per-run).
+   A later robustness guard keeps this options-parity behaviour for normal fixtures while preventing
+   Rhino-host crashes on very large analytical panel soups: `OcctBuildOptions.MaxSewFaceCount`
+   defaults to `2048`, so pre-build native sew is skipped with `SAM_OCCT_SEW_SKIPPED_LARGE_INPUT`
+   when the face count is above that value, and the full input is built once through the direct
+   MakerVolume path. The threshold is empirical, not an OCCT kernel limit: it is deliberately far
+   above the current P1 fixture set (largest `.sam` fixture is under 300 analytical panels) and below
+   the Talybont regression file (`Panels-InputForAdjac1.sam`, 6927 valid panels), which previously
+   stack-overflowed inside `sam_occt_sew_faces`. A local scratch-run verification on that file built
+   directly in about 200.7s, producing 1740 spaces / 9076 panels and the sew-skip diagnostic.
 2. **Parity diagnostic.** `Create.AdjacencyCluster`'s `DirectAdjacencyCluster`
    (`SAM_OCCT_ANALYTICAL_PARITY`) counts, on every direct rebuild: relations added vs. expected
    (`2 x |FaceAdjacencies| + envelope faces`, i.e. every shared face owned by two cells contributes

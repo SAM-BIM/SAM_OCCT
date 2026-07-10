@@ -162,6 +162,14 @@ Useful diagnostics:
   mesh to repair.
 - `SAM_OCCT_ANALYTICAL_SHELL_SEW`: reports that sew-and-heal before MakerVolume is
   on (always for mesh input, or when `sew_` is set for Shell / Brep input).
+- `SAM_OCCT_SEW_SKIPPED_LARGE_INPUT`: reports that panel/face input was too large
+  for the pre-build native sew-and-heal safety guard, so the full model was built
+  once through the direct MakerVolume path instead. This is not batching. The
+  default guard is `MaxSewFaceCount = 2048`: an empirical safety value chosen well
+  above the existing regression fixtures (largest current fixture is under 300
+  panels) and below the Talybont crash case (6927 valid panels), where OCCT sewing
+  stack-overflowed before returning to managed code. It is not an OCCT hard limit;
+  managed callers can raise it or set it to `0` to force sew for controlled testing.
 - `SAM_OCCT_ANALYTICAL_SHELL_METADATA`: reports supplied spaces/names and the
   shell-native matching/naming strategy.
 - `SAM_OCCT_ANALYTICAL_PANEL_METADATA`: reports supplied panels/spaces and the

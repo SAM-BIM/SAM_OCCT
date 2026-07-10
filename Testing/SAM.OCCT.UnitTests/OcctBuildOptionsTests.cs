@@ -25,6 +25,7 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(0.0, options.SewingTolerance);
             Assert.False(options.SewBeforeBuild);
             Assert.Equal(global::SAM.Core.Tolerance.Distance, options.EffectiveSewingTolerance);
+            Assert.Equal(2048, options.MaxSewFaceCount);
 
             // issue #37 follow-on: BOP glue defaults off.
             Assert.Equal(OcctGlueMode.Off, options.GlueMode);
@@ -57,7 +58,7 @@ namespace SAM.OCCT.UnitTests
         public void CopyConstructor_WithSource_CopiesSewOptions()
         {
             // Arrange
-            OcctBuildOptions source = new OcctBuildOptions { SewingTolerance = 0.004, SewBeforeBuild = true };
+            OcctBuildOptions source = new OcctBuildOptions { SewingTolerance = 0.004, SewBeforeBuild = true, MaxSewFaceCount = 4096 };
 
             // Act
             OcctBuildOptions copy = new OcctBuildOptions(source);
@@ -65,6 +66,7 @@ namespace SAM.OCCT.UnitTests
             // Assert
             Assert.Equal(source.SewingTolerance, copy.SewingTolerance);
             Assert.True(copy.SewBeforeBuild);
+            Assert.Equal(source.MaxSewFaceCount, copy.MaxSewFaceCount);
         }
 
         [Theory]

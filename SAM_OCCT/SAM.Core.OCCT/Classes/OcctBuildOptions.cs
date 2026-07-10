@@ -42,6 +42,13 @@ namespace SAM.Core.OCCT
         public bool SewBeforeBuild { get; set; } = false;
 
         /// <summary>
+        /// Maximum face count allowed to enter the native sew-and-heal path. Large
+        /// analytical panel soups can exhaust the host stack inside OCCT sewing;
+        /// zero or a negative value disables this guard.
+        /// </summary>
+        public int MaxSewFaceCount { get; set; } = 2048;
+
+        /// <summary>
         /// BOP glue mode for the cell-complex build (issue #37 follow-on). When
         /// not <see cref="OcctGlueMode.Off"/> (the default), the builder asks the
         /// boolean kernel to treat coincident faces as shared and skip their
@@ -73,6 +80,7 @@ namespace SAM.Core.OCCT
             RetainTopology = occtBuildOptions.RetainTopology;
             SewingTolerance = occtBuildOptions.SewingTolerance;
             SewBeforeBuild = occtBuildOptions.SewBeforeBuild;
+            MaxSewFaceCount = occtBuildOptions.MaxSewFaceCount;
             GlueMode = occtBuildOptions.GlueMode;
         }
 
