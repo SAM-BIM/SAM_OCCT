@@ -46,6 +46,10 @@
          deliberately gappy/disconnected and will NOT raw-build watertight without the managed
          conditioning pipeline. Exercised by Extend3DRegressionIntegrationTests. -->
     <None Update="Fixtures\Extend3D-Regression\*.sam" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Controlled-workflow 9-space fixture (docs/CONTROLLED_WORKFLOW_PLAN.md §7) - kept out of the
+         top-level scan: the panels model is not raw-watertight before conditioning (the folder is
+         named MissingWalls for a reason). Exercised by ControlledWorkflowBaselineTests. -->
+    <None Update="Fixtures\ControlledWorkflow\*.sam" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- P1 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): disables xUnit's default cross-class test-collection

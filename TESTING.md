@@ -1609,3 +1609,27 @@ per this repo's golden-master convention.
 ```powershell
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~Extend3DRegressionIntegrationTests"
 ```
+
+## Controlled-workflow 9-space fixture (P0 baseline)
+
+The controlled workflow (`Panel → Clean3D → Extend3D → CreateAdjacencyCluster → ValidateSpaces`,
+plan: `docs/CONTROLLED_WORKFLOW_PLAN.md`) is anchored on one real acceptance model captured under
+`Testing/SAM.OCCT.IntegrationTests/Fixtures/ControlledWorkflow/` (a subfolder, like `Robustness/`,
+kept OUT of the top-level watertight scan - the panels model is deliberately imperfect; the source
+folder was named "MissingWalls"):
+
+- `Panels-9SpacesModel.sam` - 66 panels (40 Wall / 10 Floor / 16 Roof) that should form 9 spaces.
+- `Spaces-9SpacesModel.sam` - the 9 expected spaces (distinct single-line names; `West3` =
+  the double-height space, GUID `02a1ae27-5461-4b41-ad07-008ccd9d1159`).
+
+`ControlledWorkflowBaselineTests.ControlledWorkflow_NineSpacesFixture_BaselineReportCapture` is the
+P0 baseline harness: it runs the CURRENT pipeline (both extend paths: `Extend3D(original)` and
+`Extend3D(Clean3D(original))`), prints level frames, per-cell containment of the expected space
+locations, orphan/unused panels, and a separator scan for merged/missing pairs - **report-only**
+(asserts fixture integrity, never pipeline success; the captured state lives in
+`docs/CONTROLLED_WORKFLOW_BASELINE.md`). Hard acceptance assertions arrive with their owning phases
+(P2 level groups, P4 nine-space) per the plan's test-phasing rule.
+
+```powershell
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~ControlledWorkflowBaselineTests" --logger "console;verbosity=detailed"
+```
