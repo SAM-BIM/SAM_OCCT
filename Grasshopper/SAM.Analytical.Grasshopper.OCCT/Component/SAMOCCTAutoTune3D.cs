@@ -177,29 +177,57 @@ namespace SAM.Analytical.Grasshopper.OCCT
             List<string> report = new List<string>();
             if (discover)
             {
-                var faces = panels.Select(p => p.GetFace3D()).Where(f => f != null).ToList();
-                var sweep = new ParameterDiscoverySolver(faces)
-                {
-                    Mode = ParameterDiscoverySolver.WorkflowMode.Extend3D
-                };
-
-                // Use user-supplied sweep ranges, or defaults.
+                // Sweep using the actual Extend3D → CreateAdjacencyCluster chain
+                // (not the internal solver shortcut) so the discovered params match
+                // what the user gets in their GH workflow.
                 double[] bands = userBands?.ToArray();
+                if (bands == null || bands.Length == 0) bands = new[] { 0.15, 0.21, 0.3, 0.4, 0.5 };
                 double[] margins = userMargins?.ToArray();
-                sweep.Execute(
-                    new SAM.Core.OCCT.OcctBuildOptions { AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01 },
-                    sweepBands: bands, sweepMargins: margins);
+                if (margins == null || margins.Length == 0) margins = new[] { 0.3, 0.5, 0.7, 1.0 };
+                bool[] dirs = { true, false };
 
-                report = new List<string>(sweep.Diagnostics);
+                report.Add(string.Format("Sweep: {0} bands x {1} margins x 2 dirs = {2} combinations",
+                    bands.Length, margins.Length, bands.Length * margins.Length * 2));
 
-                if (sweep.BestTrial != null)
+                int bestCells = -1;
+                double bestBand = 0, bestFill = 0.5;
+                bool bestDir = true;
+                var buildOpts = new SAM.Core.OCCT.OcctBuildOptions
+                { AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01 };
+
+                foreach (double b in bands)
                 {
-                    band = sweep.BestTrial.BucketBetweenLevels;
-                    fill = sweep.BestTrial.FillMargin;
-                    dirGrow = sweep.BestTrial.DirectionalCapGrow;
-                    report.Add(string.Format("USING: band={0:0.###} fill={1:0.###} dir={2} cells={3}",
-                        band, fill, dirGrow, sweep.BestTrial.CellCount));
+                    foreach (double m in margins)
+                    {
+                        foreach (bool d in dirs)
+                        {
+                            // EXACT GH chain: Extend3D → CreateAdjacencyCluster
+                            List<Panel> ext = panels.Extend3D(out _, out _,
+                                bucketBetweenLevels: b, fillMargin: m, directionalCapGrow: d);
+                            var nonAir = (ext ?? new List<Panel>())
+                                .Where(x => x?.GetFace3D() != null).ToList();
+
+                            var cluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(
+                                null, nonAir, out SAM.Geometry.OCCT.OcctCellComplexResult cr, new SAM.Core.Log(), buildOpts);
+                            int cells = cr?.Cells?.Count ?? 0;
+                            int spaces = cluster?.GetSpaces()?.Count ?? 0;
+                            cr?.Dispose();
+
+                            report.Add(string.Format("  band={0:0.###} fill={1:0.###} dir={2} → cells={3} spaces={4}",
+                                b, m, d, cells, spaces));
+
+                            if (cells > bestCells || (cells == bestCells && spaces > (bestCells > 0 ? spaces : 0)))
+                            {
+                                bestCells = cells;
+                                bestBand = b; bestFill = m; bestDir = d;
+                            }
+                        }
+                    }
                 }
+
+                band = bestBand; fill = bestFill; dirGrow = bestDir;
+                report.Add(string.Format("BEST: band={0:0.###} fill={1:0.###} dir={2} → {3} cells",
+                    band, fill, dirGrow, bestCells));
             }
 
             // --- Solve ---
