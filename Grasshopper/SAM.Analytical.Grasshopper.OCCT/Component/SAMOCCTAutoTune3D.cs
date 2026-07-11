@@ -59,7 +59,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 result.Add(new GH_SAMParam(directionalCapGrow, ParamVisibility.Voluntary));
 
                 // --- Parameter discovery ---
-                global::Grasshopper.Kernel.Parameters.Param_Boolean discover = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "discoverParameters_", NickName = "discoverParameters_", Description = "When true, sweeps bucketBetweenLevels x fillMargin x directionalCapGrow combinations and reports the best configuration on the BestConfig output. The solve still runs with the final best parameters.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Boolean discover = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "discoverParameters_", NickName = "discoverParameters_", Description = "When true, sweeps bucketBetweenLevels x fillMargin x directionalCapGrow using the Extend3D workflow (matching the SAMOCCT.Extend3D -> CreateAdjacencyCluster chain) and reports the best configuration. The solve still runs with the discovered parameters.", Access = GH_ParamAccess.item };
                 discover.SetPersistentData(false);
                 result.Add(new GH_SAMParam(discover, ParamVisibility.Voluntary));
 
@@ -192,7 +192,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
             if (discover)
             {
                 var faces = panels.Select(p => p.GetFace3D()).Where(f => f != null).ToList();
-                var paramSolver = new ParameterDiscoverySolver(faces);
+                var paramSolver = new ParameterDiscoverySolver(faces)
+                {
+                    Mode = ParameterDiscoverySolver.WorkflowMode.Extend3D
+                };
                 paramSolver.Execute(
                     new SAM.Core.OCCT.OcctBuildOptions { AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01 },
                     sweepBands: new[] { 0.15, 0.21, 0.3, 0.4, 0.5 },

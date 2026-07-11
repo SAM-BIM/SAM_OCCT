@@ -12,16 +12,26 @@ namespace SAM.Geometry.OCCT.Solver
     /// <summary>
     /// Parameter discovery solver: sweeps <c>bucketBetweenLevels</c>, <c>fillMargin</c>, and
     /// <c>directionalCapGrow</c> over plausible ranges, runs the full managed pipeline for each
-    /// combination, scores by closure quality (matched spaces / cell count / naked edges), and
+    /// combination, scores by closure quality (cell count / naked edges / volume), and
     /// returns the best configuration with full documentation of every combination tried.
     /// <para>
-    /// Unlike <see cref="AutoTune3DSolver"/> (which only escalates MaxExtend on culprits),
-    /// this discovers the optimal conditioning parameters that feed into Stage A (cap
-    /// normalization) and Stage B (fill/extend).
+    /// <see cref="WorkflowMode"/> controls which pipeline is tested:
+    /// <b>Solve3D</b> (default): the full Panel3DSnapSolver pipeline (raw-first gate + managed).
+    /// <b>Extend3D</b>: stops after conditioning (StopAfterExtend) and scores via a separate
+    /// Create.AdjacencyCluster call — matches the Extend3D → AdjacencyCluster GH chain.
     /// </para>
     /// </summary>
     public class ParameterDiscoverySolver
     {
+        /// <summary>Which pipeline the discovery sweep tests.</summary>
+        public enum WorkflowMode
+        {
+            /// <summary>Full Solve3D pipeline (default).</summary>
+            Solve3D,
+            /// <summary>Extend3D → Create.AdjacencyCluster chain (matches the GH workflow).</summary>
+            Extend3D,
+        }
+
         /// <summary>A single parameter combination and its result.</summary>
         public class Trial
         {
@@ -64,6 +74,9 @@ namespace SAM.Geometry.OCCT.Solver
         public Vector3D Up { get; set; }
         public double AlignColinearOffset { get; set; } = 0.3;
         public double NormalizeCapOffset { get; set; } = 0.3;
+
+        /// <summary>Which pipeline the sweep tests. Extend3D matches the GH Extend3D→AdjacencyCluster chain.</summary>
+        public WorkflowMode Mode { get; set; } = WorkflowMode.Solve3D;
 
         public ParameterDiscoverySolver(
             IEnumerable<Face3D> face3Ds,
@@ -165,10 +178,11 @@ namespace SAM.Geometry.OCCT.Solver
                 BucketBetweenLevels = band,
                 FillMargin = margin,
                 DirectionalCapGrow = dir,
-                ForceManagedPipeline = true, // always use managed pipeline for consistent comparison
+                ForceManagedPipeline = true,
                 Up = Up,
                 AlignColinearOffset = AlignColinearOffset,
                 NormalizeCapOffset = NormalizeCapOffset,
+                StopAfterExtend = (Mode == WorkflowMode.Extend3D),
             };
         }
 
@@ -187,7 +201,25 @@ namespace SAM.Geometry.OCCT.Solver
                 Panel3DSnapSolver solver = CreateSolver(options, band, margin, dir);
                 solver.Execute(options);
 
-                if (solver.Signature != null)
+                if (Mode == WorkflowMode.Extend3D)
+                {
+                    // Extend3D chain: build adjacency cluster from conditioned (overshooting) faces.
+                    var buildOptions = new OcctBuildOptions
+                    {
+                        AvoidInternalShapes = false,
+                        SewBeforeBuild = true,
+                        SewingTolerance = 0.01,
+                    };
+                    List<Shell> shells = Geometry.OCCT.Create.Shells(
+                        solver.ResolvedFace3Ds, out OcctCellComplexResult cellResult, buildOptions);
+                    trial.CellCount = cellResult?.Cells?.Count ?? 0;
+                    trial.NakedEdgeCount = -1;
+                    trial.TotalVolume = solver.Signature?.TotalVolume ?? 0;
+                    trial.FaceCount = solver.ResolvedFace3Ds?.Count ?? 0;
+                    trial.Adopted = (cellResult?.Cells?.Count ?? 0) > 0;
+                    cellResult?.Dispose();
+                }
+                else if (solver.Signature != null)
                 {
                     trial.CellCount = solver.Signature.CellCount;
                     trial.NakedEdgeCount = solver.Signature.NakedEdgeCount;
