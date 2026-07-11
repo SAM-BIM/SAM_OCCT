@@ -79,6 +79,10 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Threaded to each <see cref="Panel3DSnapSolver.DirectionalCapGrow"/>.</summary>
         public bool DirectionalCapGrow { get; set; } = true;
 
+        /// <summary>Threaded to each <see cref="Panel3DSnapSolver.DoubleWallGap"/> (explicit double-wall
+        /// consolidation; default 0 = off).</summary>
+        public double DoubleWallGap { get; set; } = 0.0;
+
         // ---- Outputs (mirror Panel3DSnapSolver's public surface for the adopted best-effort result) ----
 
         /// <summary>The adopted resolved output faces (baseline, or the last accepted escalation round).</summary>
@@ -606,6 +610,7 @@ namespace SAM.Geometry.OCCT.Solver
                 BucketBetweenLevels = BucketBetweenLevels,
                 FillMargin = FillMargin,
                 DirectionalCapGrow = DirectionalCapGrow,
+                DoubleWallGap = DoubleWallGap,
                 MinCellVolume = tune.MinCellVolume,
                 SewSafetyFactor = tune.SewSafetyFactor,
                 ConsolidateRebuild = tune.ConsolidateRebuild

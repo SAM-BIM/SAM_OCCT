@@ -25,7 +25,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("a7e4c92f-1b53-4d8a-9f26-3c70e1b8d4a5");
 
-        public override string LatestComponentVersion => "0.8.0";
+        public override string LatestComponentVersion => "0.9.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -59,6 +59,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Number alignColinearOffset = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "alignColinearOffset_", NickName = "alignColinearOffset_", Description = "ACTIVE when inputAlreadyClean_=false (default). Colinear wall abut merge distance (m): merges walls that are nearly colinear (same line, offset in plan). SEPARATE merge path from minBucketSize_ — both run independently. Smaller = stricter (fewer merges). Larger = more merging of close-colinear walls. Default 0.3. Wire from SAMOCCT.AutoTune3D Align output.", Access = GH_ParamAccess.item };
                 alignColinearOffset.SetPersistentData(0.3);
                 result.Add(new GH_SAMParam(alignColinearOffset, ParamVisibility.Binding));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number doubleWallGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "doubleWallGap_", NickName = "doubleWallGap_", Description = "ACTIVE when inputAlreadyClean_=false (default). EXPLICIT double-wall merge gap (m), default 0 = OFF. When set (> 0), after the bucket/align snap converges every chain of overlapping parallel walls whose planes sit within this gap is consolidated onto ONE plane (each wall moves at most this distance) — including anti-parallel pairs WIDER than the 0.3 m void guard that minBucketSize_/alignColinearOffset_ can never merge. Use for stacked multi-skin walls that leave tiny sliver spaces (e.g. 0.06/0.15 m) and for small building-to-building gaps (e.g. 0.35 m) that are modeling artifacts. CAUTION: a REAL corridor/shaft narrower than this value will be closed too.", Access = GH_ParamAccess.item };
+                doubleWallGap.SetPersistentData(0.0);
+                result.Add(new GH_SAMParam(doubleWallGap, ParamVisibility.Binding));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number normalizeCapOffset = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "normalizeCapOffset_", NickName = "normalizeCapOffset_", Description = "INERT when inputAlreadyClean_=true. Cap plane normalization offset (m). Default 0.3.", Access = GH_ParamAccess.item };
                 normalizeCapOffset.SetPersistentData(0.3);
@@ -178,6 +182,13 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref alignColinearOffset);
             }
 
+            double doubleWallGap = 0.0;
+            index = Params.IndexOfInputParam("doubleWallGap_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref doubleWallGap);
+            }
+
             double normalizeCapOffset = 0.3;
             index = Params.IndexOfInputParam("normalizeCapOffset_");
             if (index != -1)
@@ -231,7 +242,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
             // weights/maxExtends null => read SolverParameter.Weight / SolverParameter.MaxExtend off each
             // panel (the same parameters SAMAnalytical.Visualize shows), so they can be tuned per panel.
-            List<Panel> extendedPanels = panels.Extend3D(out List<string> diagnostics, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, fillMargin: fillMargin, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, bucketBetweenLevels: bucketBetweenLevels, inputAlreadyClean: inputAlreadyClean, directionalCapGrow: directionalCapGrow);
+            List<Panel> extendedPanels = panels.Extend3D(out List<string> diagnostics, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, fillMargin: fillMargin, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, bucketBetweenLevels: bucketBetweenLevels, inputAlreadyClean: inputAlreadyClean, directionalCapGrow: directionalCapGrow, doubleWallGap: doubleWallGap);
 
             index = Params.IndexOfOutputParam("Panels");
             if (index != -1)
@@ -262,7 +273,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
             // Plan-closure diagnostic: the walls whose feet still leave an open end (no other wall meets them),
             // and the open-corner locations. These are the panels to upgrade (MaxExtend / bucket) so the loops
             // close and floors/roofs can fill a closed polysurface.
-            List<Panel> openPanels = panels.OpenPanels3D(out List<Point3D> openEndPoint3Ds, out List<string> openDiagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, bucketBetweenLevels: bucketBetweenLevels, inputAlreadyClean: inputAlreadyClean, directionalCapGrow: directionalCapGrow);
+            List<Panel> openPanels = panels.OpenPanels3D(out List<Point3D> openEndPoint3Ds, out List<string> openDiagnostics, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, bucketBetweenLevels: bucketBetweenLevels, inputAlreadyClean: inputAlreadyClean, directionalCapGrow: directionalCapGrow, doubleWallGap: doubleWallGap);
             if (openDiagnostics != null)
             {
                 diagnostics.AddRange(openDiagnostics);

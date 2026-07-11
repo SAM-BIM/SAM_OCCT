@@ -55,6 +55,10 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>An opposed-partition collapse was attempted and rejected (gate failed).</summary>
         RejectedCollapse,
 
+        /// <summary>A wall stack was consolidated onto one plane by the explicit double-wall pass
+        /// (<see cref="Panel3DSnapSolver.ConsolidateWallStacks"/>, opt-in via <c>doubleWallGap</c>).</summary>
+        ConsolidatedStack,
+
         /// <summary>Records which resolve level (raw/snapped/conditioned) was adopted, and why.</summary>
         AdoptedLevel,
 

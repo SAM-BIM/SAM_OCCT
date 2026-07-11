@@ -635,9 +635,35 @@ On the 9-space fixture this discovers `band=0.21, fill=0.5, dir=true` (the produ
 On whole-level-towers it discovers `band=0.4, fill=0.3, dir=false` (33 cells, +8 vs baseline).
 
 **Only 3 Extend3D inputs are active** when `inputAlreadyClean_=true` (the chained workflow):
-`fillMargin_`, `bucketBetweenLevels_`, `directionalCapGrow_`. The other four Stage-A inputs
-(`minBucketSize_`, `thicknessFactor_`, `alignColinearOffset_`, `normalizeCapOffset_`) are INERT —
-Stage A is skipped on the `inputAlreadyClean` path.
+`fillMargin_`, `bucketBetweenLevels_`, `directionalCapGrow_`. The other Stage-A inputs
+(`minBucketSize_`, `thicknessFactor_`, `alignColinearOffset_`, `normalizeCapOffset_`,
+`doubleWallGap_`) are INERT — Stage A is skipped on the `inputAlreadyClean` path.
+
+### Merging stubborn double walls — `doubleWallGap_` (2026-07-11)
+
+`minBucketSize_` and `alignColinearOffset_` cannot merge two classes of wall pair, no matter how
+far they are raised (proven on `whole-level-towers.sam`, where a bucket sweep 0.2→1.0 changed
+nothing):
+
+1. **Multi-skin wall stacks** (3–4 parallel walls drawn within ~0.5 m). The pairwise snap merges
+   them two at a time, but every merged panel is frozen (`Snapped`), so the stack converges to 2–3
+   residue planes instead of one — leaving tiny sliver spaces (the towers' 0.055 m / 0.139 m cells
+   at (6.76, −23.31) and (6.76, −23.21)).
+2. **Anti-parallel pairs wider than 0.3 m** (the towers' 0.345 m tower-face/block-wall slot). The
+   snap's void guard deliberately protects gaps above a wall thickness as real shafts — at ANY
+   bucket size.
+
+`doubleWallGap_` (Extend3D/Clean3D/Solve3D/AutoTune3D; `_gap` on AutoTune3D; default **0 = off**)
+is the explicit override for both: after the snap converges, every chain of overlapping
+(anti)parallel walls whose neighbouring planes sit within the gap is consolidated onto its
+dominant plane in one deterministic pass — each wall travelling at most the gap, and abutting
+perpendicular wall ends dragged along so the plan loop stays closed.
+
+On whole-level-towers, `doubleWallGap_=0.4` removes both sliver cells (merged into the
+neighbouring room) and joins the block room to the tower space through one shared wall
+(31 → 29 cells, no collapse). All other fixtures except Revit-home are unchanged at 0.4;
+Revit-home loses 4 narrow duct-like cells — the documented trade-off: **a REAL corridor or shaft
+narrower than the gap is closed too**, so raise the value deliberately, per model.
 
 ### Diagnosing a stubborn gap — the East1|South1 corner (2026-07-10, now resolved)
 

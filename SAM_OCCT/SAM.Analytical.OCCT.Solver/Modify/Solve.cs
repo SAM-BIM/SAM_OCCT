@@ -48,9 +48,10 @@ namespace SAM.Analytical.OCCT.Solver
             double normalizeCapOffset = 0.3,
             OcctBuildOptions options = null,
             bool forceManagedPipeline = false,
-            double bucketBetweenLevels = 0.0)
+            double bucketBetweenLevels = 0.0,
+            double doubleWallGap = 0.0)
         {
-            return Solve3D(panels, out nakedPoint3Ds, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, forceManagedPipeline, bucketBetweenLevels: bucketBetweenLevels);
+            return Solve3D(panels, out nakedPoint3Ds, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, forceManagedPipeline, bucketBetweenLevels: bucketBetweenLevels, doubleWallGap: doubleWallGap);
         }
 
         /// <summary>
@@ -81,9 +82,10 @@ namespace SAM.Analytical.OCCT.Solver
             bool forceManagedPipeline = false,
             double minApertureArea = Tolerance.MacroDistance,
             double maxApertureDistance = Tolerance.MacroDistance,
-            double bucketBetweenLevels = 0.0)
+            double bucketBetweenLevels = 0.0,
+            double doubleWallGap = 0.0)
         {
-            return Solve3D(panels, out nakedPoint3Ds, out diagnostics, out orphanedApertures, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, forceManagedPipeline, minApertureArea, maxApertureDistance, bucketBetweenLevels: bucketBetweenLevels);
+            return Solve3D(panels, out nakedPoint3Ds, out diagnostics, out orphanedApertures, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, forceManagedPipeline, minApertureArea, maxApertureDistance, bucketBetweenLevels: bucketBetweenLevels, doubleWallGap: doubleWallGap);
         }
 
         /// <summary>
@@ -117,7 +119,8 @@ namespace SAM.Analytical.OCCT.Solver
             double maxApertureDistance = Tolerance.MacroDistance,
             bool classifyCells = false,
             double minCellVolume = 0.05,
-            double bucketBetweenLevels = 0.0)
+            double bucketBetweenLevels = 0.0,
+            double doubleWallGap = 0.0)
         {
             nakedPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
@@ -140,7 +143,8 @@ namespace SAM.Analytical.OCCT.Solver
                 AlignColinearOffset = alignColinearOffset,
                 NormalizeCapOffset = normalizeCapOffset,
                 ForceManagedPipeline = forceManagedPipeline,
-                BucketBetweenLevels = bucketBetweenLevels
+                BucketBetweenLevels = bucketBetweenLevels,
+                DoubleWallGap = doubleWallGap
             };
             solver.Execute(options);
 
@@ -277,9 +281,10 @@ namespace SAM.Analytical.OCCT.Solver
             double thicknessFactor = 0.6,
             double alignColinearOffset = 0.3,
             double normalizeCapOffset = 0.3,
-            double bucketBetweenLevels = 0.0)
+            double bucketBetweenLevels = 0.0,
+            double doubleWallGap = 0.0)
         {
-            return Clean3D(panels, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, bucketBetweenLevels);
+            return Clean3D(panels, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, bucketBetweenLevels, doubleWallGap);
         }
 
         /// <summary>
@@ -300,7 +305,8 @@ namespace SAM.Analytical.OCCT.Solver
             double thicknessFactor = 0.6,
             double alignColinearOffset = 0.3,
             double normalizeCapOffset = 0.3,
-            double bucketBetweenLevels = 0.0)
+            double bucketBetweenLevels = 0.0,
+            double doubleWallGap = 0.0)
         {
             diagnostics = new List<string>();
             report = null;
@@ -316,7 +322,7 @@ namespace SAM.Analytical.OCCT.Solver
             List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources, out List<ParameterProvenance> maxExtendProvenance);
             List<ParameterProvenance> bucketProvenance = BucketProvenances(sources, minBucketSize, thicknessFactor);
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true, AlignColinearOffset = alignColinearOffset, NormalizeCapOffset = normalizeCapOffset, BucketBetweenLevels = bucketBetweenLevels };
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true, AlignColinearOffset = alignColinearOffset, NormalizeCapOffset = normalizeCapOffset, BucketBetweenLevels = bucketBetweenLevels, DoubleWallGap = doubleWallGap };
             solver.Execute(null);
 
             List<string> cleanReportLines = SolverReportFormat.FormatCleanReport(
@@ -366,6 +372,12 @@ namespace SAM.Analytical.OCCT.Solver
         /// <param name="minBucketSize">Lower bound on the capture half-width, in metres.</param>
         /// <param name="thicknessFactor">Fraction of construction thickness used as the capture half-width.</param>
         /// <param name="fillMargin">How far floors/roofs are grown outward past the walls (and walls past their caps), in metres.</param>
+        /// <param name="doubleWallGap">EXPLICIT double-wall merge gap (metres), default 0 = off. When set, chains of
+        /// overlapping (anti)parallel walls whose planes sit within this gap consolidate onto one plane after the
+        /// bucket/align snap (<see cref="Panel3DSnapSolver.ConsolidateWallStacks"/>) - including pairs wider than
+        /// the 0.3 m void guard that <paramref name="minBucketSize"/>/<paramref name="alignColinearOffset"/> can
+        /// never merge. Gaps up to this width are treated as modeling artifacts, so a REAL corridor/shaft narrower
+        /// than the value is closed too - raise deliberately.</param>
         /// <returns>The filled/extended panels, or null when no usable panels were supplied.</returns>
         public static List<Panel> Extend3D(
             this IEnumerable<Panel> panels,
@@ -379,9 +391,10 @@ namespace SAM.Analytical.OCCT.Solver
             double normalizeCapOffset = 0.3,
             double bucketBetweenLevels = 0.0,
             bool inputAlreadyClean = false,
-            bool directionalCapGrow = false)
+            bool directionalCapGrow = false,
+            double doubleWallGap = 0.0)
         {
-            return Extend3D(panels, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, fillMargin, alignColinearOffset, normalizeCapOffset, bucketBetweenLevels, inputAlreadyClean, directionalCapGrow);
+            return Extend3D(panels, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, fillMargin, alignColinearOffset, normalizeCapOffset, bucketBetweenLevels, inputAlreadyClean, directionalCapGrow, doubleWallGap);
         }
 
         /// <summary>
@@ -405,7 +418,8 @@ namespace SAM.Analytical.OCCT.Solver
             double normalizeCapOffset = 0.3,
             double bucketBetweenLevels = 0.0,
             bool inputAlreadyClean = false,
-            bool directionalCapGrow = false)
+            bool directionalCapGrow = false,
+            double doubleWallGap = 0.0)
         {
             diagnostics = new List<string>();
             report = null;
@@ -435,7 +449,8 @@ namespace SAM.Analytical.OCCT.Solver
                 NormalizeCapOffset = normalizeCapOffset,
                 BucketBetweenLevels = bucketBetweenLevels,
                 InputAlreadyClean = inputAlreadyClean,
-                DirectionalCapGrow = directionalCapGrow
+                DirectionalCapGrow = directionalCapGrow,
+                DoubleWallGap = doubleWallGap
             };
             solver.Execute(null);
 
@@ -545,7 +560,8 @@ namespace SAM.Analytical.OCCT.Solver
             double normalizeCapOffset = 0.3,
             double bucketBetweenLevels = 0.0,
             bool inputAlreadyClean = false,
-            bool directionalCapGrow = false)
+            bool directionalCapGrow = false,
+            double doubleWallGap = 0.0)
         {
             openEndPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
@@ -568,7 +584,8 @@ namespace SAM.Analytical.OCCT.Solver
                 NormalizeCapOffset = normalizeCapOffset,
                 BucketBetweenLevels = bucketBetweenLevels,
                 InputAlreadyClean = inputAlreadyClean,
-                DirectionalCapGrow = directionalCapGrow
+                DirectionalCapGrow = directionalCapGrow,
+                DoubleWallGap = doubleWallGap
             };
             solver.Execute(null);
 
@@ -944,7 +961,7 @@ namespace SAM.Analytical.OCCT.Solver
 
             if (inputAlreadyClean)
             {
-                diagnostics.Add(prefix + "_INPUT_INERT: inputAlreadyClean=true -> Stage A (clean bucket) skipped; minBucketSize_, thicknessFactor_, alignColinearOffset_, normalizeCapOffset_ had NO geometric effect this run, and bucketBetweenLevels_ affected LevelGroups reporting only (caps were normalized upstream by Clean3D). Only fillMargin_ and directionalCapGrow_ change the fill/extend geometry on the inputAlreadyClean path.");
+                diagnostics.Add(prefix + "_INPUT_INERT: inputAlreadyClean=true -> Stage A (clean bucket) skipped; minBucketSize_, thicknessFactor_, alignColinearOffset_, normalizeCapOffset_, doubleWallGap_ had NO geometric effect this run, and bucketBetweenLevels_ affected LevelGroups reporting only (caps were normalized upstream by Clean3D). Only fillMargin_ and directionalCapGrow_ change the fill/extend geometry on the inputAlreadyClean path.");
                 return;
             }
 

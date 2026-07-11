@@ -284,6 +284,23 @@ namespace SAM.Geometry.OCCT.Solver
         public double AlignColinearOffset { get; set; } = 0.3;
 
         /// <summary>
+        /// The OPTIONAL explicit double-wall gap (metres): after the snap fixed point, chains of near-parallel,
+        /// in-plane-overlapping vertical walls whose neighbouring planes sit within this gap are consolidated
+        /// onto each chain's dominant (largest-area) plane in one deterministic pass
+        /// (<see cref="ConsolidateWallStacks"/>). This is the lever for the two merges the weighted snap cannot
+        /// perform: (1) the residue planes a multi-wall stack leaves behind when the pairwise midpoint cascade
+        /// freezes (each pairwise merge marks its panels <c>Snapped</c>, so a third wall can never pull them
+        /// further - observed as the 0.055 m / 0.139 m sliver cells on <c>whole-level-towers.sam</c>), and
+        /// (2) an anti-parallel pair wider than the <see cref="OPPOSED_PARTITION_MAX_SEPARATION"/> void guard
+        /// that the USER declares a modeling artifact, not a real shaft (the towers' 0.345 m tower-face /
+        /// block-wall gap). <b>Default 0 = off</b> - the solver is byte-identical unless a caller opts in;
+        /// the void guard and opposed-partition ceilings are untouched either way. Raise deliberately: gaps up
+        /// to this width are treated as one wall, so a REAL corridor/shaft narrower than the value will be
+        /// closed too.
+        /// </summary>
+        public double DoubleWallGap { get; set; } = 0.0;
+
+        /// <summary>
         /// Max perpendicular offset (metres) within which the floor/roof caps of one level are normalized
         /// onto a single plane. After the bucket snap, near-parallel caps whose planes lie within this band
         /// of one another are all projected onto the dominant (largest-area) cap's plane - the "level plane".
@@ -530,7 +547,7 @@ namespace SAM.Geometry.OCCT.Solver
             List<CleanRecord> cleanRecordSink = new List<CleanRecord>();
             SnapStage.Result snapResult = InputAlreadyClean
                 ? BuildConditionOnlyResult(SnappedPanels, maxExtensions_Adjusted, snapSourceMap)
-                : SnapStage.Clean(SnappedPanels, tolerances, AlignColinearOffset, NormalizeCapOffset, Diagnostics, snapSourceMap, BucketBetweenLevels, cleanRecordSink);
+                : SnapStage.Clean(SnappedPanels, tolerances, AlignColinearOffset, NormalizeCapOffset, Diagnostics, snapSourceMap, BucketBetweenLevels, cleanRecordSink, DoubleWallGap);
             CleanFace3Ds = snapResult.CleanFace3Ds;
             LevelFrames = snapResult.LevelFrames;
             LevelGroups = snapResult.LevelGroups;
@@ -3171,6 +3188,299 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return anyChanged;
+        }
+
+        /// <summary>
+        /// Minimum in-plane overlap ratio, measured against the SMALLER footprint
+        /// (<see cref="SnappedPanel.InPlaneOverlapRatioVsSmaller"/>), for two walls to belong to one stack in
+        /// <see cref="ConsolidateWallStacks"/>. Genuine double-wall skins and a room wall facing a longer
+        /// building face both score 0.95+; corner-touch mis-pairs (the whole-level-tilted class the
+        /// <see cref="COPARALLEL_SNAP_MIN_OVERLAP_RATIO"/> guard was calibrated on) score far below.
+        /// </summary>
+        public const double STACK_CONSOLIDATION_MIN_OVERLAP_RATIO = 0.75;
+
+        /// <summary>
+        /// Explicit double-wall consolidation (opt-in, <paramref name="doubleWallGap"/> &gt; 0): collapses each
+        /// CHAIN of near-parallel, in-plane-overlapping vertical walls whose neighbouring planes sit within
+        /// <paramref name="doubleWallGap"/> onto the chain's dominant (largest-area) plane, in ONE deterministic
+        /// closed-form pass - the wall analogue of <see cref="NormalizeCaps"/>' group-then-project. Runs AFTER
+        /// <see cref="SnapStage.SnapToFixedPoint"/> because it exists to finish what the pairwise snap cannot:
+        /// (1) the snap's midpoint cascade marks every merged panel <c>Snapped</c>, so a 3+ wall stack freezes
+        /// into residue planes a bucket of ANY size can no longer move (the towers 0.055/0.139 m sliver cells);
+        /// (2) the snap's void guard (<see cref="OPPOSED_PARTITION_MAX_SEPARATION"/>) rightly refuses anti-parallel
+        /// pairs wider than a wall thickness, and this pass is the USER's explicit declaration that such a gap
+        /// (up to <paramref name="doubleWallGap"/>) is a modeling artifact, not a real shaft.
+        /// <para>
+        /// Stack membership is transitive (union-find over pairwise edges), but every member's final projection
+        /// distance onto the dominant plane is capped at <paramref name="doubleWallGap"/> - a chain can span
+        /// wider than the gap, yet no individual wall may travel farther than the user allowed, which bounds
+        /// drift by construction (the runaway-chain failure mode of the align collapse zone cannot occur).
+        /// A member beyond the cap stays put and is reported. <c>Snapped</c> flags are ignored on entry (the
+        /// residue planes ARE Snapped panels) and set by the projection itself.
+        /// </para>
+        /// </summary>
+        /// <returns>The number of panels moved.</returns>
+        public static int ConsolidateWallStacks(
+            List<SnappedPanel> panels,
+            double doubleWallGap,
+            double toleranceAngle,
+            double toleranceDistance,
+            double verticalAngleTolerance = 20 * (System.Math.PI / 180),
+            SolverDiagnostics diagnostics = null,
+            List<CleanRecord> records = null)
+        {
+            if (panels == null || doubleWallGap <= toleranceDistance)
+            {
+                return 0;
+            }
+
+            List<SnappedPanel> walls = panels
+                .Where(x => x?.Plane != null && x.Face3D != null && x.Face3D.IsValid() && x.IsVertical(verticalAngleTolerance))
+                .ToList();
+
+            if (walls.Count < 2)
+            {
+                return 0;
+            }
+
+            // Union-find over the pairwise stack test: near-parallel, planes within the gap, sharing
+            // in-plane surface, and the smaller footprint (near-)inside the larger. All four predicates are
+            // evaluated on the CURRENT (post-snap) geometry.
+            int[] parent = new int[walls.Count];
+            for (int i = 0; i < walls.Count; i++)
+            {
+                parent[i] = i;
+            }
+
+            int Find(int i)
+            {
+                while (parent[i] != i)
+                {
+                    parent[i] = parent[parent[i]];
+                    i = parent[i];
+                }
+
+                return i;
+            }
+
+            double minDot = System.Math.Cos(toleranceAngle);
+            for (int i = 0; i < walls.Count; i++)
+            {
+                for (int j = i + 1; j < walls.Count; j++)
+                {
+                    SnappedPanel a = walls[i];
+                    SnappedPanel b = walls[j];
+
+                    if (System.Math.Abs(a.Plane.Normal.Unit.DotProduct(b.Plane.Normal.Unit)) < minDot)
+                    {
+                        continue;
+                    }
+
+                    double separation = a.PerpendicularSeparation(b);
+                    if (separation <= toleranceDistance || separation > doubleWallGap)
+                    {
+                        continue; // already coplanar (nothing to consolidate) or wider than the declared gap
+                    }
+
+                    if (!a.OverlapsInPlane(b, toleranceDistance))
+                    {
+                        continue;
+                    }
+
+                    if (a.InPlaneOverlapRatioVsSmaller(b) < STACK_CONSOLIDATION_MIN_OVERLAP_RATIO)
+                    {
+                        continue;
+                    }
+
+                    int rootA = Find(i);
+                    int rootB = Find(j);
+                    if (rootA != rootB)
+                    {
+                        parent[rootB] = rootA;
+                    }
+                }
+            }
+
+            // Per component: project every member onto the dominant (largest-area) member's plane, each move
+            // capped at the gap. Largest-area dominant mirrors NormalizeCaps / SnapOpposedPartitions ordering.
+            int moved = 0;
+            foreach (var component in Enumerable.Range(0, walls.Count).GroupBy(Find).Where(g => g.Count() > 1))
+            {
+                List<SnappedPanel> members = component.Select(k => walls[k]).ToList();
+                SnappedPanel dominant = members.OrderByDescending(x => x.GetArea()).First();
+
+                int movedInStack = 0;
+                foreach (SnappedPanel member in members)
+                {
+                    if (ReferenceEquals(member, dominant))
+                    {
+                        continue;
+                    }
+
+                    double distance = System.Math.Abs(dominant.Plane.Distance(member.GetBoundingBox().GetCentroid()));
+                    if (distance <= toleranceDistance)
+                    {
+                        continue; // already on the dominant plane
+                    }
+
+                    if (distance > doubleWallGap)
+                    {
+                        diagnostics?.Add(SolverStage.Snap, DiagnosticCode.RejectedCollapse, OcctDiagnosticSeverity.Info,
+                            string.Format("Wall-stack consolidation left one wall put: {0:0.###} m from the stack's dominant plane (> doubleWallGap {1:0.###} m).",
+                                distance, doubleWallGap),
+                            face3D: member.Face3D, toleranceUsed: doubleWallGap);
+                        continue; // chain spans wider than the user allowed this wall to travel
+                    }
+
+                    Plane oldPlane = member.Plane;
+                    Segment3D oldFoot = member.GetBaseSegment(toleranceDistance);
+                    BoundingBox3D oldBox = member.GetBoundingBox();
+                    if (member.SnapToBacker(dominant.Plane))
+                    {
+                        RecordClean(records, member, dominant, CleanRecordKind.StackConsolidated, distance);
+                        movedInStack++;
+
+                        // The move vacates the member's old plane. Perpendicular walls whose plan END sat on
+                        // that plane (a T/L junction into this wall, same storey) are left hanging by exactly
+                        // the travel distance, and the Z-IGNORANT plan-loop extend cannot be relied on to
+                        // re-close them: another storey's wall line through the same plan point reads as an
+                        // already-met target (observed on whole-level-towers, whose tower faces step in plan
+                        // per storey). Drag those ends onto the new plane here, where the move is known.
+                        DragAbuttingWallEnds(walls, member, oldPlane, oldFoot, oldBox, toleranceDistance, diagnostics);
+                    }
+                }
+
+                if (movedInStack > 0)
+                {
+                    moved += movedInStack;
+                    diagnostics?.Add(SolverStage.Snap, DiagnosticCode.ConsolidatedStack, OcctDiagnosticSeverity.Info,
+                        string.Format("Wall-stack consolidation (doubleWallGap {0:0.###} m): {1} of {2} stacked wall(s) projected onto the dominant plane.",
+                            doubleWallGap, movedInStack, members.Count),
+                        face3D: dominant.Face3D, toleranceUsed: doubleWallGap);
+                }
+            }
+
+            return moved;
+        }
+
+        /// <summary>
+        /// How far (metres) a perpendicular wall's plan END may sit off a consolidated wall's OLD plane and
+        /// still count as having terminated ON it (a T/L junction), so <see cref="DragAbuttingWallEnds"/>
+        /// carries it to the new plane. Sized to the native sew tolerance scale (0.01) with margin for the
+        /// end sloppiness real imports show (observed 0.003 m on whole-level-towers) - far below any real
+        /// wall-to-wall gap, so an end belonging to a DIFFERENT junction is never grabbed.
+        /// </summary>
+        public const double STACK_FOLLOW_END_TOLERANCE = 0.02;
+
+        /// <summary>
+        /// After <see cref="ConsolidateWallStacks"/> moved <paramref name="movedWall"/> off
+        /// <paramref name="oldPlane"/>: every other (non-parallel) wall whose plan foot END terminated on the
+        /// old plane - within <see cref="STACK_FOLLOW_END_TOLERANCE"/> of the old foot segment, storeys
+        /// overlapping - has that end dragged onto the wall's NEW plane, keeping the T/L junction closed.
+        /// The plan-loop extend cannot substitute for this: it matches wall lines in plan only (Z-ignorant),
+        /// so on a model whose storey faces step in plan (the towers) a hanging end reads as already met by
+        /// an upper storey's line and is never re-extended.
+        /// </summary>
+        private static void DragAbuttingWallEnds(
+            List<SnappedPanel> walls,
+            SnappedPanel movedWall,
+            Plane oldPlane,
+            Segment3D oldFoot,
+            BoundingBox3D oldBox,
+            double toleranceDistance,
+            SolverDiagnostics diagnostics)
+        {
+            if (walls == null || movedWall?.Plane == null || oldPlane == null || oldFoot == null || oldBox == null)
+            {
+                return;
+            }
+
+            Geometry.Planar.Point2D oldFootStart = new Geometry.Planar.Point2D(oldFoot.GetStart().X, oldFoot.GetStart().Y);
+            Geometry.Planar.Point2D oldFootEnd = new Geometry.Planar.Point2D(oldFoot.GetEnd().X, oldFoot.GetEnd().Y);
+
+            foreach (SnappedPanel wall in walls)
+            {
+                if (ReferenceEquals(wall, movedWall) || wall?.Plane == null)
+                {
+                    continue;
+                }
+
+                // Only junction partners: a wall near-PARALLEL to the moved one is a stack sibling (its own
+                // move is the consolidation's business), not an abutting end.
+                if (System.Math.Abs(wall.Plane.Normal.Unit.DotProduct(oldPlane.Normal.Unit)) > 0.7)
+                {
+                    continue;
+                }
+
+                // Same storey only - the Z-band overlap the plan-loop lacks.
+                BoundingBox3D wallBox = wall.GetBoundingBox();
+                if (wallBox == null || wallBox.Min.Z > oldBox.Max.Z - toleranceDistance || wallBox.Max.Z < oldBox.Min.Z + toleranceDistance)
+                {
+                    continue;
+                }
+
+                Segment3D foot = wall.GetBaseSegment(toleranceDistance);
+                if (foot == null)
+                {
+                    continue;
+                }
+
+                Geometry.Planar.Point2D start = new Geometry.Planar.Point2D(foot.GetStart().X, foot.GetStart().Y);
+                Geometry.Planar.Point2D end = new Geometry.Planar.Point2D(foot.GetEnd().X, foot.GetEnd().Y);
+
+                Geometry.Planar.Point2D newStart = DraggedEnd(start, oldFootStart, oldFootEnd, movedWall.Plane, foot.GetStart().Z);
+                Geometry.Planar.Point2D newEnd = DraggedEnd(end, oldFootStart, oldFootEnd, movedWall.Plane, foot.GetEnd().Z);
+
+                if (newStart == null && newEnd == null)
+                {
+                    continue;
+                }
+
+                double dragged = System.Math.Max(
+                    newStart == null ? 0 : newStart.Distance(start),
+                    newEnd == null ? 0 : newEnd.Distance(end));
+
+                if (wall.SetVerticalFootprint(newStart ?? start, newEnd ?? end, toleranceDistance))
+                {
+                    diagnostics?.Add(SolverStage.Snap, DiagnosticCode.ConsolidatedStack, OcctDiagnosticSeverity.Info,
+                        string.Format("Wall-stack consolidation dragged an abutting wall end {0:0.###} m onto the moved plane (junction kept closed).", dragged),
+                        face3D: wall.Face3D, toleranceUsed: STACK_FOLLOW_END_TOLERANCE);
+                }
+            }
+        }
+
+        /// <summary>The dragged position for one plan end: when <paramref name="end"/> lies on the moved
+        /// wall's OLD foot segment (within <see cref="STACK_FOLLOW_END_TOLERANCE"/>), its projection onto the
+        /// NEW plane in plan; null when the end did not belong to the old wall.</summary>
+        private static Geometry.Planar.Point2D DraggedEnd(
+            Geometry.Planar.Point2D end,
+            Geometry.Planar.Point2D oldFootStart,
+            Geometry.Planar.Point2D oldFootEnd,
+            Plane newPlane,
+            double z)
+        {
+            double toOldFoot = PlanDistancePointToSegment(end.X, end.Y, oldFootStart.X, oldFootStart.Y, oldFootEnd.X, oldFootEnd.Y);
+            if (toOldFoot > STACK_FOLLOW_END_TOLERANCE)
+            {
+                return null;
+            }
+
+            // Slide the end along the NEW plane's normal onto the new plane (in plan - the normal of a
+            // vertical wall is horizontal). The signed offset is computed directly (normal dot (end -
+            // origin)) - the same convention as SnappedPanel.SignedSeparationTo - so the slide direction
+            // does not depend on Plane.Distance's sign convention.
+            Vector3D normal = newPlane.Normal.Unit;
+            Point3D origin = newPlane.Origin;
+            double signedDistance = (normal.X * (end.X - origin.X))
+                + (normal.Y * (end.Y - origin.Y))
+                + (normal.Z * (z - origin.Z));
+            Geometry.Planar.Point2D moved = new Geometry.Planar.Point2D(
+                end.X - (normal.X * signedDistance),
+                end.Y - (normal.Y * signedDistance));
+
+            // A vertical-wall normal has a negligible Z component, so the plan slide lands the end on the
+            // plane; a degenerate (near-horizontal-normal-less) case moves nothing.
+            return moved.Distance(end) <= Tolerance.Distance ? null : moved;
         }
 
         /// <summary>

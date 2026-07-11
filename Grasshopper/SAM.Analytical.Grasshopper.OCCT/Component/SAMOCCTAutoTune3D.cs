@@ -30,7 +30,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     public class SAMOCCTAutoTune3D : GH_SAMVariableOutputParameterComponent
     {
         public override Guid ComponentGuid => new Guid("9de8b4c0-14f6-4828-b966-aa57cf58143b");
-        public override string LatestComponentVersion => "0.3.0";
+        public override string LatestComponentVersion => "0.4.0";
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
         public SAMOCCTAutoTune3D()
@@ -77,6 +77,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 directionalCapGrow.SetPersistentData(true);
                 result.Add(new GH_SAMParam(directionalCapGrow, ParamVisibility.Voluntary));
 
+                global::Grasshopper.Kernel.Parameters.Param_Number doubleWallGap = new global::Grasshopper.Kernel.Parameters.Param_Number()
+                { Name = "_gap", NickName = "_gap", Description = "Explicit double-wall merge gap (m) → Extend3D doubleWallGap_. Default 0 = OFF. When set, chains of overlapping parallel walls within this gap consolidate onto one plane after the bucket/align snap — including anti-parallel pairs wider than the 0.3 m void guard (e.g. a 0.35 m building-to-building slot). Merging such stacks REMOVES their sliver spaces, so total cell count can drop while the model gets cleaner. CAUTION: a real corridor/shaft narrower than this closes too.", Access = GH_ParamAccess.item };
+                doubleWallGap.SetPersistentData(0.0);
+                result.Add(new GH_SAMParam(doubleWallGap, ParamVisibility.Binding));
+
                 // === DISCOVERY ===
                 global::Grasshopper.Kernel.Parameters.Param_Boolean discover = new global::Grasshopper.Kernel.Parameters.Param_Boolean()
                 { Name = "_discover", NickName = "_discover", Description = "Run parameter sweep? True = sweep all combinations and use the best. False = use _band/_fill/_dirGrow directly.", Access = GH_ParamAccess.item };
@@ -102,6 +107,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 { Name = "sweepAligns_", NickName = "sweepAligns_", Description = "Colinear align values to try (list). Controls colinear wall abut merge distance. Default: 0.1, 0.2, 0.3, 0.4, 0.5. Smaller = stricter.", Access = GH_ParamAccess.list };
                 sweepAligns.SetPersistentData(0.1, 0.2, 0.3, 0.4, 0.5);
                 result.Add(new GH_SAMParam(sweepAligns, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number sweepGaps = new global::Grasshopper.Kernel.Parameters.Param_Number()
+                { Name = "sweepGaps_", NickName = "sweepGaps_", Description = "Double-wall gap values to try (list). Default: only the _gap value (no extra sweep dimension). NOTE the score maximizes cell count, and merging double walls legitimately REMOVES sliver cells — read the per-combination Report lines rather than trusting BEST when sweeping gaps.", Access = GH_ParamAccess.list };
+                result.Add(new GH_SAMParam(sweepGaps, ParamVisibility.Voluntary));
 
                 // === ADVANCED (Stage A, only relevant when using the Solve3D result directly) ===
                 global::Grasshopper.Kernel.Parameters.Param_Number minBucketSize = new global::Grasshopper.Kernel.Parameters.Param_Number()
@@ -137,6 +146,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "Fill", NickName = "Fill", Description = "Optimal cap growth reach → wire to SAMOCCT.Extend3D fillMargin_.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "Bucket", NickName = "Bucket", Description = "Optimal wall merge distance → wire to SAMOCCT.Extend3D minBucketSize_.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "Align", NickName = "Align", Description = "Optimal colinear align distance → wire to SAMOCCT.Extend3D alignColinearOffset_.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "Gap", NickName = "Gap", Description = "Double-wall merge gap used → wire to SAMOCCT.Extend3D doubleWallGap_.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "DirGrow", NickName = "DirGrow", Description = "Optimal cap growth mode → wire to SAMOCCT.Extend3D directionalCapGrow_.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "Summary", NickName = "Summary", Description = "One-line summary: 'band=X fill=Y bucket=Z align=A dir=W'.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
 
@@ -183,6 +193,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
             index = Params.IndexOfInputParam("_dirGrow");
             if (index != -1) dataAccess.GetData(index, ref dirGrow);
 
+            double gap = 0.0;
+            index = Params.IndexOfInputParam("_gap");
+            if (index != -1) dataAccess.GetData(index, ref gap);
+
             // --- Discovery ---
             bool discover = true;
             index = Params.IndexOfInputParam("_discover");
@@ -203,6 +217,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
             List<double> userAligns = null;
             index = Params.IndexOfInputParam("sweepAligns_");
             if (index != -1) { var list = new List<double>(); if (dataAccess.GetDataList(index, list) && list.Count > 0) userAligns = list; }
+
+            List<double> userGaps = null;
+            index = Params.IndexOfInputParam("sweepGaps_");
+            if (index != -1) { var list = new List<double>(); if (dataAccess.GetDataList(index, list) && list.Count > 0) userGaps = list; }
 
             // --- Advanced ---
             double minBucket = 0.4;
@@ -230,13 +248,15 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 if (buckets == null || buckets.Length == 0) buckets = new[] { 0.4, 0.5, 0.6, 0.7 };
                 double[] aligns = userAligns?.ToArray();
                 if (aligns == null || aligns.Length == 0) aligns = new[] { 0.3 };  // single default - not dimension-exploded
+                double[] gaps = userGaps?.ToArray();
+                if (gaps == null || gaps.Length == 0) gaps = new[] { gap };  // single default (_gap) - not dimension-exploded
                 bool[] dirs = { true, false };
 
-                report.Add(string.Format("Sweep: {0} bands x {1} margins x {2} buckets x {3} aligns x 2 dirs = {4} combinations",
-                    bands.Length, margins.Length, buckets.Length, aligns.Length, bands.Length * margins.Length * buckets.Length * aligns.Length * 2));
+                report.Add(string.Format("Sweep: {0} bands x {1} margins x {2} buckets x {3} aligns x {4} gaps x 2 dirs = {5} combinations",
+                    bands.Length, margins.Length, buckets.Length, aligns.Length, gaps.Length, bands.Length * margins.Length * buckets.Length * aligns.Length * gaps.Length * 2));
 
                 int bestCells = -1;
-                double bestBand = 0, bestFill = 0.5, bestBucket = 0.4, bestAlign = 0.3;
+                double bestBand = 0, bestFill = 0.5, bestBucket = 0.4, bestAlign = 0.3, bestGap = gap;
                 bool bestDir = true;
                 var buildOpts = new SAM.Core.OCCT.OcctBuildOptions
                 { AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01 };
@@ -249,27 +269,31 @@ namespace SAM.Analytical.Grasshopper.OCCT
                         {
                             foreach (double al in aligns)
                             {
-                                foreach (bool d in dirs)
+                                foreach (double g in gaps)
                                 {
-                                    List<Panel> ext = panels.Extend3D(out _, out _,
-                                        minBucketSize: bk, alignColinearOffset: al,
-                                        bucketBetweenLevels: b, fillMargin: m, directionalCapGrow: d);
-                                    var nonAir = (ext ?? new List<Panel>())
-                                        .Where(x => x?.GetFace3D() != null).ToList();
-
-                                    var cluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(
-                                        null, nonAir, out SAM.Geometry.OCCT.OcctCellComplexResult cr, new SAM.Core.Log(), buildOpts);
-                                    int cells = cr?.Cells?.Count ?? 0;
-                                    int spaces = cluster?.GetSpaces()?.Count ?? 0;
-                                    cr?.Dispose();
-
-                                    report.Add(string.Format("  band={0:0.###} fill={1:0.###} bucket={2:0.###} align={3:0.###} dir={4} → cells={5} spaces={6}",
-                                        b, m, bk, al, d, cells, spaces));
-
-                                    if (cells > bestCells || (cells == bestCells && spaces > (bestCells > 0 ? spaces : 0)))
+                                    foreach (bool d in dirs)
                                     {
-                                        bestCells = cells;
-                                        bestBand = b; bestFill = m; bestBucket = bk; bestAlign = al; bestDir = d;
+                                        List<Panel> ext = panels.Extend3D(out _, out _,
+                                            minBucketSize: bk, alignColinearOffset: al,
+                                            bucketBetweenLevels: b, fillMargin: m, directionalCapGrow: d,
+                                            doubleWallGap: g);
+                                        var nonAir = (ext ?? new List<Panel>())
+                                            .Where(x => x?.GetFace3D() != null).ToList();
+
+                                        var cluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(
+                                            null, nonAir, out SAM.Geometry.OCCT.OcctCellComplexResult cr, new SAM.Core.Log(), buildOpts);
+                                        int cells = cr?.Cells?.Count ?? 0;
+                                        int spaces = cluster?.GetSpaces()?.Count ?? 0;
+                                        cr?.Dispose();
+
+                                        report.Add(string.Format("  band={0:0.###} fill={1:0.###} bucket={2:0.###} align={3:0.###} gap={4:0.###} dir={5} → cells={6} spaces={7}",
+                                            b, m, bk, al, g, d, cells, spaces));
+
+                                        if (cells > bestCells || (cells == bestCells && spaces > (bestCells > 0 ? spaces : 0)))
+                                        {
+                                            bestCells = cells;
+                                            bestBand = b; bestFill = m; bestBucket = bk; bestAlign = al; bestGap = g; bestDir = d;
+                                        }
                                     }
                                 }
                             }
@@ -277,9 +301,9 @@ namespace SAM.Analytical.Grasshopper.OCCT
                     }
                 }
 
-                band = bestBand; fill = bestFill; bucket = bestBucket; align = bestAlign; dirGrow = bestDir;
-                report.Add(string.Format("BEST: band={0:0.###} fill={1:0.###} bucket={2:0.###} align={3:0.###} dir={4} → {5} cells",
-                    band, fill, bucket, align, dirGrow, bestCells));
+                band = bestBand; fill = bestFill; bucket = bestBucket; align = bestAlign; gap = bestGap; dirGrow = bestDir;
+                report.Add(string.Format("BEST: band={0:0.###} fill={1:0.###} bucket={2:0.###} align={3:0.###} gap={4:0.###} dir={5} → {6} cells",
+                    band, fill, bucket, align, gap, dirGrow, bestCells));
             }
 
             // --- Solve ---
@@ -287,7 +311,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 out List<Point3D> nakedPoints, out List<string> diags, out _, out Solve3DReport solveReport,
                 minBucketSize: bucket, tune: tune,
                 alignColinearOffset: align,
-                bucketBetweenLevels: band, fillMargin: fill, directionalCapGrow: dirGrow);
+                bucketBetweenLevels: band, fillMargin: fill, directionalCapGrow: dirGrow,
+                doubleWallGap: gap);
 
             report.AddRange(diags);
 
@@ -315,11 +340,14 @@ namespace SAM.Analytical.Grasshopper.OCCT
             index = Params.IndexOfOutputParam("Align");
             if (index != -1) dataAccess.SetData(index, align);
 
+            index = Params.IndexOfOutputParam("Gap");
+            if (index != -1) dataAccess.SetData(index, gap);
+
             index = Params.IndexOfOutputParam("DirGrow");
             if (index != -1) dataAccess.SetData(index, dirGrow);
 
             index = Params.IndexOfOutputParam("Summary");
-            if (index != -1) dataAccess.SetData(index, string.Format("band={0:0.###} fill={1:0.###} bucket={2:0.###} align={3:0.###} dir={4}", band, fill, bucket, align, dirGrow));
+            if (index != -1) dataAccess.SetData(index, string.Format("band={0:0.###} fill={1:0.###} bucket={2:0.###} align={3:0.###} gap={4:0.###} dir={5}", band, fill, bucket, align, gap, dirGrow));
 
             index = Params.IndexOfOutputParam("Diagnostics");
             if (index != -1) dataAccess.SetDataList(index, report);

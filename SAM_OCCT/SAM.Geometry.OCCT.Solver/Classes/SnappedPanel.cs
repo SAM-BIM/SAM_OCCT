@@ -443,6 +443,48 @@ namespace SAM.Geometry.OCCT.Solver
             return larger <= 0 ? 0 : overlapArea / larger;
         }
 
+        /// <summary>
+        /// Ratio of the in-plane overlap footprint to the SMALLER of the two panels' footprints, both
+        /// measured in this panel's plane frame. 1.0 when the smaller footprint lies entirely inside the
+        /// larger one - a short wall facing a long facade (the sub-segment case), or one partition's two
+        /// skins - and small when the two merely clip corners. The companion of
+        /// <see cref="InPlaneOverlapRatio"/> (which divides by the LARGER footprint and so deliberately
+        /// scores a short-wall-inside-long-wall pair low): wall-stack consolidation
+        /// (<see cref="Panel3DSnapSolver.ConsolidateWallStacks"/>) needs the sub-segment case to score
+        /// HIGH, because a user-declared double wall is often a room's wall facing a much longer
+        /// building face. 0 when either footprint is degenerate or they do not overlap.
+        /// </summary>
+        public double InPlaneOverlapRatioVsSmaller(SnappedPanel other)
+        {
+            if (plane == null || face3D == null || other?.face3D == null)
+            {
+                return 0;
+            }
+
+            if (!FootprintBounds(plane, face3D, out double aMinU, out double aMaxU, out double aMinV, out double aMaxV))
+            {
+                return 0;
+            }
+
+            if (!FootprintBounds(plane, other.face3D, out double bMinU, out double bMaxU, out double bMinV, out double bMaxV))
+            {
+                return 0;
+            }
+
+            double overlapU = System.Math.Min(aMaxU, bMaxU) - System.Math.Max(aMinU, bMinU);
+            double overlapV = System.Math.Min(aMaxV, bMaxV) - System.Math.Max(aMinV, bMinV);
+            if (overlapU <= 0 || overlapV <= 0)
+            {
+                return 0;
+            }
+
+            double overlapArea = overlapU * overlapV;
+            double areaA = (aMaxU - aMinU) * (aMaxV - aMinV);
+            double areaB = (bMaxU - bMinU) * (bMaxV - bMinV);
+            double smaller = System.Math.Min(areaA, areaB);
+            return smaller <= 0 ? 0 : overlapArea / smaller;
+        }
+
         /// <summary>Merges another panel's source references into this one (used when two equal-weight panels collapse).</summary>
         public void Absorb(SnappedPanel other)
         {
