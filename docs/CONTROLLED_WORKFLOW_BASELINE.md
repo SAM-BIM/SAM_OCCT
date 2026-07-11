@@ -228,6 +228,52 @@ can disagree. Verified on this fixture: from the raw originals, `ExpectedSpaceSe
 output), it computed the correct 12.240/15.290/18.340. The acceptance test now sources `levelSourcePanels` from
 the cleaned panels. No `ExpectedSpaceSet`/`SpaceMatcher` code changed — only which panels the caller passes.
 
-## 9. Suite status at capture (optimizations)
+## 9. Suite status at capture (optimizations + parameter discovery)
 
-Unit: **583/583 passed**. Integration: **213 passed / 2 skipped / 0 failed**.
+Unit: **583/583 passed**. Integration: **221 passed / 2 skipped / 0 failed**.
+
+## 10. Parameter discovery — AutoTune3D + ParameterDiscoverySolver
+
+**`ParameterDiscoverySolver`** sweeps `bucketBetweenLevels × fillMargin × directionalCapGrow` over
+plausible ranges, runs the full managed pipeline for each combination, scores by closure quality, and
+reports the best configuration. The GH component `SAMOCCT.AutoTune3D` v0.2.0 exposes this via a
+`discoverParameters_` toggle.
+
+**Results on the 9-space fixture (face-only sweep):**
+| bucketBetweenLevels | fillMargin | directionalCapGrow | cells | naked |
+|---------------------|------------|-------------------|-------|-------|
+| 0.21 | 0.5 | true | 13 | 0 | ← **best** (our production config) |
+| 0.3 | 0.5 | true | 13 | 0 |
+| 0.4 | 0.5 | true | 13 | 0 |
+| 0.5 | 0.5 | true | 13 | 0 |
+
+**Results on whole-level-towers (face-only sweep):**
+| bucketBetweenLevels | fillMargin | directionalCapGrow | cells | naked |
+|---------------------|------------|-------------------|-------|-------|
+| **0.4** | **0.3** | **false** | **33** | **5** | ← **best (+8 vs baseline)** |
+| 0.15 | 0.4 | false | 26 | 0 |
+| 0.21 | 0.3 | false | 28 | 4 |
+
+The towers result matches the known tuned config (band=0.4, fillMargin≈0.3-0.4 from
+`WorkflowParity_WholeLevelTowers_FixtureTuning04`). The discovery sweep finds this automatically
+without manual fixture knowledge.
+
+**GH workflow for parameter discovery:**
+```
+[SAMOCCT.AutoTune3D] discoverParameters_=true
+    → OptimalBand  ──→ [SAMOCCT.Extend3D] bucketBetweenLevels_
+    → OptimalFill  ──→ [SAMOCCT.Extend3D] fillMargin_
+    → OptimalDirCap ──→ [SAMOCCT.Extend3D] directionalCapGrow_
+                          inputAlreadyClean_=true
+                          → [SAMOCCT.CreateAdjacencyCluster] MergeCoplanarBeforeBuild=true
+                          → [SAMOCCT.MergeCoplanarAdjacencyCluster]
+```
+
+**Only 3 Extend3D inputs are active** on the controlled chain (inputAlreadyClean=true):
+`fillMargin_`, `bucketBetweenLevels_`, `directionalCapGrow_`. The other 4 Stage-A inputs
+(minBucketSize_, thicknessFactor_, alignColinearOffset_, normalizeCapOffset_) are INERT —
+Stage A is skipped when inputAlreadyClean=true.
+
+**Parameter estimators** (available as starting points for the sweep):
+- `BucketSizeEstimator` — derives bucketBetweenLevels from cap elevation frame clustering
+- `FillMarginEstimator` — measures inter-cap and cap-wall gaps, detects fragmented cap strips
