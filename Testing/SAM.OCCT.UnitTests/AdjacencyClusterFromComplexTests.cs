@@ -2,6 +2,7 @@
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
 using SAM.Analytical;
+using SAM.Core;
 using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
 using System;
@@ -80,6 +81,66 @@ namespace SAM.OCCT.UnitTests
             Panel panel = Assert.Single(adjacencyCluster.GetPanels());
             Assert.Equal(sourcePanel.Guid, panel.Guid);
             Assert.Contains(diagnostics, x => x.Contains("1 panel(s) fully inherited identity (construction/type/Guid)"));
+        }
+
+        [Fact]
+        public void AdjacencyCluster_ExternalCellCentre_CorrectedToInteriorPoint()
+        {
+            List<Face3D> boxFaces = TestGeometry.CreateClosedBoxFaces();
+
+            List<ResolvedCellFace> faces = new List<ResolvedCellFace>();
+            for (int i = 0; i < boxFaces.Count; i++)
+            {
+                faces.Add(new ResolvedCellFace(boxFaces[i], i + 1, new List<int> { 0 }, new List<int> { i }));
+            }
+
+            Point3D outsideCentre = new Point3D(2, 2, 2);
+            List<ResolvedCell> cells = new List<ResolvedCell> { new ResolvedCell(0, 1, outsideCentre) };
+
+            ResolvedCellComplex complex = new ResolvedCellComplex(System.Guid.NewGuid(), cells, faces, null, null, 0);
+
+            AdjacencyCluster cluster = AnalyticalOcctCreate.AdjacencyCluster(
+                new List<Panel>(), complex, out List<string> diagnostics,
+                fuzzyTolerance: Tolerance.MacroDistance, tolerance: Tolerance.Distance);
+
+            Assert.NotNull(cluster);
+            Space space = Assert.Single(cluster.GetSpaces());
+            Assert.NotNull(space.Location);
+
+            Shell validationShell = new Shell(boxFaces);
+            Assert.True(
+                validationShell.Inside(space.Location, Tolerance.MacroDistance, Tolerance.Distance) ||
+                validationShell.On(space.Location, Tolerance.Distance),
+                string.Format("Space location {0} should be inside the cell shell, not outside at {1}.",
+                    space.Location, outsideCentre));
+        }
+
+        [Fact]
+        public void AdjacencyCluster_InternalCellCentre_Preserved()
+        {
+            List<Face3D> boxFaces = TestGeometry.CreateClosedBoxFaces();
+
+            List<ResolvedCellFace> faces = new List<ResolvedCellFace>();
+            for (int i = 0; i < boxFaces.Count; i++)
+            {
+                faces.Add(new ResolvedCellFace(boxFaces[i], i + 1, new List<int> { 0 }, new List<int> { i }));
+            }
+
+            Point3D insideCentre = new Point3D(0.5, 0.5, 0.5);
+            List<ResolvedCell> cells = new List<ResolvedCell> { new ResolvedCell(0, 1, insideCentre) };
+
+            ResolvedCellComplex complex = new ResolvedCellComplex(System.Guid.NewGuid(), cells, faces, null, null, 0);
+
+            AdjacencyCluster cluster = AnalyticalOcctCreate.AdjacencyCluster(
+                new List<Panel>(), complex, out List<string> diagnostics,
+                fuzzyTolerance: Tolerance.MacroDistance, tolerance: Tolerance.Distance);
+
+            Assert.NotNull(cluster);
+            Space space = Assert.Single(cluster.GetSpaces());
+            Assert.NotNull(space.Location);
+            Assert.Equal(insideCentre.X, space.Location.X, 6);
+            Assert.Equal(insideCentre.Y, space.Location.Y, 6);
+            Assert.Equal(insideCentre.Z, space.Location.Z, 6);
         }
     }
 }

@@ -276,6 +276,20 @@ namespace SAM.Analytical.OCCT
 
                 ResolvedCell cell = resolvedCellComplex.Cells[cellIndex];
                 Point3D location = cell?.Centre ?? OwnedFacesCentre(resolvedCellComplex, cellIndex);
+
+                if (location != null)
+                {
+                    List<Face3D> ownedFace3Ds = OwnedFace3Ds(resolvedCellComplex, cellIndex);
+                    if (ownedFace3Ds.Count > 0)
+                    {
+                        Shell validationShell = new Shell(ownedFace3Ds);
+                        if (!validationShell.Inside(location, fuzzyTolerance, tolerance) && !validationShell.On(location, tolerance))
+                        {
+                            location = validationShell.InternalPoint3D(fuzzyTolerance, tolerance) ?? OwnedFacesCentre(resolvedCellComplex, cellIndex);
+                        }
+                    }
+                }
+
                 if (location == null)
                 {
                     diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_COMPLEX_CELL_NO_LOCATION: Cell {0} had no centre and no owned-face geometry to derive one; cannot place a space.", cellIndex));
@@ -448,6 +462,22 @@ namespace SAM.Analytical.OCCT
             }
 
             return boundingBox3Ds.Count == 0 ? null : new BoundingBox3D(boundingBox3Ds).GetCentroid();
+        }
+
+        private static List<Face3D> OwnedFace3Ds(ResolvedCellComplex resolvedCellComplex, int cellIndex)
+        {
+            List<Face3D> face3Ds = new List<Face3D>();
+            foreach (ResolvedCellFace cellFace in resolvedCellComplex.Faces)
+            {
+                if (cellFace?.Face3D == null || cellFace.OwnerCellIndices == null || !cellFace.OwnerCellIndices.Contains(cellIndex))
+                {
+                    continue;
+                }
+
+                face3Ds.Add(cellFace.Face3D);
+            }
+
+            return face3Ds;
         }
 
         /// <summary>Conservatively matches a cell face to a supplied panel: returns the sole panel whose face
@@ -751,17 +781,25 @@ namespace SAM.Analytical.OCCT
                 }
 
                 Point3D location = cell.Center == null ? null : new Point3D(cell.Center);
-                if (location != null)
+                if (location != null && (shell.Inside(location, options.FuzzyTolerance, options.Tolerance) || shell.On(location, options.Tolerance)))
                 {
                     centerLocationCount++;
+                }
+                else
+                {
+                    location = null;
                 }
 
                 if (location == null)
                 {
                     location = BoundingBoxCenter(cell);
-                    if (location != null)
+                    if (location != null && (shell.Inside(location, options.FuzzyTolerance, options.Tolerance) || shell.On(location, options.Tolerance)))
                     {
                         boundingBoxLocationCount++;
+                    }
+                    else
+                    {
+                        location = null;
                     }
                 }
 
@@ -770,7 +808,10 @@ namespace SAM.Analytical.OCCT
                     fallbackStopwatch.Start();
                     location = shell.InternalPoint3D(options.FuzzyTolerance, options.Tolerance);
                     fallbackStopwatch.Stop();
-                    fallbackLocationCount++;
+                    if (location != null)
+                    {
+                        fallbackLocationCount++;
+                    }
                 }
 
                 if (location == null)
