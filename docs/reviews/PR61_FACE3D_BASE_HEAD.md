@@ -2,7 +2,7 @@
 
 **Review Date:** 2026-07-13
 **Base SHA:** c643b29c55fb5ce84f74521e236a80204109ba25
-**PR Head SHA:** aa3b7fc0336e4ac2c5439efde3e10abf06b80145
+**PR Head SHA:** 1d8742c48db26db882ab5d76635a4b8086871bdd
 **Status:** PARITY CONFIRMED — no regression introduced by PR #61
 
 ---
@@ -14,6 +14,15 @@
 | Native DLL SHA256 | `F177228B3551BA8B42A6D992DB176A3F02801B78638BA79C39CCE7BA290966CC` |
 | SAM dependency SHA | `a31e996f103e769cde616a8680a3512e56fcf2ef` |
 | SAM_Solver dependency SHA | `3155a13135f5abf5afbace29f6a8b72a79d52dcc` |
+
+---
+
+## Evidence Logs
+
+| Run | Log File |
+|-----|----------|
+| Base (c643b29) | `docs/reviews/evidence/PR61_FACE3D_BASE.log` |
+| Head (1d8742c) | `docs/reviews/evidence/PR61_FACE3D_HEAD.log` |
 
 ---
 
@@ -49,6 +58,33 @@ PR-branch: solver=20 A-matched=19 B-clean-extend=19
 
 ---
 
+## Towers Quantitative Validation
+
+Test: `PR61TowersQuantitativeValidationTests` — 4 passed / 0 failed / 0 skipped
+
+Log: `docs/reviews/evidence/PR61_TOWERS_VALIDATION.log`
+
+| Metric | Gap 0 (baseline) | Gap 0.4 (accepted) | Gap 0.5 (over-aggressive) |
+|--------|-----------------|---------------------|---------------------------|
+| Cell count | 31 | 30 | 29 |
+| Total volume (m³) | 9605.396 | 9620.406 | 9552.766 |
+| Floor area (m², Z≈12.24) | 1336.727 | 1335.811 | — |
+| Volume drift vs baseline | — | +0.1563% | −0.5479% |
+| Floor-area drift vs baseline | — | −0.0685% | — |
+| Sliver count (<3 m³) | 2 | 0 | 0 |
+| 22↔26 adjacency | False | True | True |
+
+Gap 0.4 increases total volume by approximately +15.010 m³. This is an acceptable
+consequence of boundary-plane consolidation: the two sliver cells (18 and 19, each
+~2.738 m³) and a third tiny cell are merged into adjacent spaces, which shifts their
+volume into the joined cells. The floor-area drift is negligible (−0.0685%).
+
+**Gap 0.5 is over-aggressive:** the 0.474 m north-strip pair is merged, removing an
+additional legitimate cell and dropping volume by ~67.6 m³ vs gap 0.4. The accepted
+towers setting remains gap 0.4.
+
+---
+
 ## Conclusion
 
 - Solver raw cell count is **20** at both base and head — identical.
@@ -56,6 +92,7 @@ PR-branch: solver=20 A-matched=19 B-clean-extend=19
 - The 19-vs-20 gap is pre-existing (introduced by the E2 plane-targeting change in PR #60 at c643b29), not a regression introduced by PR #61.
 - PR #61 does not alter the Extend3D/B-clean-extend path.
 - The always-passing "manual procedure" test (`Face3DHome_Parity_VerificationProcedureDocumented`) has been removed.
+- The report-only `PR61ReviewMetricsHarness` has been removed.
 
 ---
 
@@ -64,11 +101,13 @@ PR-branch: solver=20 A-matched=19 B-clean-extend=19
 ```bash
 # PR head
 dotnet build Testing/SAM.OCCT.IntegrationTests -c Debug
-dotnet test Testing/SAM.OCCT.IntegrationTests -c Debug --filter "FullyQualifiedName~PR61Face3DHomeParity"
+dotnet test Testing/SAM.OCCT.IntegrationTests -c Debug --filter "FullyQualifiedName~PR61Face3DHomeParity" --logger "console;verbosity=detailed"
 
 # Base (separate worktree at worktree-base)
 cd worktree-base
-# Documented in WorkflowParityIntegrationTests expectations dict — verified at c643b29.
+dotnet restore
+dotnet build Testing/SAM.OCCT.IntegrationTests -c Debug
+dotnet test Testing/SAM.OCCT.IntegrationTests -c Debug --filter "FullyQualifiedName~PR61Face3DHomeParity" --logger "console;verbosity=detailed"
 ```
 
 ---
