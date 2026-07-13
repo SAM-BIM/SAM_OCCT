@@ -665,6 +665,46 @@ neighbouring room) and joins the block room to the tower space through one share
 Revit-home loses 4 narrow duct-like cells — the documented trade-off: **a REAL corridor or shaft
 narrower than the gap is closed too**, so raise the value deliberately, per model.
 
+### Caps follow consolidated walls (2026-07-12)
+
+When `doubleWallGap_` (or a stamped per-panel range) consolidates walls, caps
+(floors/roofs) whose edge abutted the old wall plane are dragged by the same
+distance so they remain watertight against the moved wall. Without this drag,
+the cap's edge stays at the old plane, leaving an open seam the fill pass
+(capped by `fillMargin_`) may not bridge — observed on whole-level-towers
+where a 0.474 m consolidation move at gap 0.5 exceeded the 0.4 m fill margin
+and lost a strip space near (3.706, −5.836).
+
+**`fillMargin_` to `doubleWallGap_` interaction:** when `doubleWallGap_`
+exceeds `fillMargin_`, caps displaced by consolidation may not be re-grown by
+the fill pass. The solver emits a diagnostic (`ConsolidatedStack`) when this
+condition is met. To guarantee caps close across the vacated strip, raise
+`fillMargin_` to at least `doubleWallGap_`. The cap-drag fix (above) handles
+caps on the same storey; caps on storey boundaries also benefit from this
+warning.
+
+### Per-panel consolidation ranges — stamped `BucketSize` (2026-07-12)
+
+A `SolverParameter.BucketSize` stamp on a panel (set via SAM_Solver
+`SolverProperties`, inspectable with `SAMAnalytical.Visualize`) also acts as
+that panel's consolidation range in `doubleWallGap_` merges:
+
+| Property | Meaning |
+|---|---|
+| `BucketSize` (stamped) | Per-panel snap half-width AND consolidation range |
+| `MaxExtend` (stamped) | Per-panel lateral extend reach (= Visualize's "snapRange") |
+| `Weight` (stamped) | Per-panel backer priority |
+| `doubleWallGap_` (global) | 3D analogue of 2D `SnapSolver.PerpendicularMergeTolerance`; fallback for unstamped walls |
+
+**One side suffices:** a stamped wall merges an unstamped partner at the
+stamped value. Caps only participate when stamped. The dominant wall
+(largest area) stays regardless of stamps. The stamp works in any of
+Clean3D, Extend3D, or Solve3D — set it once via SolverProperties and all
+three components respect it.
+
+Workflow: SolverProperties → stamp BucketSize → Clean3D/Extend3D/Solve3D
+→ Visualize (inspect ranges).
+
 ### Diagnosing a stubborn gap — the East1|South1 corner (2026-07-10, now resolved)
 
 The East1/South1 corner had a ~0.1–0.4 m gap between fragmented cap strips at Z=15.29. The

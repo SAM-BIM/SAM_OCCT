@@ -24,7 +24,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("8f2c1a47-6b39-4d2e-9a51-7c0e4b8d3f12");
 
-        public override string LatestComponentVersion => "0.5.0";
+        public override string LatestComponentVersion => "0.6.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -43,7 +43,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 panels.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(panels, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number minBucketSize = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "minBucketSize_", NickName = "minBucketSize_", Description = "Capture half-width (m). Parallel panels within this band snap onto one backer. Larger = more merging.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number minBucketSize = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "bucket_", NickName = "bucket_", Description = "Capture half-width (m). Parallel panels within this band snap onto one backer. Larger = more merging. Renamed from minBucketSize_ in v0.6.0; reads the old name for backward compatibility.", Access = GH_ParamAccess.item };
                 minBucketSize.SetPersistentData(0.4);
                 result.Add(new GH_SAMParam(minBucketSize, ParamVisibility.Binding));
 
@@ -62,6 +62,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Number bucketBetweenLevels = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "bucketBetweenLevels_", NickName = "bucketBetweenLevels_", Description = "Level-group merge band (m, P2). GH default 0.21; 0 = off. Merges near-coplanar slab-skin datums onto one storey datum while the raw LevelFrame band stays pinned at 0.15 m. SAM_Solver uses the same name (and GH default 0.21) for a final cross-level WALL re-snap; SAM_OCCT instead merges LEVEL DATUMS and performs no cross-level wall re-snap. Values >= 0.25 can consume a genuine split-level landing and should be tuned per model.", Access = GH_ParamAccess.item };
                 bucketBetweenLevels.SetPersistentData(SolverComponentDefaults.BucketBetweenLevels);
                 result.Add(new GH_SAMParam(bucketBetweenLevels, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number doubleWallGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "doubleWallGap_", NickName = "doubleWallGap_", Description = "EXPLICIT double-wall merge gap (m), default 0 = OFF. After the bucket/align snap, every chain of overlapping parallel walls within this gap is consolidated onto ONE plane. Stamped BucketSize also acts as that panel's consolidation range (walls AND floors/roofs). The 3D analogue of the 2D SnapSolver.PerpendicularMergeTolerance.", Access = GH_ParamAccess.item };
+                doubleWallGap.SetPersistentData(0.0);
+                result.Add(new GH_SAMParam(doubleWallGap, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number slitMinGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "slitMinGap_", NickName = "slitMinGap_", Description = "Minimum perpendicular gap (m) of a remaining double-wall/slit to report. Floored at the bucket capture width so only parallel panels OUTSIDE the bucket (not captured/merged by it) are reported.", Access = GH_ParamAccess.item };
                 slitMinGap.SetPersistentData(0.02);
@@ -132,7 +136,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
             }
 
             double minBucketSize = 0.4;
-            index = Params.IndexOfInputParam("minBucketSize_");
+            index = Params.IndexOfInputParam("bucket_");
+            if (index == -1) index = Params.IndexOfInputParam("minBucketSize_");
             if (index != -1)
             {
                 dataAccess.GetData(index, ref minBucketSize);
@@ -161,7 +166,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
             // The voluntary input is absent on old saved components AND fresh placements, so this fallback is
             // the effective GH default. Version-gated: documents saved before 0.5.0 keep the core default 0.
-            double bucketBetweenLevels = SolverComponentDefaults.BucketBetweenLevelsFallback(ComponentVersion, "0.5.0");
+            double bucketBetweenLevels = SolverComponentDefaults.BucketBetweenLevelsFallback(ComponentVersion, "0.6.0");
             index = Params.IndexOfInputParam("bucketBetweenLevels_");
             if (index != -1)
             {
@@ -189,7 +194,14 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref slitMaxOverlap);
             }
 
-            List<Panel> cleanPanels = panels.Clean3D(out List<string> diagnostics, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, bucketBetweenLevels: bucketBetweenLevels);
+            double doubleWallGap = 0.0;
+            index = Params.IndexOfInputParam("doubleWallGap_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref doubleWallGap);
+            }
+
+            List<Panel> cleanPanels = panels.Clean3D(out List<string> diagnostics, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, bucketBetweenLevels: bucketBetweenLevels, doubleWallGap: doubleWallGap);
 
             index = Params.IndexOfOutputParam("Panels");
             if (index != -1)

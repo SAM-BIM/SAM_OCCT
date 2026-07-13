@@ -25,7 +25,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("3d6b9e02-4a17-4c8d-b5e3-1f9a2c7d4e8b");
 
-        public override string LatestComponentVersion => "0.6.0";
+        public override string LatestComponentVersion => "0.7.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -44,7 +44,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 panels.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(panels, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number minBucketSize = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "minBucketSize_", NickName = "minBucketSize_", Description = "Capture half-width (m). Parallel panels within this band snap onto one backer in Step 1. Larger = more merging.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number minBucketSize = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "bucket_", NickName = "bucket_", Description = "Capture half-width (m). Parallel panels within this band snap onto one backer in Step 1. Larger = more merging. Renamed from minBucketSize_ in v0.7.0; reads the old name for backward compatibility.", Access = GH_ParamAccess.item };
                 minBucketSize.SetPersistentData(0.4);
                 result.Add(new GH_SAMParam(minBucketSize, ParamVisibility.Binding));
 
@@ -63,6 +63,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Number bucketBetweenLevels = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "bucketBetweenLevels_", NickName = "bucketBetweenLevels_", Description = "Level-group merge band (m, P2). GH default 0.21; 0 = off. Merges near-coplanar slab-skin datums in the managed pipeline while the raw LevelFrame band remains 0.15 m; a raw-first-adopted solve never clusters caps. SAM_Solver uses the same name (and GH default 0.21) for a final cross-level WALL re-snap; SAM_OCCT instead merges LEVEL DATUMS and performs no cross-level wall re-snap. Tune larger values per model; values >= 0.25 can consume genuine split levels.", Access = GH_ParamAccess.item };
                 bucketBetweenLevels.SetPersistentData(SolverComponentDefaults.BucketBetweenLevels);
                 result.Add(new GH_SAMParam(bucketBetweenLevels, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number doubleWallGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "doubleWallGap_", NickName = "doubleWallGap_", Description = "EXPLICIT double-wall merge gap (m), default 0 = OFF. Stamped BucketSize also acts as that panel's consolidation range (walls AND floors/roofs). The 3D analogue of the 2D SnapSolver.PerpendicularMergeTolerance.", Access = GH_ParamAccess.item };
+                doubleWallGap.SetPersistentData(0.0);
+                result.Add(new GH_SAMParam(doubleWallGap, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number slitMinGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "slitMinGap_", NickName = "slitMinGap_", Description = "Minimum perpendicular gap (m) of a remaining double-wall/slit to report in the slits diagnostics.", Access = GH_ParamAccess.item };
                 slitMinGap.SetPersistentData(0.02);
@@ -158,7 +162,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
             }
 
             double minBucketSize = 0.4;
-            index = Params.IndexOfInputParam("minBucketSize_");
+            index = Params.IndexOfInputParam("bucket_");
+            if (index == -1) index = Params.IndexOfInputParam("minBucketSize_");
             if (index != -1)
             {
                 dataAccess.GetData(index, ref minBucketSize);
@@ -187,7 +192,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
             // The voluntary input is absent on old saved components AND fresh placements, so this fallback is
             // the effective GH default. Version-gated: documents saved before 0.6.0 keep the core default 0.
-            double bucketBetweenLevels = SolverComponentDefaults.BucketBetweenLevelsFallback(ComponentVersion, "0.6.0");
+            double bucketBetweenLevels = SolverComponentDefaults.BucketBetweenLevelsFallback(ComponentVersion, "0.7.0");
             index = Params.IndexOfInputParam("bucketBetweenLevels_");
             if (index != -1)
             {
@@ -229,9 +234,16 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref minCellVolume);
             }
 
+            double doubleWallGap = 0.0;
+            index = Params.IndexOfInputParam("doubleWallGap_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref doubleWallGap);
+            }
+
             // weights/maxExtends null => read SolverParameter.Weight / SolverParameter.MaxExtend off each
             // panel (the same parameters SAMAnalytical.Visualize shows), so they can be tuned per panel.
-            List<Panel> resolvedPanels = panels.Solve3D(out List<Point3D> nakedPoint3Ds, out List<string> diagnostics, out _, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, classifyCells: classifyCells, minCellVolume: minCellVolume, bucketBetweenLevels: bucketBetweenLevels);
+            List<Panel> resolvedPanels = panels.Solve3D(out List<Point3D> nakedPoint3Ds, out List<string> diagnostics, out _, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, classifyCells: classifyCells, minCellVolume: minCellVolume, bucketBetweenLevels: bucketBetweenLevels, doubleWallGap: doubleWallGap);
 
             // P3 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): stamp every output panel with this solve's SolveId
             // (PanelProvenanceParameter), and attach the SAME roster to the CellComplex output, so

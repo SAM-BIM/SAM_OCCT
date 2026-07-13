@@ -147,5 +147,36 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal("min-floor", ParameterProvenance.MinFloor.ToTag());
             Assert.Equal("default", ParameterProvenance.Default.ToTag());
         }
+
+        [Fact]
+        public void ResolveConsolidationRanges_StampedBucket_ReturnsValue_Unstamped_ReturnsZero()
+        {
+            var panels = new List<Panel>
+            {
+                Wall(0),
+                Wall(2),
+            };
+            panels[0].SetValue(SolverParameter.BucketSize, 0.85);
+
+            List<double> ranges = Modify.ResolveConsolidationRanges(panels);
+
+            Assert.Equal(0.85, ranges[0]);
+            Assert.Equal(0, ranges[1]);
+        }
+
+        [Fact]
+        public void ResolveConsolidationRanges_Unstamped_AllZero()
+        {
+            var panels = new List<Panel>
+            {
+                Wall(0),
+                Wall(2),
+            };
+
+            List<double> ranges = Modify.ResolveConsolidationRanges(panels);
+
+            Assert.Equal(0, ranges[0]);
+            Assert.Equal(0, ranges[1]);
+        }
     }
 }

@@ -153,7 +153,8 @@ namespace SAM.Geometry.OCCT.Solver
             //     declared gap onto its dominant plane in one deterministic pass. Runs AFTER the fixed point
             //     because it exists to finish what the pairwise snap cannot - the Snapped-frozen residue planes
             //     of a 3+ wall stack, and anti-parallel pairs beyond the void guard the user declares artifacts.
-            if (doubleWallGap > tol.Distance)
+            //     Also activates when any panel carries a stamped ConsolidationRange > 0 (per-panel override).
+            if (doubleWallGap > tol.Distance || panels.Any(x => x?.ConsolidationRange > tol.Distance))
             {
                 Panel3DSnapSolver.ConsolidateWallStacks(panels, doubleWallGap, tol.Angle, tol.Distance, tol.VerticalAngle, diagnostics, cleanRecords);
             }

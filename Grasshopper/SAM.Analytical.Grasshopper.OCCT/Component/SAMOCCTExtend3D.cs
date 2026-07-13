@@ -25,7 +25,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("a7e4c92f-1b53-4d8a-9f26-3c70e1b8d4a5");
 
-        public override string LatestComponentVersion => "0.9.0";
+        public override string LatestComponentVersion => "0.10.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -44,7 +44,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 panels.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(panels, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number minBucketSize = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "minBucketSize_", NickName = "minBucketSize_", Description = "ACTIVE when inputAlreadyClean_=false (default). Capture half-width (m) for the general bucket snap: merges parallel walls whose perpendicular gap is <= this value. Larger = more merging. Works ALONGSIDE alignColinearOffset_ which controls a separate colinear-abut merge path. Default 0.4. Wire from SAMOCCT.AutoTune3D Bucket output.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number minBucketSize = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "bucket_", NickName = "bucket_", Description = "ACTIVE when inputAlreadyClean_=false (default). Capture half-width (m) for the general bucket snap: merges parallel walls whose perpendicular gap is <= this value. Larger = more merging. Works ALONGSIDE alignColinearOffset_ which controls a separate colinear-abut merge path. Default 0.4. Wire from SAMOCCT.AutoTune3D Bucket output. Renamed from minBucketSize_ in v0.10.0; reads the old name for backward compatibility.", Access = GH_ParamAccess.item };
                 minBucketSize.SetPersistentData(0.4);
                 result.Add(new GH_SAMParam(minBucketSize, ParamVisibility.Binding));
 
@@ -60,7 +60,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 alignColinearOffset.SetPersistentData(0.3);
                 result.Add(new GH_SAMParam(alignColinearOffset, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number doubleWallGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "doubleWallGap_", NickName = "doubleWallGap_", Description = "ACTIVE when inputAlreadyClean_=false (default). EXPLICIT double-wall merge gap (m), default 0 = OFF. When set (> 0), after the bucket/align snap converges every chain of overlapping parallel walls whose planes sit within this gap is consolidated onto ONE plane (each wall moves at most this distance) — including anti-parallel pairs WIDER than the 0.3 m void guard that minBucketSize_/alignColinearOffset_ can never merge. Use for stacked multi-skin walls that leave tiny sliver spaces (e.g. 0.06/0.15 m) and for small building-to-building gaps (e.g. 0.35 m) that are modeling artifacts. CAUTION: a REAL corridor/shaft narrower than this value will be closed too.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number doubleWallGap = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "doubleWallGap_", NickName = "doubleWallGap_", Description = "ACTIVE when inputAlreadyClean_=false (default). EXPLICIT double-wall merge gap (m), default 0 = OFF. When set (> 0), after the bucket/align snap converges every chain of overlapping parallel walls whose planes sit within this gap is consolidated onto ONE plane (each wall moves at most this distance) — including anti-parallel pairs WIDER than the 0.3 m void guard that minBucketSize_/alignColinearOffset_ can never merge. Use for stacked multi-skin walls that leave tiny sliver spaces (e.g. 0.06/0.15 m) and for small building-to-building gaps (e.g. 0.35 m) that are modeling artifacts. STAMPED BUCKET SIZE: a per-panel SolverParameter.BucketSize stamp also acts as that panel's consolidation range (walls AND floors/roofs; one side suffices) — wire from SAM_Solver SolverProperties. The 3D analogue of the 2D SnapSolver.PerpendicularMergeTolerance. CAUTION: (a) a REAL corridor/shaft narrower than this value will be closed too; (b) when doubleWallGap_ exceeds fillMargin_, caps displaced by consolidation may not be re-grown — raise fillMargin_ to at least doubleWallGap_.", Access = GH_ParamAccess.item };
                 doubleWallGap.SetPersistentData(0.0);
                 result.Add(new GH_SAMParam(doubleWallGap, ParamVisibility.Binding));
 
@@ -155,7 +155,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
             }
 
             double minBucketSize = 0.4;
-            index = Params.IndexOfInputParam("minBucketSize_");
+            index = Params.IndexOfInputParam("bucket_");
+            if (index == -1) index = Params.IndexOfInputParam("minBucketSize_");
             if (index != -1)
             {
                 dataAccess.GetData(index, ref minBucketSize);
@@ -198,7 +199,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
             // The voluntary input is absent on old saved components AND fresh placements, so this fallback is
             // the effective GH default. Version-gated: documents saved before 0.7.0 keep the core default 0.
-            double bucketBetweenLevels = SolverComponentDefaults.BucketBetweenLevelsFallback(ComponentVersion, "0.7.0");
+            double bucketBetweenLevels = SolverComponentDefaults.BucketBetweenLevelsFallback(ComponentVersion, "0.10.0");
             index = Params.IndexOfInputParam("bucketBetweenLevels_");
             if (index != -1)
             {

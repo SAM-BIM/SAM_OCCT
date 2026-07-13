@@ -120,6 +120,14 @@ namespace SAM.Geometry.OCCT.Solver
         /// Appended at the end of the enum so existing members keep their ordinal values (public-enum binary
         /// contract).
         /// </summary>
-        LevelGroupOverMerge
+        LevelGroupOverMerge,
+
+        /// <summary>Consolidation near-miss (Phase 1c): a wall pair passes the parallel+overlap+ratio gates
+        /// for <see cref="Panel3DSnapSolver.ConsolidateWallStacks"/> but fails ONLY the gap — the
+        /// separation is within 2× the pair gap — so raising <c>doubleWallGap</c> (or stamping a larger
+        /// per-panel range) would merge them. Never silent: the diagnostic names both centroids and the
+        /// required value so the user can see a near-merge without guessing. Appended at the end so
+        /// existing members keep their ordinal values (public-enum binary contract).</summary>
+        ConsolidationNearMiss
     }
 }

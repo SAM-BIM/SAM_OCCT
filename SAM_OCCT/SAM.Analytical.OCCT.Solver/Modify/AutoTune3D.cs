@@ -141,7 +141,8 @@ namespace SAM.Analytical.OCCT.Solver
                 BucketBetweenLevels = bucketBetweenLevels,
                 FillMargin = fillMargin,
                 DirectionalCapGrow = directionalCapGrow,
-                DoubleWallGap = doubleWallGap
+                DoubleWallGap = doubleWallGap,
+                ConsolidationRanges = ResolveConsolidationRanges(sources)
             };
             solver.Execute(options, tune);
 

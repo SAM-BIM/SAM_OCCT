@@ -144,7 +144,8 @@ namespace SAM.Analytical.OCCT.Solver
                 NormalizeCapOffset = normalizeCapOffset,
                 ForceManagedPipeline = forceManagedPipeline,
                 BucketBetweenLevels = bucketBetweenLevels,
-                DoubleWallGap = doubleWallGap
+                DoubleWallGap = doubleWallGap,
+                ConsolidationRanges = ResolveConsolidationRanges(sources)
             };
             solver.Execute(options);
 
@@ -220,6 +221,8 @@ namespace SAM.Analytical.OCCT.Solver
             // raw-adopted solve), plus any SAM_OCCT_EXTEND3D_HOLE_DROPPED a footprint trim recorded (E1/R6).
             diagnostics.AddRange(SolverReportFormat.FormatExtendRecords(solver.ExtendRecords, sources));
             diagnostics.AddRange(SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels));
+
+            AppendInputEffectDiagnostics(diagnostics, sources, inputAlreadyClean: false, "SAM_OCCT_SOLVE3D");
 
             report = BuildReport(solver, sources, options, classifyCells, minCellVolume);
 
@@ -322,7 +325,7 @@ namespace SAM.Analytical.OCCT.Solver
             List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources, out List<ParameterProvenance> maxExtendProvenance);
             List<ParameterProvenance> bucketProvenance = BucketProvenances(sources, minBucketSize, thicknessFactor);
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true, AlignColinearOffset = alignColinearOffset, NormalizeCapOffset = normalizeCapOffset, BucketBetweenLevels = bucketBetweenLevels, DoubleWallGap = doubleWallGap };
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true, AlignColinearOffset = alignColinearOffset, NormalizeCapOffset = normalizeCapOffset, BucketBetweenLevels = bucketBetweenLevels, DoubleWallGap = doubleWallGap, ConsolidationRanges = ResolveConsolidationRanges(sources) };
             solver.Execute(null);
 
             List<string> cleanReportLines = SolverReportFormat.FormatCleanReport(
@@ -349,6 +352,8 @@ namespace SAM.Analytical.OCCT.Solver
 
             // CleanReport (P2 §4): SAM_OCCT_CLEAN3D_LEVELS/_LEVELGROUP + per-panel _PANEL observability lines.
             diagnostics.AddRange(cleanReportLines);
+
+            AppendInputEffectDiagnostics(diagnostics, sources, inputAlreadyClean: false, "SAM_OCCT_CLEAN3D");
 
             report = BuildStageReport(solver, sources, cleanReportLines);
 
@@ -450,7 +455,8 @@ namespace SAM.Analytical.OCCT.Solver
                 BucketBetweenLevels = bucketBetweenLevels,
                 InputAlreadyClean = inputAlreadyClean,
                 DirectionalCapGrow = directionalCapGrow,
-                DoubleWallGap = doubleWallGap
+                DoubleWallGap = doubleWallGap,
+                ConsolidationRanges = ResolveConsolidationRanges(sources)
             };
             solver.Execute(null);
 
@@ -585,7 +591,8 @@ namespace SAM.Analytical.OCCT.Solver
                 BucketBetweenLevels = bucketBetweenLevels,
                 InputAlreadyClean = inputAlreadyClean,
                 DirectionalCapGrow = directionalCapGrow,
-                DoubleWallGap = doubleWallGap
+                DoubleWallGap = doubleWallGap,
+                ConsolidationRanges = ResolveConsolidationRanges(sources)
             };
             solver.Execute(null);
 
@@ -897,7 +904,7 @@ namespace SAM.Analytical.OCCT.Solver
         /// </summary>
         internal static double BucketSize(Panel panel, double minBucketSize, double thicknessFactor)
         {
-            if (panel != null && panel.TryGetValue(SolverParameter.BucketSize, out double bucketSize) && !double.IsNaN(bucketSize) && bucketSize > 0)
+            if (TryGetStampedBucket(panel, out double bucketSize))
             {
                 return bucketSize;
             }
@@ -919,7 +926,7 @@ namespace SAM.Analytical.OCCT.Solver
             List<ParameterProvenance> result = new List<ParameterProvenance>();
             foreach (Panel panel in sources ?? new List<Panel>())
             {
-                if (panel != null && panel.TryGetValue(SolverParameter.BucketSize, out double bucketSize) && !double.IsNaN(bucketSize) && bucketSize > 0)
+                if (TryGetStampedBucket(panel, out _))
                 {
                     result.Add(ParameterProvenance.Stamped);
                     continue;
@@ -931,6 +938,43 @@ namespace SAM.Analytical.OCCT.Solver
                     : ParameterProvenance.MinFloor);
             }
 
+            return result;
+        }
+
+        /// <summary>
+        /// Probe <see cref="SolverParameter.BucketSize"/> stamped on a panel. Duplicated across
+        /// <see cref="BucketSize"/>/<see cref="BucketProvenances"/>/<see cref="AppendInputEffectDiagnostics"/> —
+        /// extracted so callers that need the raw stamped value do not repeat the probe.
+        /// </summary>
+        /// <returns>True when a valid stamp was read.</returns>
+        internal static bool TryGetStampedBucket(Panel panel, out double bucketSize)
+        {
+            if (panel != null && panel.TryGetValue(SolverParameter.BucketSize, out bucketSize) && !double.IsNaN(bucketSize) && bucketSize > 0)
+            {
+                return true;
+            }
+            bucketSize = 0;
+            return false;
+        }
+
+        /// <summary>
+        /// Per-panel consolidation ranges: the stamped <see cref="SolverParameter.BucketSize"/> doubles
+        /// as that panel's consolidation range when set, else 0 (the global <c>doubleWallGap</c>
+        /// applies for unstamped walls; caps only participate when stamped).
+        /// Index-aligned to <paramref name="sources"/>.
+        /// </summary>
+        internal static List<double> ResolveConsolidationRanges(List<Panel> sources)
+        {
+            List<double> result = new List<double>();
+            foreach (Panel panel in sources ?? new List<Panel>())
+            {
+                double range = 0;
+                if (TryGetStampedBucket(panel, out double stamped) && stamped > 0)
+                {
+                    range = stamped;
+                }
+                result.Add(range);
+            }
             return result;
         }
 
@@ -961,7 +1005,7 @@ namespace SAM.Analytical.OCCT.Solver
 
             if (inputAlreadyClean)
             {
-                diagnostics.Add(prefix + "_INPUT_INERT: inputAlreadyClean=true -> Stage A (clean bucket) skipped; minBucketSize_, thicknessFactor_, alignColinearOffset_, normalizeCapOffset_, doubleWallGap_ had NO geometric effect this run, and bucketBetweenLevels_ affected LevelGroups reporting only (caps were normalized upstream by Clean3D). Only fillMargin_ and directionalCapGrow_ change the fill/extend geometry on the inputAlreadyClean path.");
+                diagnostics.Add(prefix + "_INPUT_INERT: inputAlreadyClean=true -> Stage A (clean bucket) skipped; minBucketSize_, thicknessFactor_, alignColinearOffset_, normalizeCapOffset_, doubleWallGap_ had NO geometric effect this run, and bucketBetweenLevels_ affected LevelGroups reporting only (caps were normalized upstream by Clean3D). Stamped BucketSize ranges (per-panel consolidation) are also inert on this path. Only fillMargin_ and directionalCapGrow_ change the fill/extend geometry on the inputAlreadyClean path.");
                 return;
             }
 
@@ -969,7 +1013,7 @@ namespace SAM.Analytical.OCCT.Solver
             int stampedBuckets = 0;
             foreach (Panel panel in sources ?? new List<Panel>())
             {
-                if (panel != null && panel.TryGetValue(SolverParameter.BucketSize, out double bucketSize) && !double.IsNaN(bucketSize) && bucketSize > 0)
+                if (TryGetStampedBucket(panel, out _))
                 {
                     stampedBuckets++;
                 }
@@ -978,7 +1022,7 @@ namespace SAM.Analytical.OCCT.Solver
             if (stampedBuckets > 0)
             {
                 diagnostics.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                    prefix + "_INPUT_OVERRIDDEN: {0} of {1} panel(s) carry a SolverParameter.BucketSize stamp -> minBucketSize_/thicknessFactor_ are overridden for those panel(s) (the per-panel stamp wins; tune it via SAM_Solver SolverProperties). They still move the {2} unstamped panel(s).",
+                    prefix + "_INPUT_OVERRIDDEN: {0} of {1} panel(s) carry a SolverParameter.BucketSize stamp -> minBucketSize_/thicknessFactor_ are overridden for those panel(s) (the per-panel stamp wins; tune it via SAM_Solver SolverProperties). The stamp also acts as that panel's consolidation range in double-wall merges (one side suffices; walls AND floors/roofs). They still move the {2} unstamped panel(s).",
                     stampedBuckets, total, total - stampedBuckets));
             }
         }

@@ -30,7 +30,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     public class SAMOCCTAutoTune3D : GH_SAMVariableOutputParameterComponent
     {
         public override Guid ComponentGuid => new Guid("9de8b4c0-14f6-4828-b966-aa57cf58143b");
-        public override string LatestComponentVersion => "0.4.0";
+        public override string LatestComponentVersion => "0.5.0";
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
         public SAMOCCTAutoTune3D()
@@ -63,7 +63,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 result.Add(new GH_SAMParam(fillMargin, ParamVisibility.Binding));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number minBucketSolve = new global::Grasshopper.Kernel.Parameters.Param_Number()
-                { Name = "_bucket", NickName = "_bucket", Description = "Wall merge capture half-width → Extend3D minBucketSize_. Default 0.4.", Access = GH_ParamAccess.item };
+                { Name = "_bucket", NickName = "_bucket", Description = "Wall merge capture half-width → Extend3D bucket_. Default 0.4.", Access = GH_ParamAccess.item };
                 minBucketSolve.SetPersistentData(0.4);
                 result.Add(new GH_SAMParam(minBucketSolve, ParamVisibility.Binding));
 
@@ -144,7 +144,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 // Discovery outputs — wire these to SAMOCCT.Extend3D (Binding so visible immediately)
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "Band", NickName = "Band", Description = "Optimal level merge band → wire to SAMOCCT.Extend3D bucketBetweenLevels_.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "Fill", NickName = "Fill", Description = "Optimal cap growth reach → wire to SAMOCCT.Extend3D fillMargin_.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
-                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "Bucket", NickName = "Bucket", Description = "Optimal wall merge distance → wire to SAMOCCT.Extend3D minBucketSize_.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "Bucket", NickName = "Bucket", Description = "Optimal wall merge distance → wire to SAMOCCT.Extend3D bucket_.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "Align", NickName = "Align", Description = "Optimal colinear align distance → wire to SAMOCCT.Extend3D alignColinearOffset_.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "Gap", NickName = "Gap", Description = "Double-wall merge gap used → wire to SAMOCCT.Extend3D doubleWallGap_.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "DirGrow", NickName = "DirGrow", Description = "Optimal cap growth mode → wire to SAMOCCT.Extend3D directionalCapGrow_.", Access = GH_ParamAccess.item }, ParamVisibility.Binding));

@@ -83,6 +83,10 @@ namespace SAM.Geometry.OCCT.Solver
         /// consolidation; default 0 = off).</summary>
         public double DoubleWallGap { get; set; } = 0.0;
 
+        /// <summary>Threaded to each <see cref="Panel3DSnapSolver.ConsolidationRanges"/> (per-panel
+        /// merge ranges; stamp a panel's <c>SolverParameter.BucketSize</c> to set its per-panel range).</summary>
+        public List<double> ConsolidationRanges { get; set; }
+
         // ---- Outputs (mirror Panel3DSnapSolver's public surface for the adopted best-effort result) ----
 
         /// <summary>The adopted resolved output faces (baseline, or the last accepted escalation round).</summary>
@@ -611,6 +615,7 @@ namespace SAM.Geometry.OCCT.Solver
                 FillMargin = FillMargin,
                 DirectionalCapGrow = DirectionalCapGrow,
                 DoubleWallGap = DoubleWallGap,
+                ConsolidationRanges = ConsolidationRanges,
                 MinCellVolume = tune.MinCellVolume,
                 SewSafetyFactor = tune.SewSafetyFactor,
                 ConsolidateRebuild = tune.ConsolidateRebuild

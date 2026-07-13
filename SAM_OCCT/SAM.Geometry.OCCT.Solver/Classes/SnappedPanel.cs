@@ -61,13 +61,21 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>True once this panel's boundary has been projected onto a higher-weight backer plane.</summary>
         public bool Snapped { get; private set; }
 
-        public SnappedPanel(int sourceIndex, Face3D face3D, double weight, double bucketSize, double maxExtension)
+        /// <summary>Per-panel consolidation range (metres). A stamped value overrides the global
+        /// <c>doubleWallGap</c> for this panel: a non-zero range means this panel participates in
+        /// <see cref="Panel3DSnapSolver.ConsolidateWallStacks"/> at its own reach, even when the global
+        /// gap is zero. Walls use <c>max(range, global doubleWallGap)</c>; caps (non-vertical panels)
+        /// use the range directly — they only participate when stamped.</summary>
+        public double ConsolidationRange { get; private set; }
+
+        public SnappedPanel(int sourceIndex, Face3D face3D, double weight, double bucketSize, double maxExtension, double consolidationRange = 0.0)
         {
             this.face3D = face3D ?? throw new System.ArgumentNullException(nameof(face3D));
             plane = face3D.GetPlane();
             Weight = weight;
             BucketSize = bucketSize;
             MaxExtension = maxExtension;
+            ConsolidationRange = consolidationRange;
             Snapped = false;
             SourceIndices = new List<int> { sourceIndex };
             SourceFace3Ds = new List<Face3D> { face3D };
@@ -2011,7 +2019,7 @@ namespace SAM.Geometry.OCCT.Solver
             return new Polygon3D(projected);
         }
 
-        private static List<Point3D> BoundaryPoints(Face3D face3D)
+        internal static List<Point3D> BoundaryPoints(Face3D face3D)
         {
             return (face3D?.GetExternalEdge3D() as ISegmentable3D)?.GetPoints();
         }

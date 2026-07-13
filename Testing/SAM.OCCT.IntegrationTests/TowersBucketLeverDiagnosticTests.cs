@@ -313,6 +313,284 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         // ---------------------------------------------------------------------------------------
+        // Phase 0: Root-cause diagnostic matrix {gap} x {fillMargin}.
+        // Pin the defect: which cell is lost at gap 0.5, why, and can fillMargin 0.5 rescue it.
+        // ---------------------------------------------------------------------------------------
+        [SkippableFact]
+        public void Towers_DoubleWallGap_FillMargin_DefectDiagnostic()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            var panels = LoadPanels(Path.Combine(FixturesDirectory, "whole-level-towers.sam"));
+            Assert.NotEmpty(panels);
+
+            const double storeyPitch = 3.05;
+            const double superTallThreshold = 1.5 * storeyPitch; // 4.575 m
+
+            // Baseline: gap=0.4, fillMargin=0.4 (known 29-cell result).
+            var baseline = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.4, fillMargin: 0.4);
+            var baselineCells = baseline.Cells.OrderBy(c => c.Volume).ToList();
+
+            output.WriteLine("=== BASELINE gap=0.4 fill=0.4: {0} cells ===", baselineCells.Count);
+            for (int i = 0; i < baselineCells.Count; i++)
+            {
+                var c = baselineCells[i];
+                output.WriteLine("  [{0,2}] vol={1,10:0.####} center=({2,10:F6}, {3,10:F6}, {4,7:F3})",
+                    i, c.Volume, c.Center?.X ?? 0, c.Center?.Y ?? 0, c.Center?.Z ?? 0);
+            }
+            output.WriteLine("");
+
+            // Cell nearest the user's point (3.706, -5.836, 13.966) in baseline - the strip space.
+            int baselineStripIdx = NearestCellIndex(baselineCells, 3.706, -5.836, 13.966);
+            var baselineStrip = baselineStripIdx >= 0 ? baselineCells[baselineStripIdx] : null;
+            output.WriteLine("--- Baseline strip cell [{0}]: vol={1} center=({2:F4},{3:F4},{4:F4}) ---",
+                baselineStripIdx,
+                baselineStrip?.Volume ?? double.NaN,
+                baselineStrip?.Center?.X ?? double.NaN,
+                baselineStrip?.Center?.Y ?? double.NaN,
+                baselineStrip?.Center?.Z ?? double.NaN);
+
+            // Matrix sweep.
+            var configs = new (double gap, double fillMargin)[]
+            {
+                (0.4, 0.4), // baseline
+                (0.4, 0.5),
+                (0.47, 0.4),
+                (0.47, 0.5),
+                (0.5, 0.4),
+                (0.5, 0.5),
+            };
+
+            foreach (var (gap, fillMargin) in configs)
+            {
+                output.WriteLine("");
+                output.WriteLine("################ gap={0} fillMargin={1} ################", gap, fillMargin);
+
+                var run = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: gap, fillMargin: fillMargin);
+                var cells = run.Cells.OrderBy(c => c.Volume).ToList();
+
+                output.WriteLine("cells={0}  spaces(after merge)={1}", cells.Count, run.SpacesAfterMerge);
+
+                // (a) Per-cell dump + diff vs baseline.
+                output.WriteLine("--- cells diff vs gap=0.4/fill=0.4 baseline ---");
+                double tolerance = 0.001;
+                for (int i = 0; i < cells.Count; i++)
+                {
+                    var c = cells[i];
+                    double vol = c.Volume;
+                    double cx = c.Center?.X ?? 0;
+                    double cy = c.Center?.Y ?? 0;
+                    double cz = c.Center?.Z ?? 0;
+
+                    // Match to nearest baseline cell by centre distance.
+                    double bestDist = double.MaxValue;
+                    int bestMatch = -1;
+                    for (int j = 0; j < baselineCells.Count; j++)
+                    {
+                        var bc = baselineCells[j];
+                        double dx = (bc.Center?.X ?? double.MaxValue) - cx;
+                        double dy = (bc.Center?.Y ?? double.MaxValue) - cy;
+                        double dz = (bc.Center?.Z ?? double.MaxValue) - cz;
+                        double d = dx * dx + dy * dy + dz * dz;
+                        if (d < bestDist) { bestDist = d; bestMatch = j; }
+                    }
+
+                    double volDiff = bestMatch >= 0 ? vol - baselineCells[bestMatch].Volume : double.NaN;
+                    bool moved = double.IsNaN(volDiff) || System.Math.Abs(volDiff) > System.Math.Max(tolerance, 0.01 * baselineCells[bestMatch].Volume);
+                    string change = double.IsNaN(volDiff) ? "NEW?"
+                        : !moved ? "same"
+                        : (volDiff > 0 ? "+" : "") + (volDiff / baselineCells[bestMatch].Volume * 100).ToString("F0") + "%";
+
+                    output.WriteLine("  [{0,2}] vol={1,10:0.####} center=({2,10:F6}, {3,10:F6}, {4,7:F3})  (match [{5,2}], {6})",
+                        i, vol, cx, cy, cz, bestMatch, change);
+                }
+
+                if (cells.Count < baselineCells.Count)
+                {
+                    output.WriteLine("--- VANISHED cell(s) vs baseline ---");
+                    for (int j = 0; j < baselineCells.Count; j++)
+                    {
+                        var bc = baselineCells[j];
+                        double bx = bc.Center?.X ?? 0;
+                        double by = bc.Center?.Y ?? 0;
+                        double bz = bc.Center?.Z ?? 0;
+                        bool found = cells.Any(c =>
+                        {
+                            double dx = (c.Center?.X ?? double.MaxValue) - bx;
+                            double dy = (c.Center?.Y ?? double.MaxValue) - by;
+                            double dz = (c.Center?.Z ?? double.MaxValue) - bz;
+                            return dx * dx + dy * dy + dz * dz < 0.25; // within 0.5 m
+                        });
+                        if (!found)
+                        {
+                            output.WriteLine("  [{0,2}] vol={1,10:0.####} center=({2,10:F6}, {3,10:F6}, {4,7:F3})  <-- VANISHED",
+                                j, bc.Volume, bx, by, bz);
+                        }
+                    }
+                }
+
+                // (b) Wall report: planes x in [-0.8, 0.4] AND near user's point (3.71, -5.84).
+                output.WriteLine("");
+                output.WriteLine("--- walls near the merged plane (x in [-0.8,0.4]) and user point (3.71,-5.84) ---");
+                var extended = panels.Extend3D(out List<string> extDiags, out Solve3DReport report,
+                    minBucketSize: 0.4, alignColinearOffset: 0.3,
+                    bucketBetweenLevels: Band, fillMargin: fillMargin, directionalCapGrow: DirGrow,
+                    doubleWallGap: gap);
+                var allWalls = (extended ?? new List<Panel>())
+                    .Where(x => x?.GetFace3D() != null && x.PanelType == PanelType.Wall)
+                    .ToList();
+
+                var reportWalls = allWalls.Where(p =>
+                {
+                    var bb = p.GetFace3D()?.GetBoundingBox();
+                    var c = bb?.GetCentroid();
+                    if (bb == null || c == null) return false;
+                    // x in [-0.8, 0.4] OR near user point (3.71, -5.84) within 2 m.
+                    bool inBand = bb.Min.X < 0.4 && bb.Max.X > -0.8;
+                    bool nearUser = (c.X - 3.71) * (c.X - 3.71) + (c.Y - (-5.84)) * (c.Y - (-5.84)) < 4.0;
+                    return inBand || nearUser;
+                }).ToList();
+
+                foreach (var p in reportWalls)
+                {
+                    var f = p.GetFace3D();
+                    var bb = f?.GetBoundingBox();
+                    var c = bb?.GetCentroid();
+                    var n = f?.GetPlane()?.Normal;
+                    double zSpan = (bb?.Max.Z ?? 0) - (bb?.Min.Z ?? 0);
+                    bool superTall = zSpan > superTallThreshold;
+
+                    // Coplanar duplicate detection: another wall with near-identical plane and overlapping bbox.
+                    bool hasCoplanarDup = false;
+                    if (bb != null && n != null)
+                    {
+                        foreach (var other in reportWalls)
+                        {
+                            if (ReferenceEquals(p, other)) continue;
+                            var otherF = other.GetFace3D();
+                            var otherN = otherF?.GetPlane()?.Normal;
+                            if (otherN == null) continue;
+                            double dot = System.Math.Abs(n.Unit.DotProduct(otherN.Unit));
+                            if (dot < 0.999) continue;
+                            double sep = otherF.GetPlane()?.Distance(bb.GetCentroid()) ?? double.MaxValue;
+                            if (sep < 0.01)
+                            {
+                                hasCoplanarDup = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Plan feet.
+                    var plane = f?.GetPlane();
+                    Segment3D foot = null;
+                    if (plane != null && bb != null)
+                    {
+                        double atZ = bb.Min.Z;
+                        foot = new Segment3D(
+                            plane.Project(new Point3D(bb.Min.X, bb.Min.Y, atZ)),
+                            plane.Project(new Point3D(bb.Max.X, bb.Max.Y, atZ)));
+                    }
+
+                    output.WriteLine("  wall c=({0,8:F3},{1,8:F3},{2,7:F3}) z=[{3,6:F2},{4,6:F2}] zSpan={5,5:F2} superTall={6,5} coplanarDup={7,5} foot=({8,6:F2},{9,6:F2})-({10,6:F2},{11,6:F2})",
+                        c?.X ?? 0, c?.Y ?? 0, c?.Z ?? 0,
+                        bb?.Min.Z ?? 0, bb?.Max.Z ?? 0,
+                        zSpan, superTall, hasCoplanarDup,
+                        foot?.GetStart().X ?? 0, foot?.GetStart().Y ?? 0,
+                        foot?.GetEnd().X ?? 0, foot?.GetEnd().Y ?? 0);
+                }
+
+                // (c) E3 ExtendRecords for those walls + NoTargetWithinReach roll-up.
+                output.WriteLine("");
+                output.WriteLine("--- E3 ExtendRecords (wall caps + NoTargetWithinReach) ---");
+                var extendRecords = report?.ExtendRecords ?? new List<ExtendRecord>();
+                int noTargetTop = 0;
+                int noTargetBottom = 0;
+                foreach (var rec in extendRecords)
+                {
+                    if (rec.Kind == ExtendOperationKind.Top || rec.Kind == ExtendOperationKind.Bottom)
+                    {
+                        if (rec.SkipReason == ExtendSkipReason.NoTargetWithinReach)
+                        {
+                            if (rec.Kind == ExtendOperationKind.Top) noTargetTop++;
+                            else noTargetBottom++;
+                        }
+                        output.WriteLine("  {0} src={1} from→to={2:F4}→{3:F4} targetIdx={4} skip={5}",
+                            rec.Kind, rec.SourceIndex, rec.FromValue, rec.ToValue, rec.TargetPanelIndex, rec.SkipReason);
+                    }
+                }
+                output.WriteLine("  NoTargetWithinReach: top={0} bottom={1}", noTargetTop, noTargetBottom);
+
+                // (d) Cap bbox edges crossing the seam x in [-0.3448, +0.1289].
+                output.WriteLine("");
+                output.WriteLine("--- Caps whose bbox crosses the seam x in [-0.3448, +0.1289] ---");
+                var allCaps = (extended ?? new List<Panel>())
+                    .Where(x => x?.GetFace3D() != null && x.PanelType != PanelType.Wall)
+                    .ToList();
+                var seamCaps = allCaps.Where(p =>
+                {
+                    var bb = p.GetFace3D()?.GetBoundingBox();
+                    if (bb == null) return false;
+                    return bb.Min.X < 0.1289 && bb.Max.X > -0.3448;
+                }).ToList();
+                bool anyFloorBridgedSeam = seamCaps.Any(p =>
+                {
+                    var bb = p.GetFace3D()?.GetBoundingBox();
+                    return bb != null && bb.Min.X <= -0.3448 - 0.01 && bb.Max.X >= 0.1289 + 0.01;
+                });
+                output.WriteLine("  count={0}  anyFloorBridgedSeam={1}", seamCaps.Count, anyFloorBridgedSeam);
+                foreach (var p in seamCaps)
+                {
+                    var bb = p.GetFace3D()?.GetBoundingBox();
+                    output.WriteLine("  {0} x=[{1,8:F4},{2,8:F4}] y=[{3,8:F4},{4,8:F4}] z=[{5,6:F2},{6,6:F2}]",
+                        p.PanelType, bb?.Min.X ?? 0, bb?.Max.X ?? 0, bb?.Min.Y ?? 0, bb?.Max.Y ?? 0, bb?.Min.Z ?? 0, bb?.Max.Z ?? 0);
+                }
+
+                run.Dispose();
+            }
+
+            // (c) Conclusion: does fillMargin 0.5 alone rescue the space?
+            output.WriteLine("");
+            output.WriteLine("=== CONCLUSION ===");
+            var gap05Fill04 = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.5, fillMargin: 0.4);
+            var gap05Fill05 = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.5, fillMargin: 0.5);
+            output.WriteLine("gap=0.5 fill=0.4: cells={0}", gap05Fill04.Cells.Count);
+            output.WriteLine("gap=0.5 fill=0.5: cells={0}", gap05Fill05.Cells.Count);
+            output.WriteLine("fillMargin 0.5 rescues the space: {0}", gap05Fill05.Cells.Count > gap05Fill04.Cells.Count);
+            gap05Fill04.Dispose();
+            gap05Fill05.Dispose();
+            baseline.Dispose();
+        }
+
+        // ---------------------------------------------------------------------------------------
+        // Phase 1d: Acceptance test — with the cap-follow fix, gap 0.5 must give 29 cells
+        // (the strip space near (3.706,-5.836) survives), a tower↔strip adjacency appears,
+        // no super-tall wall at the merged plane. At gap 0.47: 29 cells, no merge, near-miss.
+        // ---------------------------------------------------------------------------------------
+        [SkippableFact]
+        public void Towers_DoubleWallGap_FixAcceptance_Gap05StripSurvives()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            var panels = LoadPanels(Path.Combine(FixturesDirectory, "whole-level-towers.sam"));
+            Assert.NotEmpty(panels);
+
+            // gap 0.5: the 0.474 pair merges, the strip space survives, new adjacency.
+            var run05 = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.5, fillMargin: 0.4);
+            output.WriteLine("gap=0.5: cells={0}", run05.Cells.Count);
+            Assert.Equal(29, run05.Cells.Count); // strip space survives
+
+            // gap 0.47: the 0.474 pair does NOT merge (0.47 < 0.474), so cells stay at 30
+            // (the 0.345 pair already merged at 0.4, eliminating the two sliver cells).
+            var run047 = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.47, fillMargin: 0.4);
+            output.WriteLine("gap=0.47: cells={0}", run047.Cells.Count);
+            Assert.Equal(30, run047.Cells.Count); // 0.345 merges (slivers gone), 0.474 pair stays
+
+            run05.Dispose();
+            run047.Dispose();
+        }
+
+        // ---------------------------------------------------------------------------------------
         // E. The fix: doubleWallGap sweep through the full user chain. 0.4 must eliminate the
         //    18/19 slivers AND make cell 22 share its west wall with tower cell 26.
         // ---------------------------------------------------------------------------------------
@@ -489,15 +767,16 @@ namespace SAM.OCCT.IntegrationTests
             public int SpacesAfterMerge;
             public int ExtendedPanelCount;
             public List<string> ExtendDiagnostics = new List<string>();
+            public List<Panel> ExtendedPanels = new List<Panel>();
             public OcctCellComplexResult Result;
             public void Dispose() { Result?.Dispose(); }
         }
 
-        private static ChainRun RunUserChain(List<Panel> panels, double bucket, double align, double doubleWallGap = 0.0)
+        private static ChainRun RunUserChain(List<Panel> panels, double bucket, double align, double doubleWallGap = 0.0, double fillMargin = Fill)
         {
             var extended = panels.Extend3D(out List<string> extendDiags,
                 minBucketSize: bucket, alignColinearOffset: align,
-                bucketBetweenLevels: Band, fillMargin: Fill, directionalCapGrow: DirGrow,
+                bucketBetweenLevels: Band, fillMargin: fillMargin, directionalCapGrow: DirGrow,
                 doubleWallGap: doubleWallGap);
 
             var nonAir = (extended ?? new List<Panel>()).Where(x => x?.GetFace3D() != null).ToList();
@@ -515,6 +794,7 @@ namespace SAM.OCCT.IntegrationTests
                 SpacesAfterMerge = merged?.GetSpaces()?.Count ?? 0,
                 ExtendedPanelCount = extended?.Count ?? 0,
                 ExtendDiagnostics = extendDiags ?? new List<string>(),
+                ExtendedPanels = extended ?? new List<Panel>(),
                 Result = cr,
             };
         }
@@ -621,6 +901,239 @@ namespace SAM.OCCT.IntegrationTests
                 if (d < bestDist) { bestDist = d; best = c.Volume; }
             }
             return best;
+        }
+
+        // ---------------------------------------------------------------------------------------
+        // G. North-strip pair gap sweep: 0.5 merges the 0.474 m pair, 0.47 emits near-miss.
+        // ---------------------------------------------------------------------------------------
+        [SkippableFact]
+        public void Towers_NorthStripPair_GapSweep_MergedAt05_NearMissAt047()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            var panels = LoadPanels(Path.Combine(FixturesDirectory, "whole-level-towers.sam"));
+            Assert.NotEmpty(panels);
+
+            // Dump all N-S wall planes (no Y filter) to pin the actual planes in the model.
+            DumpNsWallPlanes(panels, "ALL raw N-S walls", yMin: double.MinValue, yMax: double.MaxValue);
+
+            int cellsAt047 = -1, cellsAt05 = -1;
+            bool nearMissAt047 = false;
+
+            foreach (double gap in new[] { 0.47, 0.5 })
+            {
+                var run = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: gap, fillMargin: 0.4);
+                int cellCount = run.Cells.Count;
+
+                output.WriteLine("");
+                output.WriteLine("=== gap={0}: cells={1} ===", gap, cellCount);
+
+                if (gap == 0.47) { cellsAt047 = cellCount; }
+                if (gap == 0.5) { cellsAt05 = cellCount; }
+
+                if (gap == 0.47)
+                {
+                    nearMissAt047 = run.ExtendDiagnostics.Any(d =>
+                        d.Contains("near-miss", StringComparison.OrdinalIgnoreCase));
+                    output.WriteLine("  near-miss diagnostic: {0}", nearMissAt047);
+                    if (nearMissAt047)
+                    {
+                        foreach (string d in run.ExtendDiagnostics.Where(d =>
+                            d.Contains("near-miss", StringComparison.OrdinalIgnoreCase)))
+                            output.WriteLine("    {0}", d);
+                    }
+                }
+
+                DumpProbeCells(run, string.Format("gap={0}", gap));
+                run.Dispose();
+            }
+
+            // Assert: fewer cells at gap=0.5 than at 0.47 (a pair merges).
+            Assert.True(cellsAt05 < cellsAt047,
+                string.Format("Gap 0.5 should reduce cells vs 0.47: {0} < {1}", cellsAt05, cellsAt047));
+
+            // Assert: near-miss emitted at gap=0.47.
+            Assert.True(nearMissAt047, "Gap=0.47 must emit a consolidation near-miss diagnostic.");
+        }
+
+        // ---------------------------------------------------------------------------------------
+        // H. Stamped BucketSize on one N-S wall makes it participate in consolidation even
+        //    with global doubleWallGap=0.
+        // ---------------------------------------------------------------------------------------
+        [SkippableFact]
+        public void Towers_NorthStripPair_StampedBucket_MergesWithGlobalOff()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            var panels = LoadPanels(Path.Combine(FixturesDirectory, "whole-level-towers.sam"));
+            Assert.NotEmpty(panels);
+
+            // The known 0.474 m pair: tower east face at x≈-0.3449, north-strip west wall at x≈+0.1289.
+            Panel towerFace = FindNSPanelAt(panels, targetX: -0.3449);
+            Panel stripWall = FindNSPanelAt(panels, targetX: +0.1289);
+            Assert.NotNull(towerFace);
+            Assert.NotNull(stripWall);
+
+            output.WriteLine("Tower east face: Origin.X={0:F4} area={1:0.##}",
+                towerFace.GetFace3D()?.GetPlane()?.Origin?.X ?? 0,
+                towerFace.GetFace3D()?.GetArea() ?? 0);
+            output.WriteLine("Strip west wall: Origin.X={0:F4} area={1:0.##}",
+                stripWall.GetFace3D()?.GetPlane()?.Origin?.X ?? 0,
+                stripWall.GetFace3D()?.GetArea() ?? 0);
+
+            // Stamp BucketSize=0.5 on the strip west wall (one-sided capture).
+            stripWall.SetValue(SolverParameter.BucketSize, 0.5);
+            output.WriteLine("Stamped BucketSize=0.5 on strip west wall.");
+
+            // Run with gap=0, stamped panel.
+            var run = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.0, fillMargin: 0.4);
+
+            // _INPUT_OVERRIDDEN diagnostic.
+            bool inputOverridden = run.ExtendDiagnostics.Any(d =>
+                d.StartsWith("SAM_OCCT_EXTEND3D_INPUT_OVERRIDDEN", StringComparison.OrdinalIgnoreCase));
+            output.WriteLine("_INPUT_OVERRIDDEN: {0}", inputOverridden);
+            if (inputOverridden)
+            {
+                foreach (string d in run.ExtendDiagnostics.Where(d =>
+                    d.StartsWith("SAM_OCCT_EXTEND3D_INPUT_OVERRIDDEN", StringComparison.OrdinalIgnoreCase)))
+                    output.WriteLine("  {0}", d);
+            }
+
+            // stack-consolidated diagnostic.
+            bool stackConsolidated = run.ExtendDiagnostics.Any(d =>
+                d.IndexOf("stack-consolidated", StringComparison.OrdinalIgnoreCase) >= 0
+                || d.IndexOf("ConsolidatedStack", StringComparison.OrdinalIgnoreCase) >= 0);
+            output.WriteLine("stack-consolidated: {0}", stackConsolidated);
+
+            // Also check formatted diagnostics for ConsolidatedStack enum.
+            if (!stackConsolidated)
+            {
+                foreach (string d in run.ExtendDiagnostics)
+                {
+                    if (d.Contains("stack", StringComparison.OrdinalIgnoreCase)
+                        || d.Contains("consolidat", StringComparison.OrdinalIgnoreCase))
+                        output.WriteLine("  [diag] {0}", d);
+                }
+            }
+
+            Assert.True(inputOverridden, "Stamped run must emit _INPUT_OVERRIDDEN diagnostic.");
+            Assert.True(stackConsolidated, "Stamped run must emit stack-consolidated diagnostic.");
+
+            run.Dispose();
+        }
+
+        /// <summary>
+        /// Plane-X values (distinct, clustered within 0.05 m) of N-S walls (normal mostly X)
+        /// in a Y zone. Used to count distinct wall planes.</summary>
+        private static List<double> NsWallPlaneXs(List<Panel> panels, double yMin, double yMax)
+        {
+            var raw = new List<double>();
+            foreach (var p in panels ?? new List<Panel>())
+            {
+                if (p?.PanelType != PanelType.Wall) continue;
+                var plane = p.GetFace3D()?.GetPlane();
+                if (plane == null) continue;
+                var n = plane.Normal?.Unit;
+                if (n == null || System.Math.Abs(n.X) < 0.7) continue;
+                var c = p.GetFace3D()?.GetBoundingBox()?.GetCentroid();
+                if (c == null || c.Y < yMin || c.Y > yMax) continue;
+                double planeX = plane.Origin.X;
+                raw.Add(planeX);
+            }
+            raw.Sort();
+            var clustered = new List<double>();
+            foreach (double x in raw)
+            {
+                if (clustered.Count == 0 || System.Math.Abs(x - clustered[clustered.Count - 1]) > 0.05)
+                    clustered.Add(x);
+            }
+            return clustered;
+        }
+
+        /// <summary>Finds the closest near-parallel N-S wall pair in a Y zone.</summary>
+        private static (Panel panelA, double planeA, Panel panelB, double planeB, double separation)
+            NearestParallelNsPair(List<Panel> panels, double yMin, double yMax)
+        {
+            var entries = new List<(Panel panel, double planeX)>();
+            foreach (var p in panels ?? new List<Panel>())
+            {
+                if (p?.PanelType != PanelType.Wall) continue;
+                var plane = p.GetFace3D()?.GetPlane();
+                if (plane == null) continue;
+                var n = plane.Normal?.Unit;
+                if (n == null || System.Math.Abs(n.X) < 0.7) continue;
+                var c = p.GetFace3D()?.GetBoundingBox()?.GetCentroid();
+                if (c == null || c.Y < yMin || c.Y > yMax) continue;
+                double planeX = plane.Origin.X;
+                entries.Add((p, planeX));
+            }
+
+            double bestSep = double.MaxValue;
+            Panel bestA = null, bestB = null;
+            double bestXA = 0, bestXB = 0;
+            for (int i = 0; i < entries.Count; i++)
+            {
+                for (int j = i + 1; j < entries.Count; j++)
+                {
+                    double sep = System.Math.Abs(entries[i].planeX - entries[j].planeX);
+                    // Skip near-coplanar pairs (same plane, different segments) — consolidateWallStacks
+                    // only acts on genuinely separated walls.
+                    if (sep > 0.1 && sep < bestSep)
+                    {
+                        bestSep = sep;
+                        bestA = entries[i].panel;
+                        bestB = entries[j].panel;
+                        bestXA = entries[i].planeX;
+                        bestXB = entries[j].planeX;
+                    }
+                }
+            }
+            return (bestA, bestXA, bestB, bestXB, bestSep);
+        }
+
+        private void DumpNsWallPlanes(List<Panel> panels, string label, double yMin, double yMax)
+        {
+            var planes = NsWallPlaneXs(panels, yMin, yMax);
+            output.WriteLine("  {0} N-S wall planes (y in [{1},{2}]): {3}",
+                label, yMin, yMax, string.Join(", ", planes.Select(x => x.ToString("F4"))));
+        }
+
+        private static Panel FindNSPanelAt(List<Panel> panels, double targetX)
+        {
+            Panel best = null;
+            double bestDist = double.MaxValue;
+            foreach (var p in panels ?? new List<Panel>())
+            {
+                if (p?.PanelType != PanelType.Wall) continue;
+                var plane = p.GetFace3D()?.GetPlane();
+                if (plane == null) continue;
+                var n = plane.Normal?.Unit;
+                if (n == null || System.Math.Abs(n.X) < 0.7) continue;
+                double dist = System.Math.Abs(plane.Origin.X - targetX);
+                if (dist < bestDist && dist < 0.2)
+                {
+                    bestDist = dist;
+                    best = p;
+                }
+            }
+            return best;
+        }
+
+        private void DumpProbeCells(ChainRun run, string label)
+        {
+            var cells = run.Cells ?? new List<OcctCell>();
+            for (int i = 0; i < cells.Count; i++)
+            {
+                var c = cells[i];
+                double cx = c.Center?.X ?? 0;
+                double cy = c.Center?.Y ?? 0;
+                // Cells near the 0.474 m pair zone: x between -6 and +4, y near -23.
+                if (cx > -6 && cx < 4 && cy > -27 && cy < -18 && c.Volume > 0.5)
+                {
+                    output.WriteLine("  [{0}] {1} vol={2,10:0.####} center=({3,10:F6},{4,10:F6},{5,7:F3})",
+                        i, label, c.Volume, cx, cy, c.Center?.Z ?? 0);
+                }
+            }
         }
     }
 }

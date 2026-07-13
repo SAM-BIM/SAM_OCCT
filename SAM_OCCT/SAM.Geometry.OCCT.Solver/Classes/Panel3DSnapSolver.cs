@@ -301,6 +301,16 @@ namespace SAM.Geometry.OCCT.Solver
         public double DoubleWallGap { get; set; } = 0.0;
 
         /// <summary>
+        /// Per-panel consolidation ranges (metres), index-aligned with the input <c>face3Ds</c>. When set,
+        /// each panel participates in <see cref="ConsolidateWallStacks"/> at its own range — a stamped
+        /// <c>SolverParameter.BucketSize</c> doubles as that panel's consolidation range. Padded to
+        /// <c>face3Ds.Count</c> with 0 (no per-panel override) when shorter. Works alongside
+        /// <see cref="DoubleWallGap"/>: the effective pair gap is <c>max(ConsolidationRange, DoubleWallGap
+        /// for walls)</c>. Caps only participate when stamped (non-zero range).
+        /// </summary>
+        public List<double> ConsolidationRanges { get; set; }
+
+        /// <summary>
         /// Max perpendicular offset (metres) within which the floor/roof caps of one level are normalized
         /// onto a single plane. After the bucket snap, near-parallel caps whose planes lie within this band
         /// of one another are all projected onto the dominant (largest-area) cap's plane - the "level plane".
@@ -522,8 +532,9 @@ namespace SAM.Geometry.OCCT.Solver
             List<double> bucketSizes_Adjusted = AdjustListLength(bucketSizes, face3Ds.Count, DEFAULT_BucketSize);
             List<double> weights_Adjusted = AdjustListLength(weights, face3Ds.Count, DEFAULT_Weight);
             List<double> maxExtensions_Adjusted = AdjustListLength(maxExtensions, face3Ds.Count, DEFAULT_MaxExtension);
+            List<double> consolidationRanges_Adjusted = AdjustListLength(ConsolidationRanges, face3Ds.Count, 0.0);
 
-            SnappedPanels = Register(face3Ds, bucketSizes_Adjusted, weights_Adjusted, maxExtensions_Adjusted);
+            SnappedPanels = Register(face3Ds, bucketSizes_Adjusted, weights_Adjusted, maxExtensions_Adjusted, consolidationRanges_Adjusted);
 
             ToleranceBudget tolerances = new ToleranceBudget
             {
@@ -609,11 +620,23 @@ namespace SAM.Geometry.OCCT.Solver
                 step2Face3Ds,
                 AdjustListLength(null, step2Face3Ds.Count, DEFAULT_BucketSize),
                 AdjustListLength(null, step2Face3Ds.Count, DEFAULT_Weight),
-                AdjustListLength(snapResult.CleanMaxExtensions, step2Face3Ds.Count, DEFAULT_MaxExtension));
+                AdjustListLength(snapResult.CleanMaxExtensions, step2Face3Ds.Count, DEFAULT_MaxExtension),
+                AdjustListLength(null, step2Face3Ds.Count, 0.0));
 
             // E3: collect one observability record per applied extend/fill mutation (recording only - the
             // geometry is byte-identical to a run with a null recorder).
             List<ExtendRecord> extendRecords = new List<ExtendRecord>();
+
+            // Phase 1b: warn when the consolidation move distance may exceed the fill reach, so caps
+            // displaced by consolidation might not be re-grown by the fill pass — the cap-drag (1a) fixes
+            // this for caps on the same storey, but caps on a storey boundary also need the warning.
+            if (DoubleWallGap > ToleranceDistance && FillMargin <= ToleranceDistance)
+            {
+                Diagnostics.Add(SolverStage.Snap, DiagnosticCode.ConsolidatedStack, OcctDiagnosticSeverity.Info,
+                    string.Format("fillMargin_ ({0:0.###} m) is at or near tolerance while doubleWallGap_ ({1:0.###} m) is active: consolidated walls may move further than the fill pass can re-grow caps. Raise fillMargin_ to at least doubleWallGap_ to guarantee caps close across the vacated strip.",
+                        FillMargin, DoubleWallGap));
+            }
+
             ConditionStage.Condition(
                 SnappedPanels,
                 new ConditionStage.Settings
@@ -3229,14 +3252,33 @@ namespace SAM.Geometry.OCCT.Solver
             SolverDiagnostics diagnostics = null,
             List<CleanRecord> records = null)
         {
-            if (panels == null || doubleWallGap <= toleranceDistance)
+            bool anyRange = panels != null && panels.Any(x => x?.ConsolidationRange > toleranceDistance);
+            if ((doubleWallGap <= toleranceDistance && !anyRange) || panels == null)
             {
                 return 0;
             }
 
+            // Walls always participate. Caps (non-vertical panels) participate only when they carry a
+            // stamped range (the user explicitly opted this cap in). The dominant-is-largest-area rule
+            // keeps walls as the natural dominants; a cap becomes dominant only when it is the sole
+            // stamped panel in its component (a deliberate user cue).
             List<SnappedPanel> walls = panels
-                .Where(x => x?.Plane != null && x.Face3D != null && x.Face3D.IsValid() && x.IsVertical(verticalAngleTolerance))
+                .Where(x => x?.Plane != null && x.Face3D != null && x.Face3D.IsValid() &&
+                    (x.IsVertical(verticalAngleTolerance) || x.ConsolidationRange > toleranceDistance))
                 .ToList();
+
+            // Effective consolidation range for a panel: stamped range wins; for unstamped walls the
+            // global doubleWallGap applies; for unstamped caps the range is zero (no participation
+            // without a stamp — the wall-only filter above already removed them).
+            double EffRange(SnappedPanel p)
+            {
+                double range = p.ConsolidationRange;
+                if (range > toleranceDistance)
+                {
+                    return range;
+                }
+                return p.IsVertical(verticalAngleTolerance) ? doubleWallGap : 0.0;
+            }
 
             if (walls.Count < 2)
             {
@@ -3264,6 +3306,8 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             double minDot = System.Math.Cos(toleranceAngle);
+            int nearMissCount = 0;
+            const int nearMissMax = 10;
             for (int i = 0; i < walls.Count; i++)
             {
                 for (int j = i + 1; j < walls.Count; j++)
@@ -3277,9 +3321,9 @@ namespace SAM.Geometry.OCCT.Solver
                     }
 
                     double separation = a.PerpendicularSeparation(b);
-                    if (separation <= toleranceDistance || separation > doubleWallGap)
+                    if (separation <= toleranceDistance)
                     {
-                        continue; // already coplanar (nothing to consolidate) or wider than the declared gap
+                        continue; // already coplanar (nothing to consolidate)
                     }
 
                     if (!a.OverlapsInPlane(b, toleranceDistance))
@@ -3289,6 +3333,33 @@ namespace SAM.Geometry.OCCT.Solver
 
                     if (a.InPlaneOverlapRatioVsSmaller(b) < STACK_CONSOLIDATION_MIN_OVERLAP_RATIO)
                     {
+                        continue;
+                    }
+
+                    // Pair passes all consolidation gates except possibly the gap.
+                    double pairGap = System.Math.Max(EffRange(a), EffRange(b));
+                    if (pairGap <= toleranceDistance)
+                    {
+                        continue; // neither side allows a meaningful merge
+                    }
+
+                    if (separation > pairGap)
+                    {
+                        // Near-miss: pair passes parallel+overlap+ratio but the gap is wide.
+                        if (separation <= 2 * pairGap)
+                        {
+                            nearMissCount++;
+                            if (nearMissCount <= nearMissMax)
+                            {
+                                diagnostics?.Add(SolverStage.Snap, DiagnosticCode.ConsolidationNearMiss, OcctDiagnosticSeverity.Info,
+                                    string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                                        "Consolidation near-miss: pair at ({0:0.###},{1:0.###},{2:0.###}) and ({3:0.###},{4:0.###},{5:0.###}) separated by {6:0.###} m > pair gap ({7:0.###} m); raise doubleWallGap_ or stamp to >= {8:0.###} m to merge.",
+                                        a.GetBoundingBox()?.GetCentroid()?.X ?? 0, a.GetBoundingBox()?.GetCentroid()?.Y ?? 0, a.GetBoundingBox()?.GetCentroid()?.Z ?? 0,
+                                        b.GetBoundingBox()?.GetCentroid()?.X ?? 0, b.GetBoundingBox()?.GetCentroid()?.Y ?? 0, b.GetBoundingBox()?.GetCentroid()?.Z ?? 0,
+                                        separation, pairGap, separation),
+                                    face3D: a.Face3D, toleranceUsed: pairGap);
+                            }
+                        }
                         continue;
                     }
 
@@ -3304,6 +3375,7 @@ namespace SAM.Geometry.OCCT.Solver
             // Per component: project every member onto the dominant (largest-area) member's plane, each move
             // capped at the gap. Largest-area dominant mirrors NormalizeCaps / SnapOpposedPartitions ordering.
             int moved = 0;
+            int movedCapEdges = 0;
             foreach (var component in Enumerable.Range(0, walls.Count).GroupBy(Find).Where(g => g.Count() > 1))
             {
                 List<SnappedPanel> members = component.Select(k => walls[k]).ToList();
@@ -3323,12 +3395,14 @@ namespace SAM.Geometry.OCCT.Solver
                         continue; // already on the dominant plane
                     }
 
-                    if (distance > doubleWallGap)
+                    double travelCap = System.Math.Max(EffRange(member), EffRange(dominant));
+                    if (travelCap <= toleranceDistance || distance > travelCap)
                     {
                         diagnostics?.Add(SolverStage.Snap, DiagnosticCode.RejectedCollapse, OcctDiagnosticSeverity.Info,
-                            string.Format("Wall-stack consolidation left one wall put: {0:0.###} m from the stack's dominant plane (> doubleWallGap {1:0.###} m).",
-                                distance, doubleWallGap),
-                            face3D: member.Face3D, toleranceUsed: doubleWallGap);
+                            string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                                "Wall-stack consolidation left one wall put: {0:0.###} m from the stack's dominant plane (> travel cap {1:0.###} m).",
+                                distance, travelCap),
+                            face3D: member.Face3D, toleranceUsed: travelCap);
                         continue; // chain spans wider than the user allowed this wall to travel
                     }
 
@@ -3340,13 +3414,18 @@ namespace SAM.Geometry.OCCT.Solver
                         RecordClean(records, member, dominant, CleanRecordKind.StackConsolidated, distance);
                         movedInStack++;
 
-                        // The move vacates the member's old plane. Perpendicular walls whose plan END sat on
-                        // that plane (a T/L junction into this wall, same storey) are left hanging by exactly
-                        // the travel distance, and the Z-IGNORANT plan-loop extend cannot be relied on to
-                        // re-close them: another storey's wall line through the same plan point reads as an
-                        // already-met target (observed on whole-level-towers, whose tower faces step in plan
-                        // per storey). Drag those ends onto the new plane here, where the move is known.
-                        DragAbuttingWallEnds(walls, member, oldPlane, oldFoot, oldBox, toleranceDistance, diagnostics);
+                        // Drag abutting wall ends only for vertical walls (walls have junction partners).
+                        if (member.IsVertical(verticalAngleTolerance))
+                        {
+                            DragAbuttingWallEnds(walls, member, oldPlane, oldFoot, oldBox, toleranceDistance, diagnostics);
+                        }
+
+                        // The move also vacates the plane for caps (floors/roofs) whose edge abutted the old
+                        // plane - without this drag, the cap's edge stays at the old plane, leaving an open
+                        // seam the fill pass (capped by fillMargin) may not bridge. Drag the cap edge by the
+                        // actual move distance (d + tol), never fillMargin, so the cap follows the wall.
+                        int capDragged = DragAbuttingCapEdges(panels, member, oldPlane, oldBox, distance, toleranceDistance, diagnostics);
+                        movedCapEdges += capDragged;
                     }
                 }
 
@@ -3354,10 +3433,17 @@ namespace SAM.Geometry.OCCT.Solver
                 {
                     moved += movedInStack;
                     diagnostics?.Add(SolverStage.Snap, DiagnosticCode.ConsolidatedStack, OcctDiagnosticSeverity.Info,
-                        string.Format("Wall-stack consolidation (doubleWallGap {0:0.###} m): {1} of {2} stacked wall(s) projected onto the dominant plane.",
-                            doubleWallGap, movedInStack, members.Count),
+                        string.Format("Wall-stack consolidation (doubleWallGap {0:0.###} m): {1} of {2} stacked wall(s) projected onto the dominant plane, {3} cap edge(s) dragged.",
+                            doubleWallGap, movedInStack, members.Count, movedCapEdges),
                         face3D: dominant.Face3D, toleranceUsed: doubleWallGap);
+                    movedCapEdges = 0;
                 }
+            }
+
+            if (nearMissCount > nearMissMax)
+            {
+                diagnostics?.Add(SolverStage.Snap, DiagnosticCode.ConsolidationNearMiss, OcctDiagnosticSeverity.Info,
+                    string.Format("(+{0} more consolidation near-misses suppressed; raise doubleWallGap_ to merge them.)", nearMissCount - nearMissMax));
             }
 
             return moved;
@@ -3447,6 +3533,124 @@ namespace SAM.Geometry.OCCT.Solver
                         face3D: wall.Face3D, toleranceUsed: STACK_FOLLOW_END_TOLERANCE);
                 }
             }
+        }
+
+        /// <summary>
+        /// After <see cref="ConsolidateWallStacks"/> moved <paramref name="movedWall"/> off
+        /// <paramref name="oldPlane"/>: every cap (non-vertical panel) whose boundary edge lay on the old
+        /// plane — within tolerance along the wall's footprint and whose z-band overlaps the wall — gets
+        /// that edge extended by the actual move distance onto the new plane. Without this drag the cap's
+        /// edge stays at the old plane, leaving an open seam the <see cref="Fill"/> pass (capped by
+        /// <see cref="FillMargin"/>) may not bridge when the move distance exceeds <see cref="FillMargin"/>.
+        /// Reach is move-derived (<paramref name="distance"/> + tol), never <see cref="FillMargin"/>.
+        /// </summary>
+        /// <returns>Number of cap edges dragged.</returns>
+        private static int DragAbuttingCapEdges(
+            List<SnappedPanel> panels,
+            SnappedPanel movedWall,
+            Plane oldPlane,
+            BoundingBox3D oldBox,
+            double distance,
+            double toleranceDistance,
+            SolverDiagnostics diagnostics)
+        {
+            if (panels == null || movedWall?.Plane == null || oldPlane == null || oldBox == null || distance <= toleranceDistance)
+            {
+                return 0;
+            }
+
+            Vector3D oldNormal = oldPlane.Normal.Unit;
+            int dragged = 0;
+
+            foreach (SnappedPanel panel in panels)
+            {
+                if (ReferenceEquals(panel, movedWall) || panel?.Face3D == null || !panel.Face3D.IsValid() || panel.Plane == null)
+                {
+                    continue;
+                }
+
+                // Caps only: non-vertical panels (floors/roofs). Skip walls.
+                // Use IsVertical check but reversed: a cap is NOT vertical.
+                if (panel.IsVertical(20 * (System.Math.PI / 180)))
+                {
+                    continue;
+                }
+
+                BoundingBox3D panelBox = panel.GetBoundingBox();
+                if (panelBox == null)
+                {
+                    continue;
+                }
+
+                // Same storey: z-band overlap with the moved wall's old box.
+                // A floor at z=0 is at the wall's base, not below it — use inclusive bounds.
+                if (panelBox.Min.Z >= oldBox.Max.Z + toleranceDistance || panelBox.Max.Z <= oldBox.Min.Z - toleranceDistance)
+                {
+                    continue;
+                }
+
+                // Plan-footprint overlap: the cap must border the moved wall in plan.
+                // Use a generous plan overlap check - the cap's footprint must span the old plane region.
+                if (panelBox.Min.X > oldBox.Max.X + toleranceDistance || panelBox.Max.X < oldBox.Min.X - toleranceDistance ||
+                    panelBox.Min.Y > oldBox.Max.Y + toleranceDistance || panelBox.Max.Y < oldBox.Min.Y - toleranceDistance)
+                {
+                    continue;
+                }
+
+                // Does the cap's boundary touch the old plane? Check the cap's normal-aligned bounding extent.
+                // For a near-horizontal cap and a vertical wall, the cap's bbox in the wall-normal direction
+                // must include the old plane position.
+                double nearestToOldPlane = NearestBoundaryDistanceToPlane(panel, oldPlane, toleranceDistance);
+                if (nearestToOldPlane > toleranceDistance)
+                {
+                    continue;
+                }
+
+                // The cap touches the old wall plane. Drag its edge onto the new plane by exactly
+                // the move distance (the wall already moved this far, and the cap must follow).
+                double margin = distance + toleranceDistance;
+                if (panel.GrowOutward(margin, toleranceDistance))
+                {
+                    dragged++;
+                    diagnostics?.Add(SolverStage.Snap, DiagnosticCode.ConsolidatedStack, OcctDiagnosticSeverity.Info,
+                        string.Format("Wall-stack consolidation dragged a cap edge {0:0.###} m onto the moved plane.",
+                            distance),
+                        face3D: panel.Face3D, toleranceUsed: distance);
+                }
+            }
+
+            return dragged;
+        }
+
+        /// <summary>
+        /// The minimum distance from any vertex of <paramref name="panel"/>'s boundary to
+        /// <paramref name="plane"/>, or <see cref="double.MaxValue"/> when the panel has no boundary.
+        /// </summary>
+        private static double NearestBoundaryDistanceToPlane(SnappedPanel panel, Plane plane, double toleranceDistance)
+        {
+            Face3D face3D = panel?.Face3D;
+            if (face3D == null || plane == null)
+            {
+                return double.MaxValue;
+            }
+
+            double best = double.MaxValue;
+            List<Point3D> boundary = SnappedPanel.BoundaryPoints(face3D);
+            if (boundary == null)
+            {
+                return double.MaxValue;
+            }
+
+            foreach (Point3D point in boundary)
+            {
+                double dist = System.Math.Abs(plane.Distance(point));
+                if (dist < best)
+                {
+                    best = dist;
+                }
+            }
+
+            return best;
         }
 
         /// <summary>The dragged position for one plan end: when <paramref name="end"/> lies on the moved
@@ -3904,7 +4108,7 @@ namespace SAM.Geometry.OCCT.Solver
             return rebuiltFaceCount != 0 && rebuiltCellCount >= appendedCellCount && rebuiltNakedEdgeCount <= appendedNakedEdgeCount;
         }
 
-        private static List<SnappedPanel> Register(List<Face3D> face3Ds, List<double> bucketSizes, List<double> weights, List<double> maxExtensions)
+        private static List<SnappedPanel> Register(List<Face3D> face3Ds, List<double> bucketSizes, List<double> weights, List<double> maxExtensions, List<double> consolidationRanges)
         {
             List<SnappedPanel> panels = new List<SnappedPanel>();
             for (int i = 0; i < face3Ds.Count; i++)
@@ -3915,7 +4119,8 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
-                panels.Add(new SnappedPanel(i, face3D, weights[i], bucketSizes[i], maxExtensions[i]));
+                double range = consolidationRanges != null && i < consolidationRanges.Count ? consolidationRanges[i] : 0.0;
+                panels.Add(new SnappedPanel(i, face3D, weights[i], bucketSizes[i], maxExtensions[i], range));
             }
 
             return panels;
