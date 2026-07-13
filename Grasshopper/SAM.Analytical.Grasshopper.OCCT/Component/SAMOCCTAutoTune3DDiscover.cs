@@ -15,7 +15,7 @@ using System.Linq;
 namespace SAM.Analytical.Grasshopper.OCCT
 {
     /// <summary>
-    /// Auto-tunes solver parameters by sweeping combinations and scoring closure quality.
+    /// Auto-discovers optimal solve parameters by sweeping combinations and scoring closure quality.
     /// <para>
     /// Without discovery (_discover=false): runs the solver with your supplied parameters —
     /// useful when you already know good values. Wire the Band/Fill/Bucket/Align/Gap/DirGrow
@@ -28,20 +28,19 @@ namespace SAM.Analytical.Grasshopper.OCCT
     /// discovered values work directly in your GH chain.
     /// </para>
     /// <para>
-    /// GUID replaced 2026-07-13 (v0.5.0→v1.0.0): the 0.1.0→0.5.0 contract varied
-    /// materially (escalation solver→parameter sweep) under one GUID; the new GUID is a
-    /// clean cut so old saved definitions that used the escalation-solver incarnation
-    /// report as missing rather than silently running a large parameter sweep.
+    /// This component uses a new GUID (dce4ce6d) distinct from the legacy escalation-solver
+    /// AutoTune3D (9de8b4c0, v0.1.0), which remains available under the same display name
+    /// for backward compatibility with saved definitions.
     /// </para>
     /// </summary>
-    public class SAMOCCTAutoTune3D : GH_SAMVariableOutputParameterComponent
+    public class SAMOCCTAutoTune3DDiscover : GH_SAMVariableOutputParameterComponent
     {
         public override Guid ComponentGuid => new Guid("dce4ce6d-581a-4225-b792-3ad04f239460");
-        public override string LatestComponentVersion => "1.0.0";
+        public override string LatestComponentVersion => "0.4.0";
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
-        public SAMOCCTAutoTune3D()
-          : base("SAMOCCT.AutoTune3D", "SAMOCCT.AutoTune3D",
+        public SAMOCCTAutoTune3DDiscover()
+          : base("SAMOCCT.AutoTune3D (Discover)", "SAMOCCT.AutoTune3D Discover",
                 "Auto-discovers optimal solve parameters by sweeping settings and scoring results. Wire Band/Fill/Bucket/Align/Gap/DirGrow to SAMOCCT.Extend3D for your production chain.",
                 "SAM", "OCCT")
         {
