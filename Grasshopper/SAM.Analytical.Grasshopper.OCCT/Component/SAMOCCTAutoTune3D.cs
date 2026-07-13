@@ -17,25 +17,32 @@ namespace SAM.Analytical.Grasshopper.OCCT
     /// <summary>
     /// Auto-tunes solver parameters by sweeping combinations and scoring closure quality.
     /// <para>
-    /// Without discovery (discover_=false): runs the solver with your supplied parameters —
-    /// useful when you already know good values. Wire the OptimalBand/Fill/DirCap outputs
-    /// to SAMOCCT.Extend3D for subsequent runs.
+    /// Without discovery (_discover=false): runs the solver with your supplied parameters —
+    /// useful when you already know good values. Wire the Band/Fill/Bucket/Align/Gap/DirGrow
+    /// outputs to SAMOCCT.Extend3D for subsequent runs.
     /// </para>
     /// <para>
-    /// With discovery (discover_=true): sweeps all combinations of sweepBands × sweepMargins
-    /// × directionalCapGrow and returns the best. The sweep runs the Extend3D→CreateAdjacencyCluster
-    /// pipeline internally so the discovered values work directly in your GH chain.
+    /// With discovery (_discover=true): sweeps all combinations of sweepBands × sweepMargins
+    /// × sweepBuckets × sweepAligns × sweepGaps × directionalCapGrow and returns the best.
+    /// The sweep runs the Extend3D→CreateAdjacencyCluster pipeline internally so the
+    /// discovered values work directly in your GH chain.
+    /// </para>
+    /// <para>
+    /// GUID replaced 2026-07-13 (v0.5.0→v1.0.0): the 0.1.0→0.5.0 contract varied
+    /// materially (escalation solver→parameter sweep) under one GUID; the new GUID is a
+    /// clean cut so old saved definitions that used the escalation-solver incarnation
+    /// report as missing rather than silently running a large parameter sweep.
     /// </para>
     /// </summary>
     public class SAMOCCTAutoTune3D : GH_SAMVariableOutputParameterComponent
     {
-        public override Guid ComponentGuid => new Guid("9de8b4c0-14f6-4828-b966-aa57cf58143b");
-        public override string LatestComponentVersion => "0.5.0";
+        public override Guid ComponentGuid => new Guid("dce4ce6d-581a-4225-b792-3ad04f239460");
+        public override string LatestComponentVersion => "1.0.0";
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
         public SAMOCCTAutoTune3D()
           : base("SAMOCCT.AutoTune3D", "SAMOCCT.AutoTune3D",
-                "Auto-discovers optimal solve parameters by sweeping settings and scoring results. Wire OptimalBand/OptimalFill/OptimalDirCap to SAMOCCT.Extend3D for your production chain.",
+                "Auto-discovers optimal solve parameters by sweeping settings and scoring results. Wire Band/Fill/Bucket/Align/Gap/DirGrow to SAMOCCT.Extend3D for your production chain.",
                 "SAM", "OCCT")
         {
         }
@@ -256,6 +263,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                     bands.Length, margins.Length, buckets.Length, aligns.Length, gaps.Length, bands.Length * margins.Length * buckets.Length * aligns.Length * gaps.Length * 2));
 
                 int bestCells = -1;
+                int bestSpaces = -1;
                 double bestBand = 0, bestFill = 0.5, bestBucket = 0.4, bestAlign = 0.3, bestGap = gap;
                 bool bestDir = true;
                 var buildOpts = new SAM.Core.OCCT.OcctBuildOptions
@@ -289,9 +297,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
                                         report.Add(string.Format("  band={0:0.###} fill={1:0.###} bucket={2:0.###} align={3:0.###} gap={4:0.###} dir={5} → cells={6} spaces={7}",
                                             b, m, bk, al, g, d, cells, spaces));
 
-                                        if (cells > bestCells || (cells == bestCells && spaces > (bestCells > 0 ? spaces : 0)))
+                                        if (cells > bestCells || (cells == bestCells && spaces > bestSpaces))
                                         {
                                             bestCells = cells;
+                                            bestSpaces = spaces;
                                             bestBand = b; bestFill = m; bestBucket = bk; bestAlign = al; bestGap = g; bestDir = d;
                                         }
                                     }

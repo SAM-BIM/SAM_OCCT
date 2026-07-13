@@ -115,8 +115,9 @@ namespace SAM.OCCT.IntegrationTests
             // Builder-diagnostics gate (plan §9): no generated cluster panel bounds zero spaces.
             Assert.Empty(report.OrphanClusterPanelGuids);
 
-            // Two EXTRA cells — benign overshoot cells from the more aggressive uniform cap growth
-            // (fillMargin=1.0, directionalCapGrow=false); not asserted away, just pinned so a
+            // Two EXTRA cells — benign overshoot cells from the coplanar-cap coalescing pass
+            // (the second pass in Fill that closes inter-cap gaps when directionalCapGrow=true,
+            // fillMargin=0.5); not asserted away, just pinned so a
             // regression that produces MORE extras is caught.
             Assert.Equal(2, report.CellMatches.Count(x => x.Outcome == SpaceMatchOutcome.Extra));
         }

@@ -59,6 +59,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 GooResolvedCellComplexParam cellComplex = new GooResolvedCellComplexParam() { Name = "cellComplex_", NickName = "cellComplex_", Description = "Optional: the CellComplex from SAMOCCT.Solve3D's CellComplex output, for a direct handoff (no native rebuild) when _panels still matches the roster that solve produced.", Access = GH_ParamAccess.item, Optional = true };
                 result.Add(new GH_SAMParam(cellComplex, ParamVisibility.Voluntary));
 
+                global::Grasshopper.Kernel.Parameters.Param_Boolean mergeCoplanarBeforeBuild = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "mergeCoplanarBeforeBuild_", NickName = "mergeCoplanarBeforeBuild_", Description = "Run a managed coplanar pre-merge on faces before the native MakerVolume build. Mirrors Solve3D's ResolveStage pre-merge. Recommended for the controlled workflow chain.", Access = GH_ParamAccess.item, Optional = true };
+                mergeCoplanarBeforeBuild.SetPersistentData(false);
+                result.Add(new GH_SAMParam(mergeCoplanarBeforeBuild, ParamVisibility.Voluntary));
+
                 global::Grasshopper.Kernel.Parameters.Param_Boolean run = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "_run", NickName = "_run", Description = "Run", Access = GH_ParamAccess.item };
                 run.SetPersistentData(false);
                 result.Add(new GH_SAMParam(run, ParamVisibility.Binding));
@@ -125,6 +129,13 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref fuzzyTolerance);
             }
 
+            bool mergeCoplanarBeforeBuild = false;
+            index = Params.IndexOfInputParam("mergeCoplanarBeforeBuild_");
+            if (index != -1)
+            {
+                dataAccess.GetData(index, ref mergeCoplanarBeforeBuild);
+            }
+
             // P3 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): optional direct handoff. Unwired (old saved
             // definitions, or a fresh solve never routed through SAMOCCT.Solve3D's CellComplex output), this
             // is null and behaviour is IDENTICAL to before P3 - the rebuild path below runs unconditionally.
@@ -184,7 +195,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 // defaults (AvoidInternalShapes=true, SewBeforeBuild=false, SewingTolerance=0.0). Production
                 // previously diverged from every test/solver call site, which built with these solver-matched
                 // options - see docs/CELLCOMPLEX_FIRST_HANDOVER.md §A "Diagnosed seam".
-                adjacencyCluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(spaces, panels, out OcctCellComplexResult result, log, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01 });
+                adjacencyCluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(spaces, panels, out OcctCellComplexResult result, log, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01, MergeCoplanarBeforeBuild = mergeCoplanarBeforeBuild });
                 diagnostics.Add(string.Format("SAM_OCCT_TIMING_OCCT_AND_ADJACENCY: {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
 
                 if (result?.Diagnostics != null)

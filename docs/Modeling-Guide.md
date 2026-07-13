@@ -614,30 +614,34 @@ double-height room). Wiring `0.21 / true / true` as above:
 
 **All 9 rooms match** — the East1/South1 corner-closure gap is resolved by coplanar-cap coalescing
 (docs/CONTROLLED_WORKFLOW_BASELINE.md §8). The Extra cells are benign overshoot artefacts from the
-more robust cap growth.
+coplanar-cap coalescing pass (which closes inter-cap gaps that directional wall-based growth leaves open).
 
 ### Parameter discovery (AutoTune3D)
 
-For unknown models, run `SAMOCCT.AutoTune3D` with `discoverParameters_=true` to find the optimal
-`bucketBetweenLevels`, `fillMargin`, and `directionalCapGrow` automatically:
+For unknown models, run `SAMOCCT.AutoTune3D` with `_discover=true` (the default) to find the optimal
+`bucketBetweenLevels`, `fillMargin`, `directionalCapGrow`, bucket, and align values automatically:
 
 ```
-[SAMOCCT.AutoTune3D]  discoverParameters_=true, _panels=original
-    → OptimalBand  ──→ [SAMOCCT.Extend3D]  bucketBetweenLevels_
-    → OptimalFill  ──→ [SAMOCCT.Extend3D]  fillMargin_
-    → OptimalDirCap ──→ [SAMOCCT.Extend3D]  directionalCapGrow_
-                          inputAlreadyClean_=true  (if downstream of Clean3D)
-                          → [SAMOCCT.CreateAdjacencyCluster]  MergeCoplanarBeforeBuild=true
-                          → [SAMOCCT.MergeCoplanarAdjacencyCluster]
+[SAMOCCT.AutoTune3D]  _discover=true, _panels=original
+    → Band  ──→ [SAMOCCT.Extend3D]  bucketBetweenLevels_
+    → Fill  ──→ [SAMOCCT.Extend3D]  fillMargin_
+    → Bucket──→ [SAMOCCT.Extend3D]  bucket_
+    → Align ──→ [SAMOCCT.Extend3D]  alignColinearOffset_
+    → Gap   ──→ [SAMOCCT.Extend3D]  doubleWallGap_
+    → DirGrow ─→ [SAMOCCT.Extend3D]  directionalCapGrow_
+                   inputAlreadyClean_=true  (if downstream of Clean3D)
+                   → [SAMOCCT.CreateAdjacencyCluster]  mergeCoplanarBeforeBuild_=true
+                   → [SAMOCCT.ValidateSpaces]
 ```
 
 On the 9-space fixture this discovers `band=0.21, fill=0.5, dir=true` (the production config).
-On whole-level-towers it discovers `band=0.4, fill=0.3, dir=false` (33 cells, +8 vs baseline).
+On whole-level-towers it discovers `band=0.4, fill=0.3, dir=false` (33 cells, +8 vs baseline of 25 cells at band=0 bucket=0.4).
 
 **Only 3 Extend3D inputs are active** when `inputAlreadyClean_=true` (the chained workflow):
 `fillMargin_`, `bucketBetweenLevels_`, `directionalCapGrow_`. The other Stage-A inputs
-(`minBucketSize_`, `thicknessFactor_`, `alignColinearOffset_`, `normalizeCapOffset_`,
-`doubleWallGap_`) are INERT — Stage A is skipped on the `inputAlreadyClean` path.
+(`minBucketSize_`, `alignColinearOffset_`, `normalizeCapOffset_`, `doubleWallGap_`) are
+INERT — Stage A is skipped on the `inputAlreadyClean` path. See the input-effect matrix
+above for the full mapping.
 
 ### Merging stubborn double walls — `doubleWallGap_` (2026-07-11)
 
