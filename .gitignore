@@ -82,6 +82,9 @@ StyleCopReport.xml
 *.tmp
 *.tmp_proj
 *.log
+# PR review evidence logs are deliberately committed (the global *.log rule above
+# otherwise silently drops them from `git add`).
+!docs/reviews/evidence/*.log
 *.vspscc
 *.vssscc
 .builds

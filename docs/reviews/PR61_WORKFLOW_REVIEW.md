@@ -18,6 +18,8 @@
 | F5 | CRITICAL | AutoTune3D spaces tie-break **bug**: fixed in SAMOCCTAutoTune3DDiscover | **FIXED** |
 | F6 | LOW | Test comment incorrectly claimed `fillMargin=1.0, directionalCapGrow=false` as cause of Extra cells | **FIXED** |
 | F7 | LOW | Modeling-Guide.md described Extra cells as "more robust cap growth" (vague) | **FIXED** |
+| F8 | MEDIUM | Face3D-home B-clean-extend workflow yields 19 spaces at head vs 20 at base c643b29 (coplanar-cap coalescing) — earlier evidence claimed B-path parity | **DISCLOSED + PINNED** (`Assert.Equal(19, spacesB)`; real base/head logs committed) |
+| F9 | LOW | `dotnet build SAM_OCCT.sln` failed on a dev machine with Rhino open: the GH post-build deployment copy hits the locked `.gha` in `%APPDATA%\SAM` | **FIXED** — post-build split into strict local packaging + best-effort deployment (`IgnoreExitCode`) |
 
 ## 2. Actual Implemented Workflow
 
@@ -66,7 +68,7 @@ SAMOCCT.AutoTune3D Discover (discover=true)
 | Towers (dir=true) | 215 | Ext(band=0.4,fill=0.4,dir=true) | 2 | 129.64 | — | — | — | **CATASTROPHIC COLLAPSE** |
 | Towers (defaults) | 215 | Ext(band=0.15,fill=0.3) | 23 | 11340.89 | — | — | — | solver defaults |
 | Face3D-home | 124 | Solve3D raw | 20 | — | — | — | — | solver cells=20, A-matched=19 (pre-existing) |
-| Golden masters | — | — | — | — | — | — | — | all 20/20 pass |
+| Golden masters | — | — | — | — | — | — | — | all 15/15 pins pass (5 fixtures × raw/managed/managed-0.21) |
 
 ## 5. Sol Review Blocker Resolution
 
@@ -75,7 +77,7 @@ SAMOCCT.AutoTune3D Discover (discover=true)
 | **AutoTune contract** | Original escalation-solver AutoTune3D must be restored under GUID `9de8b4c0` | Restored exactly from c643b29: version 0.1.0, 9 original inputs (`_panels`, `minBucketSize_`, `thicknessFactor_`, `alignColinearOffset_`, `normalizeCapOffset_`, `maxRounds_`, `maxExtendLadder_`, `escalateBucket_`, `_run`), 9 outputs (`Panels`, `NakedPoints`, `Diagnostics`, `Successful`, `NakedWires`, `SourceMap`, `ClosureReport`, `Rounds`, `RoundsAccepted`) |
 | **New component naming** | Discovery sweep component must have distinct class | Renamed to `SAMOCCTAutoTune3DDiscover` with display "SAMOCCT.AutoTune3D (Discover)", GUID `dce4ce6d`, v0.4.0 |
 | **GH tests** | Replace tautological literal-with-same-literal tests | Created dedicated `Testing/SAM.OCCT.GrasshopperTests` project that instantiates real GH components; old tautological tests removed from integration project |
-| **Face3D parity** | Prove 19-vs-20 is pre-existing at c643b29 | Evidence captured in `docs/reviews/PR61_FACE3D_BASE_HEAD.md`: solver=20, A-matched=19 at both base and head |
+| **Face3D parity** | Prove 19-vs-20 is pre-existing at c643b29 | Real worktree executions committed (`docs/reviews/evidence/PR61_FACE3D_BASE.log` / `PR61_FACE3D_HEAD.log`): solver=20 and A-matched=19 at both base and head (A under-close pre-existing). B-clean-extend is NOT at parity (base 20 → head 19, coplanar-cap coalescing) — disclosed and pinned (F8) |
 | **Towers validation** | Replace weak assertions (>=25, >=26) with exact values | Exact assertions: gap0=31, gap0.4=30, gap0.5=29 cells; volumes, drifts, slivers quantified; gap 0.4 documented as accepted setting, 0.5 as over-aggressive |
 | **Documentation** | Correct inaccurate comments and PR body | Updated review doc, evidence doc, Modeling-Guide references |
 
@@ -97,13 +99,19 @@ SAMOCCT.AutoTune3D Discover (discover=true)
 
 ### Final test counts
 
+Executed 2026-07-13 at code-complete commit `171e4a5` (the final PR head adds only
+documentation/evidence and comment-only test doc corrections on top — no assertion or
+production-code changes):
+
 | Suite | Passed | Failed | Skipped |
 |-------|--------|--------|---------|
 | Unit tests | 615 | 0 | 0 |
-| Integration tests | 273 | 0 | 2 |
-| Controlled workflow acceptance | 4/4 | 0 | 0 |
-| Towers quantitative | 4/4 | 0 | 0 |
-| GH component contracts (dedicated) | 12/12 (skip when GH unavailable) | 0 | 0 |
+| Integration tests | 261 | 0 | 2 (by design: inverse-gated native-missing + large-panel sew guard) |
+| GH component contracts (dedicated project) | 15 | 0 | 0 (always execute — no skip path) |
+| — focused: golden masters | 15/15 | 0 | 0 |
+| — focused: controlled-workflow acceptance | 2/2 | 0 | 0 |
+| — focused: towers quantitative | 4/4 | 0 | 0 |
+| — focused: Face3D parity (head worktree / base worktree) | 1/1 each | 0 | 0 |
 
 ### P4 acceptance: 9/9 expected-space result
 
@@ -112,16 +120,34 @@ All 9 expected spaces match cleanly (0 missing, 0 merged, 0 split, 0 incorrect).
 
 ### Golden-master status: UNCHANGED
 
-All golden masters pass unchanged. The Face3D-home under-close (19 vs 20 solver cells) is pre-existing at c643b29 base.
+All 15 golden-master pins pass unchanged (5 fixtures × raw/managed/managed-0.21). The Face3D-home A-path under-close (19 vs 20 solver cells) is pre-existing at c643b29 base.
 
-### Proven Face3D base/head result
+### Proven Face3D base/head result (real executions)
 
-See `docs/reviews/PR61_FACE3D_BASE_HEAD.md`: solver=20, A-matched=19 on both base and head. Native DLL SHA256: `F177228B3551BA8B42A6D992DB176A3F02801B78638BA79C39CCE7BA290966CC`.
+See `docs/reviews/PR61_FACE3D_BASE_HEAD.md` and the committed logs
+`docs/reviews/evidence/PR61_FACE3D_BASE.log` / `PR61_FACE3D_HEAD.log` — identical native DLL
+SHA256 `81CDABA60E5E0CF270371FDB3DED4C7E6201EF38B23D0D56AF9EEFD508DBBD4F` for both runs:
 
-### Accepted towers gap and quantitative metrics
+- Solver raw cells: 20 = 20 (parity).
+- A-solver-matched spaces: 19 = 19 (parity; pre-existing under-close from PR #60 E2).
+- B-clean-extend spaces: base **20** → head **19** — a PR #61 delta from the coplanar-cap
+  coalescing pass, disclosed in the PR body and pinned in `PR61Face3DHomeParityTests`.
 
-Gap 0.4 is the accepted towers setting: 30 cells, 9620.406 m³, 0 slivers, 22↔26 joined.
-Gap 0.5 is over-aggressive: 29 cells, 9552.766 m³, removes additional cell (67.6 m³ volume drop).
+### Accepted towers gap and quantitative metrics (all asserted)
+
+| Metric | Gap 0 | Gap 0.4 (accepted) | Gap 0.5 (over-aggressive) |
+|--------|-------|--------------------|---------------------------|
+| Cells | 31 | 30 | 29 |
+| Total volume (m³) | 9605.396 | 9620.406 (+0.156%) | 9552.766 (−0.548%) |
+| Cell-derived floor area (m²) | 3160.075 | 3168.220 | 3142.820 |
+| Level-datum floor area (m², Z≈12.24) | 1336.727 | 1335.811 (−0.069%) | 1330.101 (−0.496%) |
+| Slivers (<3 m³) | 2 | 0 | 0 |
+| 22↔26 adjacency | False | True | True |
+
+Gap 0.4: +15.010 m³ fully attributed (sliver absorption +3.833; exact 157.574 → 78.049 + 79.526
+north-strip split; +7.610/+7.427 double-wall void reclamation) — no legitimate room lost.
+Gap 0.5: destroys the west north-strip room (78.049 m³, 28.809 m² floor); −67.640 m³ vs gap 0.4
+fully attributed (−78.049 + 10.408). Log: `docs/reviews/evidence/PR61_TOWERS_VALIDATION.log`.
 
 ### Legacy/new AutoTune migration
 

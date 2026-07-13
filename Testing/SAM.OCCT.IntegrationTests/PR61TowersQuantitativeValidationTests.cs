@@ -33,10 +33,11 @@ namespace SAM.OCCT.IntegrationTests
     /// +7.427 m³ block-room 22 — the growth that joins it to tower 26). Room topology is preserved.
     /// </para>
     /// <para>
-    /// Gap 0.5 (over-aggressive): the 0.474 m north-strip wall-pair snap displaces a wall further
-    /// than fillMargin=0.4 can close, so the west north-strip room (78.049 m³, 28.809 m² floor —
-    /// 26× the sliver threshold) fails to close and drops out of the cell complex entirely; its
-    /// sibling survives with unchanged volume (destroyed, not merged). Net −67.640 m³
+    /// Gap 0.5 (over-aggressive): consolidating the 0.474 m north-strip wall pair leaves the
+    /// west north-strip room (78.049 m³, 28.809 m² floor — 26× the sliver threshold) unclosed;
+    /// it drops out of the cell complex entirely while its sibling survives with unchanged
+    /// volume (destroyed, not merged), and raising fillMargin to 0.5 does not rescue it
+    /// (Towers_DoubleWallGap_FillMargin_DefectDiagnostic). Net −67.640 m³
     /// (−78.049 lost room + 10.408 unrelated southeast consolidation growth).
     /// </para>
     /// <para>
@@ -460,8 +461,8 @@ namespace SAM.OCCT.IntegrationTests
                 // The destroyed geometry: the west north-strip room (78.049 m³ — 26× the sliver
                 // threshold, a legitimate room) exists at gap 0.4 but has NO successor at gap 0.5,
                 // while its pair sibling survives with unchanged volume. The room is destroyed
-                // (fails to close after the 0.474 m wall-pair snap exceeds fillMargin=0.4), not
-                // merged into the sibling.
+                // (left unclosed by the 0.474 m wall-pair consolidation; fillMargin=0.5 does not
+                // rescue it), not merged into the sibling.
                 using (var run04 = RunTowersChain(0.4))
                 {
                     var west04 = FindCell(run04, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);

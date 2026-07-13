@@ -1,0 +1,38 @@
+﻿# PR #61 Face3D-home parity — HEAD run (real execution)
+# Date:                2026-07-13
+# Worktree:            SAM_OCCT-wt61-head
+# Commit SHA:          171e4a54a53644b1effded5638b5a4c894eba899
+# Native DLL:          build\SAM.Occt.Native.dll (identical copy used for the BASE run)
+# Native DLL SHA256:   81CDABA60E5E0CF270371FDB3DED4C7E6201EF38B23D0D56AF9EEFD508DBBD4F
+# SAM dependency SHA:  a31e996f103e769cde616a8680a3512e56fcf2ef (..\SAM, branch sow/2026-Q3)
+# SAM_Solver dep SHA:  3155a13135f5abf5afbace29f6a8b72a79d52dcc (..\SAM_Solver, branch sow/2026-Q3)
+# Test source:         PR61Face3DHomeParityTests.cs as committed at this SHA (pins
+#                      solver=20, A-matched=19, B-clean-extend=19).
+# Command:
+#   dotnet test Testing/SAM.OCCT.IntegrationTests -c Debug --no-build --filter "FullyQualifiedName~PR61Face3DHomeParity" --logger "console;verbosity=detailed"
+# ------------------------------------------------------------------------------
+Test run for C:\Users\michal.dengusiak\Documents\GitHub\SAM-BIM\SAM_OCCT-wt61-head\Testing\SAM.OCCT.IntegrationTests\bin\Debug\net8.0\SAM.OCCT.IntegrationTests.dll (.NETCoreApp,Version=v8.0)
+VSTest version 17.14.1 (x64)
+
+Starting test execution, please wait...
+A total of 1 test files matched the specified pattern.
+C:\Users\michal.dengusiak\Documents\GitHub\SAM-BIM\SAM_OCCT-wt61-head\Testing\SAM.OCCT.IntegrationTests\bin\Debug\net8.0\SAM.OCCT.IntegrationTests.dll
+[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.8.2+699d445a1a (64-bit .NET 8.0.28)
+[xUnit.net 00:00:01.77]   Discovering: SAM.OCCT.IntegrationTests
+[xUnit.net 00:00:02.03]   Discovered:  SAM.OCCT.IntegrationTests
+[xUnit.net 00:00:02.03]   Starting:    SAM.OCCT.IntegrationTests
+[xUnit.net 00:00:08.26]   Finished:    SAM.OCCT.IntegrationTests
+  Passed SAM.OCCT.IntegrationTests.PR61Face3DHomeParityTests.Face3DHome_Parity_PR_Branch_RecordsCurrentState [6 s]
+  Standard Output Messages:
+ Solver raw: cells=20 naked=4
+ A-solver-matched: spaces=19 (solver cells=20)
+ B-clean-extend (band=0.21): spaces=19
+ PR-branch: solver=20 A-matched=19 B-clean-extend=19
+
+
+
+Test Run Successful.
+Total tests: 1
+     Passed: 1
+ Total time: 10.2301 Seconds
+
