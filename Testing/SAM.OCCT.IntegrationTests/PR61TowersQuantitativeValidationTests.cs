@@ -356,8 +356,9 @@ namespace SAM.OCCT.IntegrationTests
                 Assert.Equal(29, cells05);
 
                 // Gap 0.5 removes one additional cell compared to gap 0.4.
-                Assert.Equal(1, cells04 - cells05,
-                    string.Format("Expected gap 0.5 ({0} cells) to have exactly 1 fewer cell than gap 0.4 ({1} cells).", cells05, cells04));
+                int delta = cells04 - cells05;
+                Assert.True(delta == 1,
+                    string.Format("Expected gap 0.5 ({0} cells) to have exactly 1 fewer cell than gap 0.4 ({1} cells), but delta is {2}.", cells05, cells04, delta));
             }
         }
     }
