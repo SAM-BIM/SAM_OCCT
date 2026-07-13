@@ -99,21 +99,15 @@ namespace SAM.OCCT.IntegrationTests
             int spacesB = clusterB?.GetSpaces()?.Count ?? 0;
             output.WriteLine("B-clean-extend (band=0.21): spaces={0}", spacesB);
 
-            // Pins the current PR-branch values. These are the observed reality, not a correctness
-            // claim. The WorkflowParityIntegrationTests harness tracks A-solver-matched as under-closing
-            // (spacesA != solverCells) with the expectation entry at line 400-404. B-clean-extend has
-            // no expectation entry (expected to match on default), so this captures its current value.
-            output.WriteLine("PR-branch (HEAD a88756d+): solver={0} A-matched={1} B-clean-extend={2}",
-                solverCells, spacesA, spacesB);
+            // Pin the solver raw cell count — proven identical at c643b29 base.
+            Assert.Equal(20, solverCells);
 
-            // The WorkflowParity expectation for Face3D-home A-solver-matched is that it under-closes:
-            // this assertion documents the current reality (not a regression check).
-            // If A-matched == solver cells, then E2 or a subsequent phase fixed the under-close
-            // on this fixture - update the WorkflowParity Expectation entry accordingly.
-            if (spacesA != solverCells)
-            {
-                output.WriteLine("TRACKED: A-solver-matched under-closes ({0} vs {1} solver cells) — matches WorkflowParity Expectation.", spacesA, solverCells);
-            }
+            // Pin the A-solver-matched under-close — proven pre-existing at c643b29 base.
+            Assert.Equal(19, spacesA);
+
+            output.WriteLine("PR-branch (HEAD d55168e): solver={0} A-matched={1} B-clean-extend={2}",
+                solverCells, spacesA, spacesB);
+            output.WriteLine("B-clean-extend result: {0}", spacesB);
 
             crA?.Dispose();
             crB?.Dispose();

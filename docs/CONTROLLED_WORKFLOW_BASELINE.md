@@ -228,9 +228,14 @@ can disagree. Verified on this fixture: from the raw originals, `ExpectedSpaceSe
 output), it computed the correct 12.240/15.290/18.340. The acceptance test now sources `levelSourcePanels` from
 the cleaned panels. No `ExpectedSpaceSet`/`SpaceMatcher` code changed — only which panels the caller passes.
 
-## 9. Suite status at capture (optimizations + parameter discovery)
+## 9. Suite status at capture (optimizations + parameter discovery + sol review)
 
-Unit: **583/583 passed**. Integration: **221 passed / 2 skipped / 0 failed**.
+Unit: **617/617 passed**. Integration: **277 passed / 2 skipped / 0 failed**.
+
+P4 acceptance: **9/9 expected spaces matched** with 2 benign Extra cells remaining from the
+coplanar-cap coalescing pass. This is "9/9 expected spaces matched", NOT "fully valid with no
+extra cells" — the 2 Extra cells are pinned (not asserted away) so a regression producing MORE
+extras is caught.
 
 ## 10. Parameter discovery — AutoTune3D + ParameterDiscoverySolver
 

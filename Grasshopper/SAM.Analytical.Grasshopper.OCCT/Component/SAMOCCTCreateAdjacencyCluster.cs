@@ -59,13 +59,13 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 GooResolvedCellComplexParam cellComplex = new GooResolvedCellComplexParam() { Name = "cellComplex_", NickName = "cellComplex_", Description = "Optional: the CellComplex from SAMOCCT.Solve3D's CellComplex output, for a direct handoff (no native rebuild) when _panels still matches the roster that solve produced.", Access = GH_ParamAccess.item, Optional = true };
                 result.Add(new GH_SAMParam(cellComplex, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Boolean mergeCoplanarBeforeBuild = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "mergeCoplanarBeforeBuild_", NickName = "mergeCoplanarBeforeBuild_", Description = "Run a managed coplanar pre-merge on faces before the native MakerVolume build. Mirrors Solve3D's ResolveStage pre-merge. Recommended for the controlled workflow chain.", Access = GH_ParamAccess.item, Optional = true };
-                mergeCoplanarBeforeBuild.SetPersistentData(false);
-                result.Add(new GH_SAMParam(mergeCoplanarBeforeBuild, ParamVisibility.Voluntary));
-
                 global::Grasshopper.Kernel.Parameters.Param_Boolean run = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "_run", NickName = "_run", Description = "Run", Access = GH_ParamAccess.item };
                 run.SetPersistentData(false);
                 result.Add(new GH_SAMParam(run, ParamVisibility.Binding));
+
+                global::Grasshopper.Kernel.Parameters.Param_Boolean mergeCoplanarBeforeBuild = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "mergeCoplanarBeforeBuild_", NickName = "mergeCoplanarBeforeBuild_", Description = "Run a managed coplanar pre-merge on faces before the native MakerVolume build. Mirrors Solve3D's ResolveStage pre-merge. Recommended for the controlled workflow chain.", Access = GH_ParamAccess.item, Optional = true };
+                mergeCoplanarBeforeBuild.SetPersistentData(false);
+                result.Add(new GH_SAMParam(mergeCoplanarBeforeBuild, ParamVisibility.Voluntary));
 
                 return result.ToArray();
             }

@@ -57,7 +57,8 @@ namespace SAM.OCCT.IntegrationTests
             List<Space> expectedSpaces = SAM.Core.Convert.ToSAM(spacesPath).OfType<Space>().ToList();
 
             // Clean3D -> Extend3D, the exact controlled-fixture chain (plan §9): 0.21 / inputAlreadyClean=true /
-            // directionalCapGrow=true. Cap-to-cap gap closing (GrowEdgesToCaps) handles inter-cap gaps surgically.
+            // directionalCapGrow=true. The coplanar-cap coalescing pass in Fill handles inter-cap gaps by
+            // applying a uniform GrowOutward(margin) as a second pass when directionalCapGrow is active.
             List<Panel> cleaned = originalPanels.Clean3D(out _, out Solve3DReport cleanReport, bucketBetweenLevels: 0.21);
             List<Panel> extended = cleaned.Extend3D(out _, out _, bucketBetweenLevels: 0.21, inputAlreadyClean: true, directionalCapGrow: true);
 
