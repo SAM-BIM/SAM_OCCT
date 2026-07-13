@@ -11,7 +11,7 @@ C++/OpenCASCADE layer (`SAM.Occt.Native`).
 | --- | --- | --- |
 | `Testing/SAM.OCCT.UnitTests` | Pure-managed logic that runs identically anywhere: `OcctBuildOptions`, `OcctDiagnostic`, the `OcctNativeInputBuilder` serializer, and the `Query` input guard clauses (which return before any native call). | No |
 | `Testing/SAM.OCCT.IntegrationTests` | Real OCCT boolean / cell-complex operations (cells, volumes, face adjacencies), **and** the graceful *native-missing* contract. | Gated on native availability |
-| `Testing/SAM.OCCT.GrasshopperTests` | PR #61 GH component contract tests. Instantiates production Grasshopper components, inspects registered GUIDs, inputs, outputs, access, and persistent defaults. Compiles against the Grasshopper SDK but gracefully skips when the GH runtime is not available (e.g. outside Rhino). | No (only GH SDK at compile-time) |
+| `Testing/SAM.OCCT.GrasshopperTests` | PR #61 GH component contract tests. Instantiates production Grasshopper components, inspects registered GUIDs, inputs, outputs, access, and persistent defaults. The Grasshopper SDK assembly is resolved at runtime from the restored NuGet package (no Rhino installation needed), so these tests always execute — a resolution failure is a loud test failure, never a silent skip. | No (GH SDK from NuGet) |
 
 Anything whose outcome depends on whether the native library is loadable lives in
 the integration project, never in the unit project — so the unit suite cannot be
@@ -69,7 +69,7 @@ dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj
 .\build-native.ps1 -SkipVcpkgInstall
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj
 
-# Grasshopper component contract tests — compile against GH SDK, skip at runtime when GH not available
+# Grasshopper component contract tests — GH SDK resolved from the NuGet cache; always execute
 dotnet test Testing/SAM.OCCT.GrasshopperTests/SAM.OCCT.GrasshopperTests.csproj
 ```
 

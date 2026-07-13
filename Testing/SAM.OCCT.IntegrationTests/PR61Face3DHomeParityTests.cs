@@ -20,14 +20,17 @@ namespace SAM.OCCT.IntegrationTests
     /// <summary>
     /// PR #61 review: Face3D-home parity comparison between base SHA c643b29 and PR head.
     /// <para>
-    /// The tracked parity (WorkflowParityIntegrationTests): A-solver-matched under-closes
-    /// (19 vs 20 solver cells) on Face3D-home. The E2 plane-targeting change (PR #60, merged
-    /// at base c643b29) changed the managed fallback 25→20 cells. PR #61 does not alter
-    /// the Extend3D/B-clean-extend path that produces the 19-vs-20 result.
+    /// Proven by worktree execution with the identical native DLL
+    /// (docs/reviews/evidence/PR61_FACE3D_BASE.log / PR61_FACE3D_HEAD.log):
+    /// solver raw cells = 20 and A-solver-matched spaces = 19 at BOTH base and head — the
+    /// A-path under-close (19 vs 20, introduced by the E2 plane-targeting change merged at
+    /// base c643b29) is pre-existing, not a PR #61 regression.
     /// </para>
     /// <para>
-    /// Base/head parity proven via independent worktree execution:
-    /// see docs/reviews/PR61_FACE3D_BASE_HEAD.md.
+    /// The B-clean-extend workflow is NOT at parity: base yields 20 spaces, head yields 19.
+    /// The coplanar-cap coalescing pass added in PR #61 under-closes one Face3D-home space
+    /// on the Clean3D → Extend3D → cluster path. Disclosed in the PR body; pinned below so
+    /// any further movement is caught.
     /// </para>
     /// </summary>
     public class PR61Face3DHomeParityTests
@@ -63,8 +66,9 @@ namespace SAM.OCCT.IntegrationTests
         /// Extend3D → Create.AdjacencyCluster with band=0.21.
         /// </para>
         /// <para>
-        /// Proven at base c643b29 (see docs/reviews/PR61_FACE3D_BASE_HEAD.md):
-        /// solver cells=20, A-solver-matched=19. PR #61 does not alter these values.
+        /// Executed at base c643b29 (docs/reviews/evidence/PR61_FACE3D_BASE.log):
+        /// solver cells=20, A-solver-matched=19, B-clean-extend=20. PR #61 keeps solver and
+        /// A-matched identical and moves B-clean-extend to 19 (coplanar-cap coalescing).
         /// </para>
         /// </summary>
         [SkippableFact]
@@ -98,11 +102,17 @@ namespace SAM.OCCT.IntegrationTests
             output.WriteLine("B-clean-extend (band=0.21): spaces={0}", spacesB);
 
             // Pin the solver raw cell count — proven identical at c643b29 base
-            // (see docs/reviews/PR61_FACE3D_BASE_HEAD.md for full evidence).
+            // (docs/reviews/evidence/PR61_FACE3D_BASE.log).
             Assert.Equal(20, solverCells);
 
             // Pin the A-solver-matched under-close — proven pre-existing at c643b29 base.
             Assert.Equal(19, spacesA);
+
+            // Pin the B-clean-extend result. NOT at parity with base: the identical workflow
+            // yields 20 spaces at c643b29 and 19 at PR head — the coplanar-cap coalescing pass
+            // under-closes one Face3D-home space. Disclosed in the PR body; pinned so any
+            // further movement is caught.
+            Assert.Equal(19, spacesB);
 
             output.WriteLine("PR-branch: solver={0} A-matched={1} B-clean-extend={2}",
                 solverCells, spacesA, spacesB);

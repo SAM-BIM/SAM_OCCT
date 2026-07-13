@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LGPL-3.0-or-later
+﻿// SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
 using Grasshopper.Kernel;
@@ -19,117 +19,107 @@ namespace SAM.OCCT.GrasshopperTests
     /// GUIDs, names, access, and persistent defaults via the Grasshopper API.
     /// Uses reflection to access the declared Inputs/Outputs properties, avoiding
     /// the need for a Rhino document context.
+    /// <para>
+    /// These tests never skip: the Grasshopper SDK assembly is resolved from the
+    /// restored NuGet package by <see cref="GrasshopperTestAssembly"/>, so a failure
+    /// to load it is a test FAILURE (loud), not a silent skip.
+    /// </para>
     /// </summary>
     public class GHComponentContractTests
     {
         // ── Legacy AutoTune3D (original GUID 9de8b4c0) ──
 
-        [SkippableFact]
+        [Fact]
         public void AutoTune3D_Legacy_ComponentGuid_IsOriginal()
         {
-            SkipIfNoGrasshopper();
             AssertAutoTune3DLegacy_Guid();
         }
 
-        [SkippableFact]
+        [Fact]
         public void AutoTune3D_Legacy_Version_Is010()
         {
-            SkipIfNoGrasshopper();
             AssertAutoTune3DLegacy_Version();
         }
 
-        [SkippableFact]
+        [Fact]
         public void AutoTune3D_Legacy_DisplayName_IsExpected()
         {
-            SkipIfNoGrasshopper();
             AssertAutoTune3DLegacy_DisplayName();
         }
 
-        [SkippableFact]
+        [Fact]
         public void AutoTune3D_Legacy_Inputs_OrderAndNames()
         {
-            SkipIfNoGrasshopper();
             AssertAutoTune3DLegacy_Inputs();
         }
 
-        [SkippableFact]
+        [Fact]
         public void AutoTune3D_Legacy_InputAccess_IsExpected()
         {
-            SkipIfNoGrasshopper();
             AssertAutoTune3DLegacy_Access();
         }
 
-        [SkippableFact]
+        [Fact]
         public void AutoTune3D_Legacy_InputDefaults_AreExpected()
         {
-            SkipIfNoGrasshopper();
             AssertAutoTune3DLegacy_Defaults();
         }
 
-        [SkippableFact]
+        [Fact]
         public void AutoTune3D_Legacy_Outputs_OrderAndNames()
         {
-            SkipIfNoGrasshopper();
             AssertAutoTune3DLegacy_Outputs();
         }
 
         // ── New AutoTune3D Discover (GUID dce4ce6d) ──
 
-        [SkippableFact]
+        [Fact]
         public void AutoTune3D_Discover_ComponentGuid_IsExpected()
         {
-            SkipIfNoGrasshopper();
             AssertAutoTune3DDiscover_Guid();
         }
 
-        [SkippableFact]
+        [Fact]
         public void AutoTune3D_LegacyAndDiscover_HaveDistinctGuids()
         {
-            SkipIfNoGrasshopper();
             AssertAutoTune3D_DistinctGuids();
         }
 
-        [SkippableFact]
+        [Fact]
         public void AutoTune3D_Discover_HasDiscoveryInputs()
         {
-            SkipIfNoGrasshopper();
             AssertAutoTune3DDiscover_Inputs();
         }
 
         // ── CreateAdjacencyCluster ──
 
-        [SkippableFact]
+        [Fact]
         public void CreateAdjacencyCluster_Guid_IsExpected()
         {
-            SkipIfNoGrasshopper();
             AssertCreateAdjacencyCluster_Guid();
         }
 
-        [SkippableFact]
+        [Fact]
         public void CreateAdjacencyCluster_InputOrder_Keeps_RunAt5()
         {
-            SkipIfNoGrasshopper();
             AssertCreateAdjacencyCluster_RunAt5();
         }
 
-        [SkippableFact]
+        [Fact]
         public void CreateAdjacencyCluster_InputOrder_MergeCoplanarAfterRun()
         {
-            SkipIfNoGrasshopper();
             AssertCreateAdjacencyCluster_MergeAfterRun();
         }
 
-        [SkippableFact]
+        [Fact]
         public void CreateAdjacencyCluster_MergeCoplanar_DefaultIsFalse()
         {
-            SkipIfNoGrasshopper();
             AssertCreateAdjacencyCluster_MergeDefault();
         }
 
-        [SkippableFact]
+        [Fact]
         public void CreateAdjacencyCluster_IsVoluntaryOrVolatile()
         {
-            SkipIfNoGrasshopper();
             AssertCreateAdjacencyCluster_Voluntary();
         }
 
@@ -320,18 +310,6 @@ namespace SAM.OCCT.GrasshopperTests
             Assert.Equal(GH_ParamAccess.list, inputs[0].Param.Access);
             Assert.Equal(GH_ParamAccess.item, inputs[5].Param.Access);
             Assert.Equal(GH_ParamAccess.item, inputs[6].Param.Access);
-        }
-
-        private static void SkipIfNoGrasshopper()
-        {
-            try
-            {
-                var t = typeof(GH_Component);
-            }
-            catch
-            {
-                Skip.If(true, "Grasshopper SDK not available in this test environment.");
-            }
         }
     }
 }
