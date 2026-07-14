@@ -307,6 +307,12 @@ namespace SAM.Geometry.OCCT.Solver
         /// <c>face3Ds.Count</c> with 0 (no per-panel override) when shorter. Works alongside
         /// <see cref="DoubleWallGap"/>: the effective pair gap is <c>max(ConsolidationRange, DoubleWallGap
         /// for walls)</c>. Caps only participate when stamped (non-zero range).
+        /// <para><b>Ranges REFINE the pass; they never ARM it.</b> Consolidation runs only when the explicit
+        /// <see cref="DoubleWallGap"/> is &gt; 0 — with the default gap 0 the ranges are inert. Panels that
+        /// went through <c>Clean3D</c> legitimately carry <c>SolverParameter.BucketSize</c> stamps (the snap
+        /// capture width), so a stamp alone activating the consolidation would silently turn the pass on for
+        /// every <c>Clean3D → Extend3D</c> chain (observed: the Face3D-home B-workflow lost a space at the
+        /// default gap 0).</para>
         /// </summary>
         public List<double> ConsolidationRanges { get; set; }
 
@@ -2316,6 +2322,43 @@ namespace SAM.Geometry.OCCT.Solver
             return false;
         }
 
+        /// <summary>
+        /// True when plan point (<paramref name="px"/>, <paramref name="py"/>) terminates on the foot line
+        /// (<paramref name="ax"/>, <paramref name="ay"/>)-(<paramref name="bx"/>, <paramref name="by"/>):
+        /// within <see cref="STACK_FOLLOW_END_TOLERANCE"/> of the line PERPENDICULAR, and within the segment
+        /// span extended by <see cref="STACK_FOLLOW_END_OVERHANG"/> ALONG it. The two axes are separated
+        /// (unlike a plain distance-to-segment) because they bound different physical slops: perpendicular =
+        /// "the end sits on the moved wall's plane" (tight, sew-scale), along = "the moved wall's face stopped
+        /// slightly short of the corner it forms with this wall" (the import corner-undershoot, up to 0.1 m
+        /// observed at 0.046 m on whole-level-towers). Within the span this matches the old
+        /// distance-to-segment test exactly; beyond the ends it widens only the along-line capture.
+        /// </summary>
+        private static bool TerminatesOnFootLine(double px, double py, double ax, double ay, double bx, double by)
+        {
+            double ex = bx - ax;
+            double ey = by - ay;
+            double lengthSquared = ex * ex + ey * ey;
+            if (lengthSquared <= 1e-18)
+            {
+                double dx = px - ax;
+                double dy = py - ay;
+                return System.Math.Sqrt(dx * dx + dy * dy) <= STACK_FOLLOW_END_TOLERANCE;
+            }
+
+            double length = System.Math.Sqrt(lengthSquared);
+            double ux = ex / length;
+            double uy = ey / length;
+            double along = (px - ax) * ux + (py - ay) * uy;
+            double perpendicular = System.Math.Abs((px - ax) * (-uy) + (py - ay) * ux);
+            if (perpendicular > STACK_FOLLOW_END_TOLERANCE)
+            {
+                return false;
+            }
+
+            double overhang = along < 0 ? -along : (along > length ? along - length : 0);
+            return overhang <= STACK_FOLLOW_END_OVERHANG;
+        }
+
         /// <summary>Shortest distance in the XY plane from point (px, py) to the segment (ax, ay)-(bx, by).</summary>
         private static double PlanDistancePointToSegment(double px, double py, double ax, double ay, double bx, double by)
         {
@@ -2423,7 +2466,11 @@ namespace SAM.Geometry.OCCT.Solver
             double centreX = 0.5 * (wallBox.Min.X + wallBox.Max.X);
             double centreY = 0.5 * (wallBox.Min.Y + wallBox.Max.Y);
 
-            int capIndex = NearestCoveringCap(wallBox, centreX, centreY, capBoxes, capPlanes, toleranceDistance, up, wallExtreme);
+            // Graze caps (plan bbox touches the wall but does not reach over its centre) may only continue
+            // the wall's boundary within the conditioning overshoot scale - never relocate it to another
+            // storey (see NearestCoveringCap).
+            double grazeContinuationBand = System.Math.Max(overshoot, roofOvershoot);
+            int capIndex = NearestCoveringCap(wallBox, centreX, centreY, capBoxes, capPlanes, toleranceDistance, up, wallExtreme, grazeContinuationBand);
             if (capIndex < 0)
             {
                 if (records != null)
@@ -2591,8 +2638,18 @@ namespace SAM.Geometry.OCCT.Solver
         /// is beyond the wall extreme in the grow direction (<paramref name="up"/> = above the wall top; false
         /// = below the base), or -1 if none. Whole-wall plan overlap (the pre-E2 rule), so a slightly-inset cap
         /// is still found; the surface is read from the cap PLANE at the point (sloped roofs evaluate correctly,
-        /// not by bounding-box Z).</summary>
-        private static int NearestCoveringCap(BoundingBox3D wallBox, double x, double y, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double toleranceDistance, bool up, double wallExtreme)
+        /// not by bounding-box Z).
+        /// <para>A cap whose plan footprint does NOT contain the sample point (a bbox-edge GRAZE - the plane
+        /// value at the point is extrapolation beyond the cap's physical extent) may only CONTINUE the wall's
+        /// existing boundary: its surface must lie within <paramref name="grazeContinuationBand"/> of the wall
+        /// extreme. Near-graze caps are load-bearing (a coplanar neighbour tile whose edge meets the wall line
+        /// supplies the target for walls over untiled strips - whole-level-flat's corridor walls extend their
+        /// 0.05 m overshoot from exactly such caps), but a FAR graze relocates the wall to another storey: on
+        /// whole-level-towers at doubleWallGap 0.5, podium walls carried onto the tower face plane touch the
+        /// tower's stepped floor plates by ~40-50 mm in plan and were extended 2.9-12.1 m past their own
+        /// ceiling (z 15.47 -&gt; 18.39 / 27.54) toward plates whose surfaces they never lie under. A cap that
+        /// CONTAINS the sample point is trusted at any distance (the pre-existing rule).</para></summary>
+        private static int NearestCoveringCap(BoundingBox3D wallBox, double x, double y, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double toleranceDistance, bool up, double wallExtreme, double grazeContinuationBand)
         {
             int best = -1;
             double bestZ = up ? double.MaxValue : double.MinValue;
@@ -2604,6 +2661,13 @@ namespace SAM.Geometry.OCCT.Solver
                 }
 
                 double capZ = CapZAtPlan(capPlanes[i], x, y, up ? capBoxes[i].Max.Z : capBoxes[i].Min.Z);
+
+                bool containsSample = x >= capBoxes[i].Min.X - toleranceDistance && x <= capBoxes[i].Max.X + toleranceDistance
+                    && y >= capBoxes[i].Min.Y - toleranceDistance && y <= capBoxes[i].Max.Y + toleranceDistance;
+                if (!containsSample && System.Math.Abs(capZ - wallExtreme) > grazeContinuationBand)
+                {
+                    continue; // graze cap beyond the continuation band - another storey's surface, not this wall's boundary
+                }
                 if (up ? capZ < wallExtreme - toleranceDistance : capZ > wallExtreme + toleranceDistance)
                 {
                     continue; // the cap surface here is beyond the wall extreme on the WRONG side - not a cap
@@ -3252,8 +3316,12 @@ namespace SAM.Geometry.OCCT.Solver
             SolverDiagnostics diagnostics = null,
             List<CleanRecord> records = null)
         {
-            bool anyRange = panels != null && panels.Any(x => x?.ConsolidationRange > toleranceDistance);
-            if ((doubleWallGap <= toleranceDistance && !anyRange) || panels == null)
+            // Explicit opt-in only: the global doubleWallGap is the sole ARM switch. Stamped per-panel
+            // ranges refine the reach of an armed pass (EffRange below) but never activate it - panels
+            // from Clean3D legitimately carry BucketSize stamps, and letting a stamp arm the pass turned
+            // consolidation on for every Clean3D -> Extend3D chain at the default gap 0 (the Face3D-home
+            // B-workflow regression, 20 -> 19 spaces).
+            if (doubleWallGap <= toleranceDistance || panels == null)
             {
                 return 0;
             }
@@ -3459,6 +3527,19 @@ namespace SAM.Geometry.OCCT.Solver
         public const double STACK_FOLLOW_END_TOLERANCE = 0.02;
 
         /// <summary>
+        /// How far (metres) BEYOND the moved wall's own foot end - measured ALONG the foot line - an
+        /// abutting perpendicular wall's end may sit and still count as the same corner junction. Real
+        /// imports leave a wall's face slightly short of the corner it turns at (observed 0.046 m on
+        /// whole-level-towers: the north-strip west wall's foot stops 46 mm south of the room's north
+        /// wall); the plan-loop closes that corner whenever the wall has NOT moved, so the follow drag
+        /// must accept the same undershoot when it has. The end must still lie on the moved wall's foot
+        /// LINE within <see cref="STACK_FOLLOW_END_TOLERANCE"/> perpendicular - this constant relaxes
+        /// only the along-line span, and stays far below any real junction spacing along one wall line,
+        /// so an end belonging to a DIFFERENT junction is never grabbed.
+        /// </summary>
+        public const double STACK_FOLLOW_END_OVERHANG = 0.1;
+
+        /// <summary>
         /// After <see cref="ConsolidateWallStacks"/> moved <paramref name="movedWall"/> off
         /// <paramref name="oldPlane"/>: every other (non-parallel) wall whose plan foot END terminated on the
         /// old plane - within <see cref="STACK_FOLLOW_END_TOLERANCE"/> of the old foot segment, storeys
@@ -3653,9 +3734,11 @@ namespace SAM.Geometry.OCCT.Solver
             return best;
         }
 
-        /// <summary>The dragged position for one plan end: when <paramref name="end"/> lies on the moved
-        /// wall's OLD foot segment (within <see cref="STACK_FOLLOW_END_TOLERANCE"/>), its projection onto the
-        /// NEW plane in plan; null when the end did not belong to the old wall.</summary>
+        /// <summary>The dragged position for one plan end: when <paramref name="end"/> terminates on the
+        /// moved wall's OLD foot line (within <see cref="STACK_FOLLOW_END_TOLERANCE"/> perpendicular, and
+        /// within the foot span extended by <see cref="STACK_FOLLOW_END_OVERHANG"/> along the line - the
+        /// corner-undershoot allowance), its projection onto the NEW plane in plan; null when the end did
+        /// not belong to the old wall.</summary>
         private static Geometry.Planar.Point2D DraggedEnd(
             Geometry.Planar.Point2D end,
             Geometry.Planar.Point2D oldFootStart,
@@ -3663,8 +3746,7 @@ namespace SAM.Geometry.OCCT.Solver
             Plane newPlane,
             double z)
         {
-            double toOldFoot = PlanDistancePointToSegment(end.X, end.Y, oldFootStart.X, oldFootStart.Y, oldFootEnd.X, oldFootEnd.Y);
-            if (toOldFoot > STACK_FOLLOW_END_TOLERANCE)
+            if (!TerminatesOnFootLine(end.X, end.Y, oldFootStart.X, oldFootStart.Y, oldFootEnd.X, oldFootEnd.Y))
             {
                 return null;
             }

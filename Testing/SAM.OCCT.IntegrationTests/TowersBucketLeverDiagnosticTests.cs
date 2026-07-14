@@ -957,11 +957,13 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         // ---------------------------------------------------------------------------------------
-        // H. Stamped BucketSize on one N-S wall makes it participate in consolidation even
-        //    with global doubleWallGap=0.
+        // H. Stamped BucketSize on one N-S wall widens ITS consolidation reach once the pass is
+        //    armed by an explicit doubleWallGap > 0. The stamp alone must never arm the pass
+        //    (Clean3D outputs carry BucketSize stamps — see Towers_NorthStripPair_StampedBucket_
+        //    InertWithGlobalOff below and the Face3D-home B-workflow regression).
         // ---------------------------------------------------------------------------------------
         [SkippableFact]
-        public void Towers_NorthStripPair_StampedBucket_MergesWithGlobalOff()
+        public void Towers_NorthStripPair_StampedBucket_MergesWhenArmed()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
 
@@ -985,8 +987,9 @@ namespace SAM.OCCT.IntegrationTests
             stripWall.SetValue(SolverParameter.BucketSize, 0.5);
             output.WriteLine("Stamped BucketSize=0.5 on strip west wall.");
 
-            // Run with gap=0, stamped panel.
-            var run = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.0, fillMargin: 0.4);
+            // Run with a 0.01 arm gap (far below the 0.474 m pair separation — the stamp supplies
+            // the reach; the global gap only switches the pass on).
+            var run = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.01, fillMargin: 0.4);
 
             // _INPUT_OVERRIDDEN diagnostic.
             bool inputOverridden = run.ExtendDiagnostics.Any(d =>
@@ -1018,6 +1021,38 @@ namespace SAM.OCCT.IntegrationTests
 
             Assert.True(inputOverridden, "Stamped run must emit _INPUT_OVERRIDDEN diagnostic.");
             Assert.True(stackConsolidated, "Stamped run must emit stack-consolidated diagnostic.");
+
+            run.Dispose();
+        }
+
+        // ---------------------------------------------------------------------------------------
+        // H2. Root-cause-A regression pin: a stamped BucketSize must NOT arm consolidation when
+        //     the explicit doubleWallGap is 0. Clean3D outputs carry BucketSize stamps, so the old
+        //     stamp-arming behaviour silently consolidated every Clean3D → Extend3D chain at the
+        //     default gap (the Face3D-home B-workflow 20 → 19 space regression).
+        // ---------------------------------------------------------------------------------------
+        [SkippableFact]
+        public void Towers_NorthStripPair_StampedBucket_InertWithGlobalOff()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            var panels = LoadPanels(Path.Combine(FixturesDirectory, "whole-level-towers.sam"));
+            Assert.NotEmpty(panels);
+
+            Panel stripWall = FindNSPanelAt(panels, targetX: +0.1289);
+            Assert.NotNull(stripWall);
+            stripWall.SetValue(SolverParameter.BucketSize, 0.5);
+
+            // Run with the DEFAULT gap 0: the stamp must not activate the pass.
+            var run = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.0, fillMargin: 0.4);
+
+            bool stackConsolidated = run.ExtendDiagnostics.Any(d =>
+                d.Contains("stack-consolidated", StringComparison.OrdinalIgnoreCase)
+                || d.Contains("ConsolidatedStack", StringComparison.OrdinalIgnoreCase));
+            output.WriteLine("stack-consolidated at gap 0 with stamp: {0}", stackConsolidated);
+
+            Assert.False(stackConsolidated,
+                "doubleWallGap=0 must mean consolidation OFF — a legacy BucketSize stamp must not arm it.");
 
             run.Dispose();
         }

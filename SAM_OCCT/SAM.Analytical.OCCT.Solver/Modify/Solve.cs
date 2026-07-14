@@ -962,6 +962,10 @@ namespace SAM.Analytical.OCCT.Solver
         /// as that panel's consolidation range when set, else 0 (the global <c>doubleWallGap</c>
         /// applies for unstamped walls; caps only participate when stamped).
         /// Index-aligned to <paramref name="sources"/>.
+        /// <para>Ranges refine an ARMED consolidation pass only — with the default
+        /// <c>doubleWallGap = 0</c> the solver never consolidates, whatever is stamped. Clean3D outputs
+        /// legitimately carry <see cref="SolverParameter.BucketSize"/> (the snap capture width), so a
+        /// stamp must never double as the on-switch (the Face3D-home B-workflow regression).</para>
         /// </summary>
         internal static List<double> ResolveConsolidationRanges(List<Panel> sources)
         {

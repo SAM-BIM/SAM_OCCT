@@ -33,12 +33,18 @@ namespace SAM.OCCT.IntegrationTests
     /// +7.427 m³ block-room 22 — the growth that joins it to tower 26). Room topology is preserved.
     /// </para>
     /// <para>
-    /// Gap 0.5 (over-aggressive): consolidating the 0.474 m north-strip wall pair leaves the
-    /// west north-strip room (78.049 m³, 28.809 m² floor — 26× the sliver threshold) unclosed;
-    /// it drops out of the cell complex entirely while its sibling survives with unchanged
-    /// volume (destroyed, not merged), and raising fillMargin to 0.5 does not rescue it
-    /// (Towers_DoubleWallGap_FillMargin_DefectDiagnostic). Net −67.640 m³
-    /// (−78.049 lost room + 10.408 unrelated southeast consolidation growth).
+    /// Gap 0.5 (fixed — towers gap-0.5 root-cause fix, this PR): consolidating the 0.474 m
+    /// north-strip wall pair now keeps the west north-strip room closed. The pre-fix loss was
+    /// never the gap being "over-aggressive": (1) the room's north wall (y=-2.260) terminated
+    /// 46 mm beyond the moved wall's foot end, so the junction drag missed it
+    /// (STACK_FOLLOW_END_TOLERANCE segment test) and the Z-ignorant plan loop then parked its
+    /// west end on an upper-storey tower face line 0.30 m short of the new plane — an open NW
+    /// corner; (2) the room's side walls, once carried onto the tower face plane, bbox-grazed
+    /// the tower's stepped floor plates by ~40-50 mm and were extended one to four storeys up
+    /// (z 15.47 → 18.39 / 27.54). Fixed by the foot-line overhang allowance in
+    /// DragAbuttingWallEnds and the graze-continuation band in NearestCoveringCap. Result:
+    /// same 30-cell topology as gap 0.4, the west room grows by the reclaimed 0.474 m void,
+    /// and the southeast room reclaims its double-wall void (+10.408 m³) exactly as at 0.4.
     /// </para>
     /// <para>
     /// Fixture: whole-level-towers.sam. Values captured by actual execution — see
@@ -87,10 +93,10 @@ namespace SAM.OCCT.IntegrationTests
         private const double AbsTol = 0.05;
         private const double Volume0 = 9605.396;
         private const double Volume04 = 9620.406;
-        private const double Volume05 = 9552.766;
+        private const double Volume05 = 9641.151;
         private const double CellFloorArea0 = 3160.075;
         private const double CellFloorArea04 = 3168.220;
-        private const double CellFloorArea05 = 3142.820;
+        private const double CellFloorArea05 = 3171.799;
         private const double PanelFloorArea0 = 1336.727;
         private const double PanelFloorArea04 = 1335.811;
         private const double PanelFloorArea05 = 1330.101;
@@ -402,10 +408,10 @@ namespace SAM.OCCT.IntegrationTests
             }
         }
 
-        // ── Gap 0.5 (over-aggressive: north-strip west room destroyed) ──
+        // ── Gap 0.5 (fixed: same 30-cell topology as 0.4, west room keeps closure and grows) ──
 
         [SkippableFact]
-        public void Towers_Gap05_OverAggressive_QuantitativeValidation()
+        public void Towers_Gap05_Fixed_QuantitativeValidation()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
 
@@ -432,7 +438,7 @@ namespace SAM.OCCT.IntegrationTests
                 int i26 = NearestCellIndex(run05.Cells, Cell26X, Cell26Y, Cell26Z);
                 bool adjacency05 = CellsShareFace(run05, i22, i26);
 
-                output.WriteLine("GAP=0.5 (over-aggressive):");
+                output.WriteLine("GAP=0.5 (fixed):");
                 output.WriteLine("  cells: {0} → {1}", cells0, cells05);
                 output.WriteLine("  total volume: {0:F3} → {1:F3} m³ (drift {2:+0.####;-0.####}%)", vol0, vol05, volDrift);
                 output.WriteLine("  cell floor area: {0:F3} → {1:F3} m²", cellArea0, cellArea05);
@@ -445,34 +451,51 @@ namespace SAM.OCCT.IntegrationTests
                 output.WriteLine("  22↔26 adjacency: {0}", adjacency05);
 
                 // Exact deterministic assertions (verified by actual execution).
-                Assert.Equal(29, cells05);
+                // 30 cells — the SAME topology as gap 0.4 (31 base − 2 slivers + north-strip split):
+                // no legitimate room is lost by the wider gap.
+                Assert.Equal(30, cells05);
                 Assert.InRange(vol05, Volume05 - AbsTol, Volume05 + AbsTol);
                 Assert.InRange(cellArea05, CellFloorArea05 - AbsTol, CellFloorArea05 + AbsTol);
                 Assert.InRange(panelArea05, PanelFloorArea05 - AbsTol, PanelFloorArea05 + AbsTol);
                 Assert.Equal(0, slivers05);
                 Assert.True(adjacency05, "Gap 0.5: cells 22 and 26 must share a face.");
 
-                // Gap 0.5 is OVER-AGGRESSIVE: volume drifts −0.548% vs baseline and the
-                // level-datum floor area drops −0.496% (vs −0.069% at gap 0.4) — a legitimate
-                // room's floor is gone, not an artifact's.
-                Assert.InRange(volDrift, -0.60, -0.45);
+                // Volume drifts +0.372% vs baseline — the reclaimed double-wall voids (the two 0.4
+                // reclaims plus the 0.474 m north-strip void and the southeast void). The level-datum
+                // panel floor area drop (−0.496%) is the consolidation-side cap accounting, identical
+                // to the pre-fix run — cell-derived floor area (the produced geometry) rises.
+                Assert.InRange(volDrift, 0.32, 0.42);
                 Assert.InRange(panelAreaDrift, -0.60, -0.40);
 
-                // The destroyed geometry: the west north-strip room (78.049 m³ — 26× the sliver
-                // threshold, a legitimate room) exists at gap 0.4 but has NO successor at gap 0.5,
-                // while its pair sibling survives with unchanged volume. The room is destroyed
-                // (left unclosed by the 0.474 m wall-pair consolidation; fillMargin=0.5 does not
-                // rescue it), not merged into the sibling.
+                // Affected-cell audit vs baseline: exactly the SAME removals as gap 0.4 — the two
+                // sub-threshold slivers and the volume-preservingly split north-strip parent.
+                Assert.Equal(3, removed.Count);
+                foreach (var c in removed)
+                {
+                    bool isSliver = c.Volume < SliverVolumeThreshold;
+                    bool isSplitParent = Dist(c, NorthStripParentX, NorthStripParentY, NorthStripZ) < 0.3;
+                    Assert.True(isSliver || isSplitParent,
+                        string.Format("Gap 0.5 removed an unexplained cell: vol={0:F3} at ({1:F3},{2:F3},{3:F3}).",
+                            c.Volume, c.Center?.X ?? double.NaN, c.Center?.Y ?? double.NaN, c.Center?.Z ?? double.NaN));
+                }
+
+                // The west north-strip room SURVIVES the 0.474 m pair consolidation and grows by the
+                // reclaimed void (its west wall moves 0.474 m onto the tower face plane); the east
+                // sibling is untouched.
                 using (var run04 = RunTowersChain(0.4))
                 {
                     var west04 = FindCell(run04, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
                     Assert.NotNull(west04);
                     Assert.InRange(west04.Volume, NorthStripWestVolume - AbsTol, NorthStripWestVolume + AbsTol);
-                    Assert.True(west04.Volume > 25 * SliverVolumeThreshold,
-                        "The gap-0.5 casualty must be a legitimate room, far above the sliver threshold.");
 
-                    var west05 = FindCell(run05, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
-                    Assert.Null(west05);
+                    var west05 = FindCell(run05, NorthStripWestX - 0.237, NorthStripWestY, NorthStripZ, 0.45);
+                    output.WriteLine("  west04={0:F3} m³  west05={1:F3} m³ center05=({2:F4},{3:F4})",
+                        west04.Volume, west05?.Volume ?? double.NaN,
+                        west05?.Center?.X ?? double.NaN, west05?.Center?.Y ?? double.NaN);
+                    Assert.NotNull(west05);
+                    Assert.InRange(west05.Volume, NorthStripWestVolume05 - AbsTol, NorthStripWestVolume05 + AbsTol);
+                    Assert.True(west05.Volume > west04.Volume + 5.0,
+                        "Gap 0.5: the west room must GROW by the reclaimed 0.474 m void, not shrink or vanish.");
 
                     var east04 = FindCell(run04, NorthStripEastX, NorthStripEastY, NorthStripZ, 0.3);
                     var east05 = FindCell(run05, NorthStripEastX, NorthStripEastY, NorthStripZ, 0.3);
@@ -483,7 +506,7 @@ namespace SAM.OCCT.IntegrationTests
             }
         }
 
-        // ── Cross-gap comparison (0.4 vs 0.5): 0.5 destroys one legitimate room ──
+        // ── Cross-gap comparison (0.4 vs 0.5): identical topology, two more voids reclaimed ──
 
         [SkippableFact]
         public void Towers_Gap04Vs05_QuantitativeDelta()
@@ -520,29 +543,35 @@ namespace SAM.OCCT.IntegrationTests
                 Assert.Equal(0, run04.Cells.Count(c => c.Volume > 0 && c.Volume < SliverVolumeThreshold));
                 Assert.Equal(0, run05.Cells.Count(c => c.Volume > 0 && c.Volume < SliverVolumeThreshold));
 
-                // Exact assertions: 30 at gap 0.4, 29 at gap 0.5 — exactly one cell lost.
+                // Exact assertions: 30 at BOTH gaps — the wider gap consolidates two more wall
+                // pairs (the 0.474 m north-strip pair and the southeast pair) without destroying
+                // or merging any room (towers gap-0.5 root-cause fix, this PR).
                 Assert.Equal(30, cells04);
-                Assert.Equal(29, cells05);
+                Assert.Equal(30, cells05);
+                Assert.Empty(removed);
 
-                // The −67.640 m³ delta is fully attributed: −78.049 (west north-strip room
-                // destroyed) + 10.408 (unrelated southeast consolidation growth).
-                Assert.InRange(volDelta, -67.640 - AbsTol, -67.640 + AbsTol);
+                // The +20.745 m³ delta is fully attributed to the two additionally reclaimed
+                // double-wall voids: the west north-strip room grows +10.337 (its west wall moves
+                // 0.474 m onto the tower face plane) and the southeast room grows +10.408.
+                Assert.InRange(volDelta, 20.745 - AbsTol, 20.745 + AbsTol);
 
-                Assert.Single(removed);
-                var casualty = removed[0];
-                Assert.InRange(casualty.Volume, NorthStripWestVolume - AbsTol, NorthStripWestVolume + AbsTol);
-                Assert.True(Dist(casualty, NorthStripWestX, NorthStripWestY, NorthStripZ) < 0.3,
-                    "The gap-0.5 casualty must be the west north-strip room.");
+                var west04 = FindCell(run04, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
+                var west05 = FindCell(run05, NorthStripWestX - 0.237, NorthStripWestY, NorthStripZ, 0.45);
+                Assert.NotNull(west04);
+                Assert.NotNull(west05);
+                double westGrowth = west05.Volume - west04.Volume;
+                output.WriteLine("  west room: {0:F3} → {1:F3} m³ (+{2:F3})", west04.Volume, west05.Volume, westGrowth);
 
                 var southeast04 = FindCell(run04, 42.5574, -22.5386, 13.765, 0.3);
                 var southeast05 = FindCell(run05, 42.7708, -22.5386, 13.765, 0.3);
                 Assert.NotNull(southeast04);
                 Assert.NotNull(southeast05);
-                Assert.InRange(southeast05.Volume - southeast04.Volume, 10.408 - AbsTol, 10.408 + AbsTol);
+                double southeastGrowth = southeast05.Volume - southeast04.Volume;
+                output.WriteLine("  southeast room: {0:F3} → {1:F3} m³ (+{2:F3})", southeast04.Volume, southeast05.Volume, southeastGrowth);
+                Assert.InRange(southeastGrowth, 10.408 - AbsTol, 10.408 + AbsTol);
 
-                // Attribution completeness: casualty + southeast growth ≈ the whole delta.
-                Assert.InRange(-casualty.Volume + (southeast05.Volume - southeast04.Volume),
-                    volDelta - AbsTol, volDelta + AbsTol);
+                // Attribution completeness: west growth + southeast growth ≈ the whole delta.
+                Assert.InRange(westGrowth + southeastGrowth, volDelta - 2 * AbsTol, volDelta + 2 * AbsTol);
             }
         }
     }

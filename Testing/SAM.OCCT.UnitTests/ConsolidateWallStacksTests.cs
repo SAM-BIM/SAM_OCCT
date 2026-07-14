@@ -330,15 +330,35 @@ namespace SAM.OCCT.UnitTests
         // ──────────────────────────────────────────────────────────────
 
         [Fact]
-        public void ConsolidateWallStacks_StampedRange_PairMergesWithGlobalOff()
+        public void ConsolidateWallStacks_StampedRange_GlobalZero_Inert()
         {
-            // Arrange: two walls 0.345 m apart, global doubleWallGap=0, but one wall stamped range=0.4.
+            // Arrange: two walls 0.345 m apart, one stamped range=0.4 — but the global gap is 0.
+            // The explicit doubleWallGap is the ONLY arm switch: Clean3D outputs legitimately carry
+            // BucketSize stamps, so a stamp must never activate the pass on its own (the Face3D-home
+            // B-workflow regression: Clean3D → Extend3D consolidated at the default gap 0).
             SnappedPanel dominant = Wall(0.000, x0: 0, x1: 8);
             SnappedPanel smaller = Wall(0.345, x0: 0, x1: 6, flip: true, range: 0.4);
             List<SnappedPanel> panels = new List<SnappedPanel> { dominant, smaller };
 
-            // Act: global gap=0, but smaller has range=0.4 → merge should happen.
+            // Act: global gap=0 → the pass must be inert regardless of stamps.
             int moved = Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.0, Angle, Distance, VerticalAngle);
+
+            // Assert
+            Assert.Equal(0, moved);
+            Assert.Equal(0.345, smaller.PerpendicularSeparation(dominant), 3);
+        }
+
+        [Fact]
+        public void ConsolidateWallStacks_StampedRange_PairMergesWhenArmed()
+        {
+            // Arrange: two walls 0.345 m apart; the global gap (0.01) arms the pass but is far too
+            // small to merge the pair on its own — the stamped range=0.4 provides the per-panel reach.
+            SnappedPanel dominant = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel smaller = Wall(0.345, x0: 0, x1: 6, flip: true, range: 0.4);
+            List<SnappedPanel> panels = new List<SnappedPanel> { dominant, smaller };
+
+            // Act: armed by the explicit gap, reach supplied by the stamp → merge happens.
+            int moved = Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.01, Angle, Distance, VerticalAngle);
 
             // Assert
             Assert.Equal(1, moved);
@@ -348,13 +368,13 @@ namespace SAM.OCCT.UnitTests
         [Fact]
         public void ConsolidateWallStacks_StampedRange_OneSidedOnDominant_Merges()
         {
-            // Arrange: dominant has range=0.4, smaller unstamped, global=0. One side suffices.
+            // Arrange: dominant has range=0.4, smaller unstamped, global=0.01 (armed only). One side suffices.
             SnappedPanel dominant = Wall(0.000, x0: 0, x1: 8, range: 0.4);
             SnappedPanel smaller = Wall(0.345, x0: 0, x1: 6, flip: true);
             List<SnappedPanel> panels = new List<SnappedPanel> { dominant, smaller };
 
             // Act
-            int moved = Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.0, Angle, Distance, VerticalAngle);
+            int moved = Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.01, Angle, Distance, VerticalAngle);
 
             // Assert
             Assert.Equal(1, moved);
@@ -365,13 +385,13 @@ namespace SAM.OCCT.UnitTests
         public void ConsolidateWallStacks_StampedRange_TravelCapMaxOfPair()
         {
             // Arrange: dominant range=0.2, smaller range=0.4, separation=0.345. Travel cap = max(0.2, 0.4) = 0.4.
-            // Smaller moves 0.345 ≤ 0.4. Merge succeeds.
+            // Smaller moves 0.345 ≤ 0.4. Merge succeeds. Global 0.01 arms the pass only.
             SnappedPanel dominant = Wall(0.000, x0: 0, x1: 8, range: 0.2);
             SnappedPanel smaller = Wall(0.345, x0: 0, x1: 6, flip: true, range: 0.4);
             List<SnappedPanel> panels = new List<SnappedPanel> { dominant, smaller };
 
             // Act
-            int moved = Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.0, Angle, Distance, VerticalAngle);
+            int moved = Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.01, Angle, Distance, VerticalAngle);
 
             // Assert: travel cap=0.4, separation=0.345 ≤ 0.4 → merge.
             Assert.Equal(1, moved);
@@ -381,13 +401,13 @@ namespace SAM.OCCT.UnitTests
         [Fact]
         public void ConsolidateWallStacks_StampedRange_TravelCapBlocksDistantWall()
         {
-            // Arrange: both range=0.2, separation=0.345 > 0.2. Travel cap=0.2 blocks the move.
+            // Arrange: dominant range=0.2, smaller unstamped, separation=0.345 > 0.2 (armed by global 0.01).
             SnappedPanel dominant = Wall(0.000, x0: 0, x1: 8, range: 0.2);
             SnappedPanel smaller = Wall(0.345, x0: 0, x1: 6, flip: true);
             List<SnappedPanel> panels = new List<SnappedPanel> { dominant, smaller };
 
             // Act
-            int moved = Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.0, Angle, Distance, VerticalAngle);
+            int moved = Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.01, Angle, Distance, VerticalAngle);
 
             // Assert: distance 0.345 > travel cap 0.2 → no move.
             Assert.Equal(0, moved);
@@ -396,36 +416,36 @@ namespace SAM.OCCT.UnitTests
         [Fact]
         public void ConsolidateWallStacks_StampedCap_MergesAsMember()
         {
-            // Arrange: stamped cap (range=0.4) alongside two unstamped walls 0.345 m apart.
-            // The cap participates via its stamp, but unstamped walls with global=0 do NOT
-            // consolidate (the cap's range does not enable wall-wall merges).
+            // Arrange: stamped cap (range=0.4) alongside two unstamped walls 0.345 m apart, armed by a
+            // 0.01 global gap. The cap participates via its stamp, but the unstamped wall pair's
+            // EffRange is only the 0.01 arm value — far below the 0.345 separation, so no wall-wall merge
+            // (the cap's range does not enable wall-wall merges).
             SnappedPanel dominant = Wall(0.000, x0: 0, x1: 8);
             SnappedPanel smaller = Wall(0.345, x0: 0, x1: 6, flip: true);
             SnappedPanel cap = Floor(0, xMin: -1, xMax: 7, yMin: 0.345, yMax: 6, range: 0.4);
             List<SnappedPanel> panels = new List<SnappedPanel> { dominant, smaller, cap };
 
-            // Act: global=0, cap has range but walls are unstamped.
-            int moved = Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.0, Angle, Distance, VerticalAngle);
+            // Act: armed, cap has range but walls are unstamped.
+            int moved = Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.01, Angle, Distance, VerticalAngle);
 
-            // Assert: wall-wall pair has EffRange=0 (unstamped, global=0) → pairGap=0 → no merge.
-            // The cap's range is for cap-wall consolidation, not wall-wall.
+            // Assert: wall-wall pair gap 0.01 < 0.345 separation → no merge.
             Assert.Equal(0, moved);
         }
 
         [Fact]
         public void ConsolidateWallStacks_UnstampedCap_NotIncluded()
         {
-            // Arrange: unstamped cap should not participate — walls-only consolidation.
+            // Arrange: unstamped cap should not participate — walls-only consolidation (armed by 0.01).
             SnappedPanel dominant = Wall(0.000, x0: 0, x1: 8);
             SnappedPanel smaller = Wall(0.345, x0: 0, x1: 6, flip: true);
             SnappedPanel cap = Floor(0, xMin: -1, xMax: 7, yMin: 0.345, yMax: 6, range: 0); // unstamped
             List<SnappedPanel> panels = new List<SnappedPanel> { dominant, smaller, cap };
             double capAreaBefore = cap.GetArea();
 
-            // Act: global=0, unstamped cap → walls-only merge. No cap-drag (no wall moves since global=0 and no stamp).
-            int moved = Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.0, Angle, Distance, VerticalAngle);
+            // Act: armed but reach 0.01 → walls stay put; unstamped cap never participates.
+            int moved = Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.01, Angle, Distance, VerticalAngle);
 
-            // Assert: nothing moves (global=0, cap unstamped → no activity).
+            // Assert: nothing moves.
             Assert.Equal(0, moved);
             Assert.Equal(capAreaBefore, cap.GetArea(), 3);
         }
@@ -512,20 +532,38 @@ namespace SAM.OCCT.UnitTests
         }
 
         // ──────────────────────────────────────────────────────────────
-        // SnapStage.Clean activates on ranges with gap 0 — Phase 2
+        // SnapStage.Clean: the explicit gap is the only arm switch
         // ──────────────────────────────────────────────────────────────
 
         [Fact]
-        public void Clean_StampedRange_GapZero_ActivatesConsolidation()
+        public void Clean_StampedRange_GapZero_StaysInert()
         {
             // Arrange: two walls 0.345 m apart, each with range=0.4, global doubleWallGap=0.
-            // SnapStage.Clean must activate consolidation because panels carry ranges > ToleranceDistance.
+            // Stamped ranges must NOT arm the consolidation on their own: Clean3D outputs carry
+            // BucketSize stamps, so range-arming silently consolidated every Clean3D → Extend3D
+            // chain at the default gap 0 (the Face3D-home B-workflow regression, 20 → 19 spaces).
             SnappedPanel a = Wall(0.000, x0: 0, x1: 8, range: 0.4);
             SnappedPanel b = Wall(0.345, x0: 0, x1: 6, flip: true, range: 0.4);
             List<SnappedPanel> panels = new List<SnappedPanel> { a, b };
 
-            // Act: global doubleWallGap=0 but both stamped→consolidation activates.
+            // Act: global doubleWallGap=0 → consolidation OFF regardless of stamps.
             SnapStage.Result result = SnapStage.Clean(panels, new ToleranceBudget(), 0.0, 0.0, doubleWallGap: 0.0);
+
+            // Assert: both wall planes survive (0.345 m apart — beyond the void guard, no snap merge).
+            Assert.Equal(2, result.CleanFace3Ds.Count);
+        }
+
+        [Fact]
+        public void Clean_StampedRange_ArmedSmallGap_ActivatesConsolidation()
+        {
+            // Arrange: the same pair; the explicit gap 0.01 arms the pass (far too small to merge the
+            // pair on its own) and the stamped range=0.4 supplies the per-panel reach.
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8, range: 0.4);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 6, flip: true, range: 0.4);
+            List<SnappedPanel> panels = new List<SnappedPanel> { a, b };
+
+            // Act
+            SnapStage.Result result = SnapStage.Clean(panels, new ToleranceBudget(), 0.0, 0.0, doubleWallGap: 0.01);
 
             // Assert: consolidation ran → walls merged to one plane.
             Assert.Single(result.CleanFace3Ds);

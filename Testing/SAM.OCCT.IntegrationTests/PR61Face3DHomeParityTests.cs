@@ -27,10 +27,13 @@ namespace SAM.OCCT.IntegrationTests
     /// base c643b29) is pre-existing, not a PR #61 regression.
     /// </para>
     /// <para>
-    /// The B-clean-extend workflow is NOT at parity: base yields 20 spaces, head yields 19.
-    /// The coplanar-cap coalescing pass added in PR #61 under-closes one Face3D-home space
-    /// on the Clean3D → Extend3D → cluster path. Disclosed in the PR body; pinned below so
-    /// any further movement is caught.
+    /// The B-clean-extend workflow is at parity again: base = 20 spaces, head = 20. The interim
+    /// 19-space regression (Sol review) was root-caused to IMPLICIT consolidation: Clean3D
+    /// outputs carry <c>SolverParameter.BucketSize</c> stamps, <c>ResolveConsolidationRanges</c>
+    /// read them as per-panel consolidation ranges, and a stamped range ARMED
+    /// <c>ConsolidateWallStacks</c> even at the default <c>doubleWallGap = 0</c>. The fix makes
+    /// the explicit gap the only arm switch (stamps refine an armed pass, never activate it),
+    /// restoring the legacy default behaviour end-to-end.
     /// </para>
     /// </summary>
     public class PR61Face3DHomeParityTests
@@ -68,7 +71,9 @@ namespace SAM.OCCT.IntegrationTests
         /// <para>
         /// Executed at base c643b29 (docs/reviews/evidence/PR61_FACE3D_BASE.log):
         /// solver cells=20, A-solver-matched=19, B-clean-extend=20. PR #61 keeps solver and
-        /// A-matched identical and moves B-clean-extend to 19 (coplanar-cap coalescing).
+        /// A-matched identical; B-clean-extend is back at 20 after the explicit-arm
+        /// consolidation fix (the interim 19 was legacy BucketSize stamps arming
+        /// ConsolidateWallStacks at doubleWallGap=0).
         /// </para>
         /// </summary>
         [SkippableFact]
@@ -108,11 +113,11 @@ namespace SAM.OCCT.IntegrationTests
             // Pin the A-solver-matched under-close — proven pre-existing at c643b29 base.
             Assert.Equal(19, spacesA);
 
-            // Pin the B-clean-extend result. NOT at parity with base: the identical workflow
-            // yields 20 spaces at c643b29 and 19 at PR head — the coplanar-cap coalescing pass
-            // under-closes one Face3D-home space. Disclosed in the PR body; pinned so any
-            // further movement is caught.
-            Assert.Equal(19, spacesB);
+            // Pin the B-clean-extend result AT PARITY with base (20 = 20). The interim 19 was
+            // the implicit-consolidation regression (legacy BucketSize stamps arming
+            // ConsolidateWallStacks at doubleWallGap=0); with the explicit-arm fix the default
+            // workflow is restored. Pinned so any further movement is caught.
+            Assert.Equal(20, spacesB);
 
             output.WriteLine("PR-branch: solver={0} A-matched={1} B-clean-extend={2}",
                 solverCells, spacesA, spacesB);
