@@ -75,8 +75,9 @@ namespace SAM.OCCT.IntegrationTests
         private const double Cell26Y = -13.0;
         private const double Cell26Z = 13.765;
 
-        // North-strip pair (created at gap 0.4 by the volume-preserving split; the west member
-        // is destroyed at gap 0.5).
+        // North-strip pair (created at gap 0.4 by the volume-preserving split). At gap 0.5 the west
+        // member SURVIVES the 0.474 m pair consolidation and grows by the reclaimed void; its
+        // centroid shifts west by ~0.237 m (half the reclaimed 0.474 m strip).
         private const double NorthStripParentX = 3.7398;
         private const double NorthStripParentY = -5.8367;
         private const double NorthStripWestX = 1.7164;
@@ -104,6 +105,9 @@ namespace SAM.OCCT.IntegrationTests
         private const double Sliver19Volume = 2.738;
         private const double NorthStripParentVolume = 157.574;
         private const double NorthStripWestVolume = 78.049;
+        // Gap 0.5: the west room reclaims the 0.474 m double-wall void and grows +10.336 m³ to this
+        // volume (measured by Towers_Gap04Vs05_QuantitativeDelta: 78.049 → 88.385).
+        private const double NorthStripWestVolume05 = 88.385;
         private const double NorthStripEastVolume = 79.526;
 
         private readonly ITestOutputHelper output;

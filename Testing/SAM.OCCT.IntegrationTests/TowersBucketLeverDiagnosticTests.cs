@@ -563,9 +563,13 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         // ---------------------------------------------------------------------------------------
-        // Phase 1d: Acceptance test — with the cap-follow fix, gap 0.5 must give 29 cells
-        // (the strip space near (3.706,-5.836) survives), a tower↔strip adjacency appears,
-        // no super-tall wall at the merged plane. At gap 0.47: 29 cells, no merge, near-miss.
+        // Phase 1d: Acceptance test — with the towers gap-0.5 root-cause fix (junction follow-line
+        // overhang + cap graze-continuation band), gap 0.5 gives 30 cells: the west north-strip
+        // room near (3.706,-5.836) SURVIVES the 0.474 m pair consolidation (pre-fix it was left
+        // unclosed and dropped, giving 29). The count matches gap 0.47 (also 30) because merging
+        // the 0.474 pair reclaims a void WITHOUT changing room topology — the pair-merge itself is
+        // asserted via the stack-consolidated diagnostic in
+        // Towers_NorthStripPair_GapSweep_MergedAt05_NearMissAt047.
         // ---------------------------------------------------------------------------------------
         [SkippableFact]
         public void Towers_DoubleWallGap_FixAcceptance_Gap05StripSurvives()
@@ -575,16 +579,22 @@ namespace SAM.OCCT.IntegrationTests
             var panels = LoadPanels(Path.Combine(FixturesDirectory, "whole-level-towers.sam"));
             Assert.NotEmpty(panels);
 
-            // gap 0.5: the 0.474 pair merges, the strip space survives, new adjacency.
+            // gap 0.5: the 0.474 pair consolidates, the strip room stays closed (no lost room).
             var run05 = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.5, fillMargin: 0.4);
             output.WriteLine("gap=0.5: cells={0}", run05.Cells.Count);
-            Assert.Equal(29, run05.Cells.Count); // strip space survives
+            Assert.Equal(30, run05.Cells.Count); // strip room survives (pre-fix: 29)
 
             // gap 0.47: the 0.474 pair does NOT merge (0.47 < 0.474), so cells stay at 30
             // (the 0.345 pair already merged at 0.4, eliminating the two sliver cells).
             var run047 = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.47, fillMargin: 0.4);
             output.WriteLine("gap=0.47: cells={0}", run047.Cells.Count);
             Assert.Equal(30, run047.Cells.Count); // 0.345 merges (slivers gone), 0.474 pair stays
+
+            // The strip room near (3.706,-5.836) exists at BOTH gaps (it is never destroyed).
+            Assert.True(NearestVolume(run05.Cells, 3.706, -5.836, 13.966, 2.0) > 25,
+                "gap 0.5: the west north-strip room must survive as a legitimate room.");
+            Assert.True(NearestVolume(run047.Cells, 3.706, -5.836, 13.966, 2.0) > 25,
+                "gap 0.47: the west north-strip room must survive as a legitimate room.");
 
             run05.Dispose();
             run047.Dispose();
@@ -918,6 +928,7 @@ namespace SAM.OCCT.IntegrationTests
             DumpNsWallPlanes(panels, "ALL raw N-S walls", yMin: double.MinValue, yMax: double.MaxValue);
 
             int cellsAt047 = -1, cellsAt05 = -1;
+            double westVolAt047 = -1, westVolAt05 = -1;
             bool nearMissAt047 = false;
 
             foreach (double gap in new[] { 0.47, 0.5 })
@@ -925,11 +936,17 @@ namespace SAM.OCCT.IntegrationTests
                 var run = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: gap, fillMargin: 0.4);
                 int cellCount = run.Cells.Count;
 
-                output.WriteLine("");
-                output.WriteLine("=== gap={0}: cells={1} ===", gap, cellCount);
+                // The west north-strip room: at 0.47 it sits at its gap-0.4 position/volume (the
+                // 0.474 pair is NOT merged); at 0.5 the pair consolidates and the room reclaims the
+                // void, growing ~+10 m³ and shifting its centroid ~0.237 m west. Probe a point that
+                // is the nearest cell centre to the room at BOTH gaps.
+                double westVol = NearestVolume(run.Cells, 1.6, -5.9, 13.765, 1.0);
 
-                if (gap == 0.47) { cellsAt047 = cellCount; }
-                if (gap == 0.5) { cellsAt05 = cellCount; }
+                output.WriteLine("");
+                output.WriteLine("=== gap={0}: cells={1} westRoom={2:0.###} m³ ===", gap, cellCount, westVol);
+
+                if (gap == 0.47) { cellsAt047 = cellCount; westVolAt047 = westVol; }
+                if (gap == 0.5) { cellsAt05 = cellCount; westVolAt05 = westVol; }
 
                 if (gap == 0.47)
                 {
@@ -948,11 +965,22 @@ namespace SAM.OCCT.IntegrationTests
                 run.Dispose();
             }
 
-            // Assert: fewer cells at gap=0.5 than at 0.47 (a pair merges).
-            Assert.True(cellsAt05 < cellsAt047,
-                string.Format("Gap 0.5 should reduce cells vs 0.47: {0} < {1}", cellsAt05, cellsAt047));
+            // Assert: SAME room topology at both gaps — merging the 0.474 pair reclaims a void, it
+            // does not add or drop a room (towers gap-0.5 root-cause fix; pre-fix gap 0.5 dropped the
+            // west room to 29). Both are 30.
+            Assert.Equal(cellsAt047, cellsAt05);
+            Assert.Equal(30, cellsAt05);
 
-            // Assert: near-miss emitted at gap=0.47.
+            // Assert: the 0.474 pair MERGES at gap 0.5 — direct geometric proof is that the west room
+            // reclaims the double-wall void and grows ~+10 m³ vs gap 0.47 (where the pair stays split).
+            output.WriteLine("west room: gap0.47={0:0.###} → gap0.5={1:0.###} m³ (+{2:0.###})",
+                westVolAt047, westVolAt05, westVolAt05 - westVolAt047);
+            Assert.True(westVolAt047 > 25 && westVolAt05 > 25,
+                "The west room must be a legitimate room at both gaps (never destroyed).");
+            Assert.True(westVolAt05 > westVolAt047 + 5.0,
+                string.Format("Gap 0.5 must merge the 0.474 pair and grow the west room vs 0.47: {0:0.###} → {1:0.###}", westVolAt047, westVolAt05));
+
+            // Assert: near-miss emitted at gap=0.47 (the 0.474 pair is beyond 0.47 but within 2× gap).
             Assert.True(nearMissAt047, "Gap=0.47 must emit a consolidation near-miss diagnostic.");
         }
 

@@ -295,6 +295,87 @@ namespace SAM.OCCT.IntegrationTests
             output.WriteLine("");
             output.WriteLine("cross-check: region panel count replicated={0} real={1}", replicated, real);
         }
+
+        /// <summary>
+        /// Focused regression for the towers gap-0.5 root-cause fix, on the REAL <c>Extend3D</c>
+        /// output (production managed path). Pins the north-strip room's own walls to their LOCAL
+        /// podium storey after the 0.474 m pair consolidation:
+        /// <list type="bullet">
+        /// <item>the south (y≈-9.41) and north (y≈-2.26) walls stay within the podium storey
+        /// (MinZ≈12.19, MaxZ≈15.47) instead of being extended one-to-four storeys to tower plates
+        /// they only bbox-graze (pre-fix MaxZ 18.39 / 27.54) — Root Cause B2 (graze-continuation band);</item>
+        /// <item>both walls reach the consolidated tower-face plane at x=-0.345 (MinX≤-0.34), proving
+        /// the junction was dragged onto the moved plane — Root Cause B1 (foot-line overhang);</item>
+        /// <item>no interior strip-room wall spans more than 1.5× the storey pitch (4.575 m).</item>
+        /// </list>
+        /// The tower-face plane wall itself (x≈-0.345, y≈-13.2) legitimately reaches its own local
+        /// cap at z≈18.39 (it CONTAINS its sample point) and is outside the strip-room y-band, so it
+        /// is not part of this pin.
+        /// </summary>
+        [Fact]
+        public void Towers_Gap05_StripRoomWalls_StayWithinLocalStorey()
+        {
+            var panels = LoadPanels();
+            Assert.NotEmpty(panels);
+
+            var extended = panels.Extend3D(out _, out _,
+                minBucketSize: Bucket, alignColinearOffset: Align,
+                bucketBetweenLevels: Band, fillMargin: Fill, directionalCapGrow: DirGrow,
+                doubleWallGap: 0.5);
+            Assert.NotNull(extended);
+
+            const double storeyPitch = 3.05;
+            const double superTall = 1.5 * storeyPitch; // 4.575 m
+
+            // Every vertical panel of the strip room's interior band (its own bounding walls),
+            // excluding the tower-face plane column at x≈-0.345 which belongs to the tower, not the
+            // room interior, and legitimately rises to its own local cap.
+            var stripWalls = (extended ?? new List<Panel>())
+                .Where(p => p?.PanelType == PanelType.Wall && p.GetFace3D() != null)
+                .Select(p => p.GetFace3D().GetBoundingBox())
+                .Where(bb => bb != null)
+                .Where(bb =>
+                {
+                    var c = bb.GetCentroid();
+                    return c.X > 0.3 && c.X < 4.0 && c.Y > -10.0 && c.Y < -1.8 && bb.Min.Z < 13.0;
+                })
+                .ToList();
+
+            output.WriteLine("strip-room interior walls at gap 0.5: {0}", stripWalls.Count);
+            foreach (var bb in stripWalls)
+            {
+                var c = bb.GetCentroid();
+                output.WriteLine("  c=({0:F3},{1:F3},{2:F3}) x=[{3:F3},{4:F3}] z=[{5:F3},{6:F3}] h={7:F3}",
+                    c.X, c.Y, c.Z, bb.Min.X, bb.Max.X, bb.Min.Z, bb.Max.Z, bb.Max.Z - bb.Min.Z);
+            }
+
+            // At least the south, north and east walls of the room are in this band.
+            Assert.True(stripWalls.Count >= 3,
+                string.Format("Expected the strip room's own bounding walls; found {0}.", stripWalls.Count));
+
+            // No interior strip wall may span more than 1.5 storeys — the abnormal-height guard.
+            foreach (var bb in stripWalls)
+            {
+                double h = bb.Max.Z - bb.Min.Z;
+                Assert.True(h <= superTall,
+                    string.Format("Strip-room wall at ({0:F3},{1:F3}) spans {2:F3} m (> {3:F3}) — abnormal cross-storey extension.",
+                        bb.GetCentroid().X, bb.GetCentroid().Y, h, superTall));
+                // Each interior wall stays within the podium storey (base ~12.19, top ~15.29–15.47).
+                Assert.InRange(bb.Min.Z, 12.0, 12.35);
+                Assert.InRange(bb.Max.Z, 15.2, 15.9);
+            }
+
+            // The south (y≈-9.41) and north (y≈-2.26) walls must reach the consolidated tower-face
+            // plane at x=-0.345 — proof the junction drag followed the moved wall (Root Cause B1).
+            var south = stripWalls.Where(bb => System.Math.Abs(bb.GetCentroid().Y - (-9.414)) < 0.5).ToList();
+            var north = stripWalls.Where(bb => System.Math.Abs(bb.GetCentroid().Y - (-2.260)) < 0.5).ToList();
+            Assert.NotEmpty(south);
+            Assert.NotEmpty(north);
+            Assert.All(south, bb => Assert.True(bb.Min.X <= -0.34,
+                string.Format("South wall must reach the tower-face plane x=-0.345; MinX={0:F4}.", bb.Min.X)));
+            Assert.All(north, bb => Assert.True(bb.Min.X <= -0.34,
+                string.Format("North wall must reach the tower-face plane x=-0.345; MinX={0:F4}.", bb.Min.X)));
+        }
     }
 }
 

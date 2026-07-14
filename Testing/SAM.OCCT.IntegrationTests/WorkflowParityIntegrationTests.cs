@@ -395,20 +395,23 @@ namespace SAM.OCCT.IntegrationTests
                 TrackingComment = "workflow B under-closes whole-level-towers (28 vs 32 solver cells) - tilted level, byte-identical under E2; needs frame-aware extension"
             },
             // Face3D-home (real export, pitched roofs): E2 (review-corrected) changed the managed fallback
-            // (solver 25 -> 20 cells). Both A-solver-matched and B-clean-extend under-close 19 vs 20, parity
-            // clean. Matching c643b29 (pre-PR61 baseline) run gives identical 19-vs-20 result, proving the
-            // gap is pre-existing (E2 plane-targeting change) and NOT a PR #61 regression.
+            // (solver 25 -> 20 cells). A-solver-matched (raw-first path) still under-closes 19 vs 20, parity
+            // clean - unchanged by this PR. B-clean-extend now closes FULLY (20 == 20): the Root Cause A fix
+            // (this PR) stopped Clean3D's BucketSize stamps from implicitly arming wall-stack consolidation at
+            // the default doubleWallGap 0, restoring the Clean3D -> Extend3D chain to base-c643b29 behaviour
+            // (the 20-space B-workflow this fixture had before the implicit-consolidation regression - see
+            // PR61Face3DHomeParityTests).
             [("Face3D-home.sam", "A-solver-matched")] = new Expectation
             {
                 SpacesMatchResolvedCellCount = false,
                 ParityClean = true,
-                TrackingComment = "Face3D-home A-solver-matched under-closes (19 vs 20 solver cells); E2 plane-targeting changed the managed fallback 25 -> 20 cells; parity clean"
+                TrackingComment = "Face3D-home A-solver-matched under-closes (19 vs 20 solver cells); E2 plane-targeting changed the managed fallback 25 -> 20 cells; parity clean; unchanged by this PR (raw-first path)"
             },
             [("Face3D-home.sam", "B-clean-extend")] = new Expectation
             {
-                SpacesMatchResolvedCellCount = false,
+                SpacesMatchResolvedCellCount = true,
                 ParityClean = true,
-                TrackingComment = "Face3D-home B-clean-extend under-closes (19 vs 20 solver cells); identical at c643b29 base - pre-existing, not a PR #61 regression"
+                TrackingComment = "Face3D-home B-clean-extend closes 20 == 20 after the Root Cause A fix (explicit-arm consolidation); restores the base-c643b29 B-workflow closure the implicit-consolidation regression had dropped to 19"
             },
             // Revit-home-panels (real export, pitched roofs): E2 (review-corrected) closed the managed solve
             // watertight (12/4 -> 14/0). A-solver-matched closes cleanly 14/14 (no entry). Workflow B still

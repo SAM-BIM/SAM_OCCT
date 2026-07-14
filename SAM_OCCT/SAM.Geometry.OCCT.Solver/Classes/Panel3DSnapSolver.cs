@@ -2639,16 +2639,19 @@ namespace SAM.Geometry.OCCT.Solver
         /// = below the base), or -1 if none. Whole-wall plan overlap (the pre-E2 rule), so a slightly-inset cap
         /// is still found; the surface is read from the cap PLANE at the point (sloped roofs evaluate correctly,
         /// not by bounding-box Z).
-        /// <para>A cap whose plan footprint does NOT contain the sample point (a bbox-edge GRAZE - the plane
-        /// value at the point is extrapolation beyond the cap's physical extent) may only CONTINUE the wall's
-        /// existing boundary: its surface must lie within <paramref name="grazeContinuationBand"/> of the wall
-        /// extreme. Near-graze caps are load-bearing (a coplanar neighbour tile whose edge meets the wall line
-        /// supplies the target for walls over untiled strips - whole-level-flat's corridor walls extend their
-        /// 0.05 m overshoot from exactly such caps), but a FAR graze relocates the wall to another storey: on
-        /// whole-level-towers at doubleWallGap 0.5, podium walls carried onto the tower face plane touch the
-        /// tower's stepped floor plates by ~40-50 mm in plan and were extended 2.9-12.1 m past their own
-        /// ceiling (z 15.47 -&gt; 18.39 / 27.54) toward plates whose surfaces they never lie under. A cap that
-        /// CONTAINS the sample point is trusted at any distance (the pre-existing rule).</para></summary>
+        /// <para>A FLAT cap whose plan footprint does NOT contain the sample point (a bbox-edge GRAZE - the
+        /// plane value at the point is extrapolation beyond the cap's physical extent) may only CONTINUE the
+        /// wall's existing boundary: its surface must lie within <paramref name="grazeContinuationBand"/> of
+        /// the wall extreme. Near-graze flat caps are load-bearing (a coplanar neighbour tile whose edge meets
+        /// the wall line supplies the target for walls over untiled strips - whole-level-flat's corridor walls
+        /// extend their 0.05 m overshoot from exactly such caps), but a FAR flat graze relocates the wall to
+        /// another storey: on whole-level-towers at doubleWallGap 0.5, podium walls carried onto the tower face
+        /// plane touch the tower's stepped FLAT floor plates by ~40-50 mm in plan and were extended 2.9-12.1 m
+        /// past their own ceiling (z 15.47 -&gt; 18.39 / 27.54) toward plates whose surfaces they never lie
+        /// under. A PITCHED cap (sloped roof) grazed in plan is EXEMPT from the band - its plane genuinely
+        /// rises across the wall and a wall reaching a roof it only grazes is the E2 sloped-plane target the
+        /// real-export home fixtures rely on. A cap that CONTAINS the sample point is trusted at any distance
+        /// (the pre-existing rule).</para></summary>
         private static int NearestCoveringCap(BoundingBox3D wallBox, double x, double y, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double toleranceDistance, bool up, double wallExtreme, double grazeContinuationBand)
         {
             int best = -1;
@@ -2664,9 +2667,22 @@ namespace SAM.Geometry.OCCT.Solver
 
                 bool containsSample = x >= capBoxes[i].Min.X - toleranceDistance && x <= capBoxes[i].Max.X + toleranceDistance
                     && y >= capBoxes[i].Min.Y - toleranceDistance && y <= capBoxes[i].Max.Y + toleranceDistance;
-                if (!containsSample && System.Math.Abs(capZ - wallExtreme) > grazeContinuationBand)
+                if (!containsSample)
                 {
-                    continue; // graze cap beyond the continuation band - another storey's surface, not this wall's boundary
+                    // A graze: the cap does not physically reach over the sample point, so its plane value
+                    // there is an extrapolation. Reject the graze ONLY for a (near-)horizontal FLAT cap whose
+                    // surface is beyond the continuation band - a flat plate has a single elevation, so a far
+                    // graze necessarily lands on another storey (the towers podium-wall-vs-tower-plate defect).
+                    // A PITCHED cap (a sloped roof) is exempt: its plane genuinely rises across the wall, and a
+                    // wall reaching a roof it only grazes in plan is exactly the E2 sloped-plane target the
+                    // real-export home fixtures depend on (Extend3DPlaneTargetIntegrationTests). Near grazes of
+                    // either kind stay in via the band (a coplanar neighbour tile continuing this wall's edge).
+                    Vector3D capNormal = capPlanes[i]?.Normal?.Unit;
+                    bool capIsFlat = capNormal == null || System.Math.Abs(capNormal.Z) >= System.Math.Cos(CapFlatnessConeTolerance);
+                    if (capIsFlat && System.Math.Abs(capZ - wallExtreme) > grazeContinuationBand)
+                    {
+                        continue; // flat plate on another storey - not this wall's local cap
+                    }
                 }
                 if (up ? capZ < wallExtreme - toleranceDistance : capZ > wallExtreme + toleranceDistance)
                 {
