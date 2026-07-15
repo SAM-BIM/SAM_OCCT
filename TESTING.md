@@ -69,8 +69,13 @@ dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj
 .\build-native.ps1 -SkipVcpkgInstall
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj
 
-# Grasshopper component contract tests — GH SDK resolved from the NuGet cache; always execute
-dotnet test Testing/SAM.OCCT.GrasshopperTests/SAM.OCCT.GrasshopperTests.csproj
+# Grasshopper component contract tests — GH SDK resolved from the NuGet cache; always execute.
+# The contract tests instantiate the components and inspect their managed metadata only, so they need
+# neither the native library nor a live Rhino deployment. SAM_OCCT_SKIP_NATIVE_BUILD=true skips the
+# native pre-build (BuildNativeOcct); the live-Rhino .gha copy is already best-effort (IgnoreExitCode),
+# so this command succeeds even when Rhino is open (its deployed DLLs are locked) or the native
+# toolchain is absent. The local build\*.gha packaging step is untouched and still must succeed.
+$env:SAM_OCCT_SKIP_NATIVE_BUILD='true'; dotnet test Testing/SAM.OCCT.GrasshopperTests/SAM.OCCT.GrasshopperTests.csproj
 ```
 
 If the native library is not on the load path, the integration tests skip and
@@ -86,7 +91,7 @@ dotnet build SAM_OCCT.sln -c Debug
 dotnet build Grasshopper/SAM.Analytical.Grasshopper.OCCT/SAM.Analytical.Grasshopper.OCCT.csproj -c Debug
 dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj -c Debug
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj -c Debug
-dotnet test Testing/SAM.OCCT.GrasshopperTests/SAM.OCCT.GrasshopperTests.csproj -c Debug
+$env:SAM_OCCT_SKIP_NATIVE_BUILD='true'; dotnet test Testing/SAM.OCCT.GrasshopperTests/SAM.OCCT.GrasshopperTests.csproj -c Debug
 ```
 
 ## Continuous integration

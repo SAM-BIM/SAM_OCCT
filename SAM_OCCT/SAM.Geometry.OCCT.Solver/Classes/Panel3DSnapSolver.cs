@@ -2398,6 +2398,7 @@ namespace SAM.Geometry.OCCT.Solver
             List<int> wallPanelIndices = new List<int>();      // position in `panels` per wall, for E3 records
             List<BoundingBox3D> capBoxes = new List<BoundingBox3D>();
             List<Plane> capPlanes = new List<Plane>();
+            List<Face3D> capFace3Ds = new List<Face3D>();       // the ACTUAL cap faces, for real-boundary selection
             List<int> capPanelIndices = new List<int>();        // position in `panels` per cap, for E3 records
             List<int> capSourceIndices = new List<int>();       // representative source per cap, for E3 records
             for (int panelIndex = 0; panelIndex < panels.Count; panelIndex++)
@@ -2424,6 +2425,7 @@ namespace SAM.Geometry.OCCT.Solver
                 {
                     capBoxes.Add(boundingBox3D);
                     capPlanes.Add(panel.Plane);
+                    capFace3Ds.Add(panel.Face3D);
                     capPanelIndices.Add(panelIndex);
                     capSourceIndices.Add(RepresentativeSource(panel));
                 }
@@ -2438,8 +2440,8 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
-                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, overshoot, roofOvershoot, toleranceDistance, true, records, wallPanelIndices[w], capPanelIndices, capSourceIndices);
-                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, overshoot, roofOvershoot, toleranceDistance, false, records, wallPanelIndices[w], capPanelIndices, capSourceIndices);
+                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, capFace3Ds, overshoot, roofOvershoot, toleranceDistance, true, records, wallPanelIndices[w], capPanelIndices, capSourceIndices);
+                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, capFace3Ds, overshoot, roofOvershoot, toleranceDistance, false, records, wallPanelIndices[w], capPanelIndices, capSourceIndices);
             }
         }
 
@@ -2460,17 +2462,13 @@ namespace SAM.Geometry.OCCT.Solver
         /// spanning two roof planes still receives its correct multi-slope top from the native kernel, which
         /// trims it against every roof face in the cell complex.</para>
         /// </summary>
-        private static void ExtendWallToNearestCap(SnappedPanel wall, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double overshoot, double roofOvershoot, double toleranceDistance, bool up, List<ExtendRecord> records = null, int wallPanelIndex = -1, List<int> capPanelIndices = null, List<int> capSourceIndices = null)
+        private static void ExtendWallToNearestCap(SnappedPanel wall, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, List<Face3D> capFace3Ds, double overshoot, double roofOvershoot, double toleranceDistance, bool up, List<ExtendRecord> records = null, int wallPanelIndex = -1, List<int> capPanelIndices = null, List<int> capSourceIndices = null)
         {
             double wallExtreme = up ? wallBox.Max.Z : wallBox.Min.Z;
             double centreX = 0.5 * (wallBox.Min.X + wallBox.Max.X);
             double centreY = 0.5 * (wallBox.Min.Y + wallBox.Max.Y);
 
-            // Graze caps (plan bbox touches the wall but does not reach over its centre) may only continue
-            // the wall's boundary within the conditioning overshoot scale - never relocate it to another
-            // storey (see NearestCoveringCap).
-            double grazeContinuationBand = System.Math.Max(overshoot, roofOvershoot);
-            int capIndex = NearestCoveringCap(wallBox, centreX, centreY, capBoxes, capPlanes, toleranceDistance, up, wallExtreme, grazeContinuationBand);
+            int capIndex = NearestCoveringCap(wallBox, centreX, centreY, capBoxes, capPlanes, capFace3Ds, toleranceDistance, up, wallExtreme);
             if (capIndex < 0)
             {
                 if (records != null)
@@ -2634,25 +2632,44 @@ namespace SAM.Geometry.OCCT.Solver
         /// plane target.</summary>
         private const double CapFlatnessConeTolerance = 15.0 * (System.Math.PI / 180.0);
 
+        /// <summary>
+        /// Maximum vertical gap (metres) a wall may grow to reach a cap it only GRAZES - i.e. a cap whose real
+        /// face does not cover the wall sample (Case B in <see cref="NearestCoveringCap"/>). A cap the wall
+        /// physically sits under (Case A) has no such limit. This is the "nearest valid local level interval"
+        /// bound: within it the cap continues the wall's own floor/roof boundary; beyond it the cap is a
+        /// different storey's surface the wall must not be dragged to.
+        /// <para>2.0 m is set BETWEEN the two populations measured on the real fixtures, not fitted to a
+        /// coordinate: the largest legitimate roof-graze continuation on the pitched-roof export fixtures
+        /// (Revit-home / AdjacencyCluster-home / Face3D-home) is ~1.57 m, while the smallest cross-storey graze
+        /// - the whole-level-towers podium wall vs. the tower's next-storey floor plate - is ~2.87 m (about one
+        /// 3.05 m storey pitch). 2.0 m clears the former and rejects the latter with margin on both sides. It is
+        /// deliberately below one storey pitch so a grazing cap on an adjacent storey can never be selected.</para>
+        /// </summary>
+        public const double CAP_LOCAL_LEVEL_CONTINUATION = 2.0;
+
         /// <summary>The nearest cap over plan point (<paramref name="x"/>, <paramref name="y"/>) whose surface
         /// is beyond the wall extreme in the grow direction (<paramref name="up"/> = above the wall top; false
-        /// = below the base), or -1 if none. Whole-wall plan overlap (the pre-E2 rule), so a slightly-inset cap
-        /// is still found; the surface is read from the cap PLANE at the point (sloped roofs evaluate correctly,
-        /// not by bounding-box Z).
-        /// <para>A FLAT cap whose plan footprint does NOT contain the sample point (a bbox-edge GRAZE - the
-        /// plane value at the point is extrapolation beyond the cap's physical extent) may only CONTINUE the
-        /// wall's existing boundary: its surface must lie within <paramref name="grazeContinuationBand"/> of
-        /// the wall extreme. Near-graze flat caps are load-bearing (a coplanar neighbour tile whose edge meets
-        /// the wall line supplies the target for walls over untiled strips - whole-level-flat's corridor walls
-        /// extend their 0.05 m overshoot from exactly such caps), but a FAR flat graze relocates the wall to
-        /// another storey: on whole-level-towers at doubleWallGap 0.5, podium walls carried onto the tower face
-        /// plane touch the tower's stepped FLAT floor plates by ~40-50 mm in plan and were extended 2.9-12.1 m
-        /// past their own ceiling (z 15.47 -&gt; 18.39 / 27.54) toward plates whose surfaces they never lie
-        /// under. A PITCHED cap (sloped roof) grazed in plan is EXEMPT from the band - its plane genuinely
-        /// rises across the wall and a wall reaching a roof it only grazes is the E2 sloped-plane target the
-        /// real-export home fixtures rely on. A cap that CONTAINS the sample point is trusted at any distance
-        /// (the pre-existing rule).</para></summary>
-        private static int NearestCoveringCap(BoundingBox3D wallBox, double x, double y, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double toleranceDistance, bool up, double wallExtreme, double grazeContinuationBand)
+        /// = below the base), or -1 if none. The surface is read from the cap PLANE at the point (sloped roofs
+        /// evaluate correctly, not by bounding-box Z), and validity is decided against the cap's ACTUAL face
+        /// boundary, not its axis-aligned bounding box.
+        /// <para>A candidate is valid in one of two ways, both rigid-frame-invariant (they use the cap's own
+        /// face and plane, never a world-axis bbox as containment):</para>
+        /// <para><b>Case A - physical containment.</b> The wall sample projected onto the cap plane,
+        /// (<paramref name="x"/>, <paramref name="y"/>, capZ), lies inside the real cap face
+        /// (<see cref="Face3D.InRange"/>, boundary-inclusive). The wall genuinely sits under/over the cap, so it
+        /// is a valid target at ANY vertical gap (a wall grows up to its own ceiling however far above).</para>
+        /// <para><b>Case B - bounded boundary continuation.</b> The sample lies OUTSIDE the real cap face (a
+        /// graze - the plane value there is an extrapolation beyond the physical face). It is valid only when
+        /// the cap surface over the sample is within <see cref="CAP_LOCAL_LEVEL_CONTINUATION"/> of the wall
+        /// extreme: the cap continues the wall's boundary within its own local level rather than jumping a
+        /// storey. This admits a wall reaching the pitched roof or the neighbouring cap tile it grazes (up to
+        /// ~1.57 m of legitimate continuation measured on the real-export home fixtures) while rejecting the
+        /// whole-level-towers podium-wall / tower-plate graze (~2.87 m, a full storey up), with no dependence on
+        /// cap pitch or flatness. Distance-to-face and in-plane graze distance do NOT separate the two (a
+        /// legitimate flat floor tile can be metres from a wall centre in plan while a phantom plate grazes it
+        /// to ~40 mm); the vertical continuation gap is the discriminant, and it is exactly "the cap elevation
+        /// belongs to the nearest valid local level interval".</para></summary>
+        internal static int NearestCoveringCap(BoundingBox3D wallBox, double x, double y, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, List<Face3D> capFace3Ds, double toleranceDistance, bool up, double wallExtreme)
         {
             int best = -1;
             double bestZ = up ? double.MaxValue : double.MinValue;
@@ -2660,33 +2677,30 @@ namespace SAM.Geometry.OCCT.Solver
             {
                 if (!OverlapsInPlan(capBoxes[i], wallBox, toleranceDistance))
                 {
+                    continue; // cheap plan-bbox early-out; real-face validity is decided below
+                }
+
+                // A cap with no usable face (null / degenerate / null plane normal) cannot be tested against
+                // its real boundary, so it is never a valid target - skip it (the wall falls back to a genuine
+                // cap or to no cap). Real solver caps always carry a valid Face3D; this guards malformed input.
+                Face3D capFace3D = capFace3Ds != null && i < capFace3Ds.Count ? capFace3Ds[i] : null;
+                if (capFace3D == null || !capFace3D.IsValid() || capPlanes[i]?.Normal == null)
+                {
                     continue;
                 }
 
                 double capZ = CapZAtPlan(capPlanes[i], x, y, up ? capBoxes[i].Max.Z : capBoxes[i].Min.Z);
-
-                bool containsSample = x >= capBoxes[i].Min.X - toleranceDistance && x <= capBoxes[i].Max.X + toleranceDistance
-                    && y >= capBoxes[i].Min.Y - toleranceDistance && y <= capBoxes[i].Max.Y + toleranceDistance;
-                if (!containsSample)
-                {
-                    // A graze: the cap does not physically reach over the sample point, so its plane value
-                    // there is an extrapolation. Reject the graze ONLY for a (near-)horizontal FLAT cap whose
-                    // surface is beyond the continuation band - a flat plate has a single elevation, so a far
-                    // graze necessarily lands on another storey (the towers podium-wall-vs-tower-plate defect).
-                    // A PITCHED cap (a sloped roof) is exempt: its plane genuinely rises across the wall, and a
-                    // wall reaching a roof it only grazes in plan is exactly the E2 sloped-plane target the
-                    // real-export home fixtures depend on (Extend3DPlaneTargetIntegrationTests). Near grazes of
-                    // either kind stay in via the band (a coplanar neighbour tile continuing this wall's edge).
-                    Vector3D capNormal = capPlanes[i]?.Normal?.Unit;
-                    bool capIsFlat = capNormal == null || System.Math.Abs(capNormal.Z) >= System.Math.Cos(CapFlatnessConeTolerance);
-                    if (capIsFlat && System.Math.Abs(capZ - wallExtreme) > grazeContinuationBand)
-                    {
-                        continue; // flat plate on another storey - not this wall's local cap
-                    }
-                }
                 if (up ? capZ < wallExtreme - toleranceDistance : capZ > wallExtreme + toleranceDistance)
                 {
                     continue; // the cap surface here is beyond the wall extreme on the WRONG side - not a cap
+                }
+
+                // Real-face validity: Case A (sample inside the actual cap face) at any gap, else Case B
+                // (graze - sample outside the face) only within the local-level continuation band.
+                bool contained = capFace3D.InRange(new Point3D(x, y, capZ), toleranceDistance);
+                if (!contained && System.Math.Abs(capZ - wallExtreme) > CAP_LOCAL_LEVEL_CONTINUATION)
+                {
+                    continue; // grazing cap beyond the wall's local level - another storey's surface
                 }
 
                 if (up ? capZ < bestZ : capZ > bestZ)
@@ -3564,7 +3578,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// so on a model whose storey faces step in plan (the towers) a hanging end reads as already met by
         /// an upper storey's line and is never re-extended.
         /// </summary>
-        private static void DragAbuttingWallEnds(
+        internal static void DragAbuttingWallEnds(
             List<SnappedPanel> walls,
             SnappedPanel movedWall,
             Plane oldPlane,

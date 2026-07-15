@@ -1,218 +1,145 @@
-# PR #61 — towers `doubleWallGap=0.5`: root-cause report
+# Towers `doubleWallGap = 0.5` — root causes and the cap-selection / junction-follow rules
 
-Branch `debug/pr61-towers-gap05` (from PR #61 head `7a677de`). Fixture
-`Testing/SAM.OCCT.IntegrationTests/Fixtures/whole-level-towers.sam`.
+Fixture: `Testing/SAM.OCCT.IntegrationTests/Fixtures/whole-level-towers.sam`. Production chain
+`Extend3D → Create.AdjacencyCluster` with `minBucketSize 0.4, alignColinearOffset 0.3,
+bucketBetweenLevels 0.4, fillMargin 0.4, directionalCapGrow false`.
 
-Two independent defects were found and fixed. They are reported **separately** below, as
-requested. The headline conclusion reverses the PR #61 premise: **`doubleWallGap = 0.5` is not
-inherently over-aggressive.** The lost room was caused by two extension/junction defects that fire
-once the 0.474 m pair consolidates; with those fixed, gap 0.5 keeps every legitimate room and
-removes the intended double-wall artifacts.
-
----
-
-## Reproduction
-
-`Extend3D → Create.AdjacencyCluster`, parameters:
-
-```
-minBucketSize = 0.4   alignColinearOffset = 0.3   bucketBetweenLevels = 0.4
-fillMargin    = 0.4   directionalCapGrow  = false doubleWallGap = {0 | 0.4 | 0.5}
-OcctBuildOptions: AvoidInternalShapes=false, SewBeforeBuild=true, SewingTolerance=0.01
-```
-
-Storey pitch 3.05 m; podium storey z≈12.24–15.29; tower plates step west as they rise
-(x = -0.345, -0.344, -0.302, -0.223, -0.117, +0.003 for z = 15.29 … 30.46).
+`doubleWallGap = 0.5` is a valid user input. The lost north-strip room at gap 0.5 was not caused by
+the gap being over-aggressive; it was caused by two independent defects that fire once the 0.474 m
+wall pair consolidates. Both are fixed here with geometry-based rules; the gap threshold is not
+lowered and no fixture coordinates or GUIDs appear in production code.
 
 ---
 
 ## Root cause A — implicit default consolidation (independent merge blocker)
 
-**Symptom.** The default `Clean3D → Extend3D → CreateAdjacencyCluster` workflow regressed the
-Face3D-home fixture from 20 spaces (base) to 19 (PR head), with `doubleWallGap` left at its
-default 0.
+`Clean3D` stamps `SolverParameter.BucketSize` on its output panels. `Modify.ResolveConsolidationRanges`
+read those stamps as per-panel consolidation ranges, and `SnapStage.Clean` armed
+`ConsolidateWallStacks` whenever any panel carried a range `> tol` — so wall-stack consolidation ran
+on every `Clean3D → Extend3D` chain even at the default `doubleWallGap = 0`.
 
-**Mechanism.** `Clean3D` stamps `SolverParameter.BucketSize` on its output panels (the snap
-capture width). `Modify.ResolveConsolidationRanges` reads those stamps as per-panel consolidation
-ranges, and `SnapStage.Clean` armed `ConsolidateWallStacks` whenever *any* panel carried a range
-`> tol` — so wall-stack consolidation ran on **every** `Clean3D → Extend3D` chain even though the
-user never opted in (gap 0). A legacy feature (`BucketSize`) silently activated a new one
-(`doubleWallGap`).
+**Fix.** The explicit `doubleWallGap > 0` is the only arm switch. Stamped ranges still *refine* the
+reach of an armed pass (`EffRange`) but never *activate* it.
+- `SnapStage.Clean` §2a: gate is `if (doubleWallGap > tol.Distance)`.
+- `Panel3DSnapSolver.ConsolidateWallStacks`: early-out no longer consults stamped ranges.
 
-**Fix (smallest correction).** The explicit `doubleWallGap > 0` is now the **only** arm switch.
-Stamped ranges still *refine* the reach of an armed pass (`EffRange`), but never *activate* it.
-- `SnapStage.Clean` (§2a): gate is `if (doubleWallGap > tol.Distance)`.
-- `Panel3DSnapSolver.ConsolidateWallStacks`: early-out no longer consults `anyRange`.
-- Doc updated on `ConsolidationRanges` and `Modify.ResolveConsolidationRanges`.
-
-**Invariant restored:** `doubleWallGap = 0` ⇒ wall-stack consolidation OFF, whatever is stamped.
-
-**Result.** Face3D-home B-clean-extend: base = 20, head = **20** (re-pinned). Stamped ranges remain
-usable as a deliberate opt-in when the global gap is armed (`>0`).
+**Invariant:** `doubleWallGap = 0` ⇒ wall-stack consolidation OFF, whatever is stamped.
+**Result:** Face3D-home `Clean3D → Extend3D → cluster` returns to 20 spaces (base c643b29 behaviour).
 
 ---
 
-## Root cause B — towers gap 0.5 vertical/closure behaviour
+## Root cause B — towers gap 0.5 vertical / closure behaviour
 
-At gap 0.5 Stage A correctly consolidates **both** near-parallel pairs onto the tower-face plane
-(src 3): the 0.345 m block pair (`src 78`, moved 0.345) and the 0.474 m north-strip pair
-(`src 199`, moved 0.474). Every consolidation gate passes; this is intended. Two downstream defects
-then fired.
+At gap 0.5 Stage A consolidates the 0.474 m north-strip pair onto the tower-face plane (correct).
+Two downstream defects then fired.
 
-### Wall of interest
+### B1 — missed junction follow (the room-killer)
 
-| role | src | GUID | raw z |
+When the strip's west wall moved onto the tower-face plane, `DragAbuttingWallEnds` must carry the
+abutting perpendicular walls' ends onto the new plane. The room's north wall ended **46 mm beyond**
+the moved wall's foot end, so the old `PlanDistancePointToSegment > STACK_FOLLOW_END_TOLERANCE (0.02)`
+test rejected it and the Z-blind plan loop then parked that end on an upper tower-face line — leaving
+the NW corner open, so the room never closed and dropped from the cell complex.
+
+**Fix.** `DraggedEnd`/`TerminatesOnFootLine` split the match into two axes: perpendicular distance to
+the moved wall's foot **line** ≤ `STACK_FOLLOW_END_TOLERANCE` (0.02 m, unchanged) **and** along-line
+overhang ≤ `STACK_FOLLOW_END_OVERHANG` (0.1 m — the import corner-undershoot). Within the foot span
+the behaviour is identical to the old distance-to-segment test; the new constant only widens the
+along-line capture past the ends. Direct boundary tests: `WallJunctionFollowTests`.
+
+### B2 — cap selection let walls extend to caps they only graze (the tall walls)
+
+`NearestCoveringCap` accepted any cap whose axis-aligned bounding box overlapped the wall and read the
+cap plane's elevation at the wall centre — an extrapolation when the cap does not physically reach
+over that point. Once the strip walls sat on the tower-face plane they bbox-grazed the tower's stepped
+floor plates by ~40–50 mm and were extended one-to-four storeys past their own ceiling
+(z 15.47 → 18.39 / 27.54).
+
+**Final rule (rigid-frame-invariant, uses the actual cap face — `Panel3DSnapSolver.NearestCoveringCap`).**
+For each plan-bbox-overlapping cap whose surface over the wall sample is on the grow side:
+
+- **Case A — physical containment.** The wall sample projected onto the cap plane, `(x, y, capZ)`,
+  lies inside the real cap face (`Face3D.InRange`, boundary-inclusive, holes ignored). The wall
+  genuinely sits under/over the cap, so it is a valid target at any vertical gap (a wall grows to its
+  own ceiling however far above).
+- **Case B — bounded boundary continuation.** The sample lies outside the real face (a graze). Valid
+  only when the cap surface over the sample is within `CAP_LOCAL_LEVEL_CONTINUATION` (2.0 m) of the
+  wall extreme — the cap continues the wall's own floor/roof boundary within its local level rather
+  than jumping a storey.
+- A cap with a null / invalid face (or null plane normal) is skipped entirely.
+
+The selection keeps its nearest-surface preference; only the validity gate is new. There is **no**
+use of cap AABB containment, world `normal.Z` flatness, a pitch threshold, or a pitched-cap exemption.
+
+**Why the discriminant is the vertical gap, not a distance.** Measured on the real fixtures at the
+wall-to-cap stage: legitimate pitched-roof grazes on the export home fixtures reach up to ~1.57 m of
+vertical continuation, while the towers phantom grazes a next-storey plate at ~2.87 m (≈ one 3.05 m
+storey). Neither the 3-D distance to the cap face nor the in-plane distance to its boundary separates
+the two — a legitimate flat floor tile can be metres from a wall centre in plan while a phantom plate
+grazes it to ~40 mm. The vertical continuation gap does separate them, and it is exactly "the cap
+elevation belongs to the nearest valid local level interval." `CAP_LOCAL_LEVEL_CONTINUATION = 2.0` sits
+between the two measured populations and below one storey pitch. Direct synthetic tests:
+`WallCapSelectionTests` (12 cases; the AABB-false-containment, within-band graze, and sub-15° shallow-
+roof cases fail at commit 20a7665 and pass after).
+
+---
+
+## Acceptance evidence (production chain, gap sweep)
+
+| gap | cells | west north-strip room | notes |
 |---|---|---|---|
-| tower east face L1 (dominant) | 3 | `edb39f15-e5a1-4bae-8481-3aec45ed2b1e` | 12.24–15.21 |
-| north-strip west wall (moved) | 199 | `ca160254-72b3-4f3e-987e-a15f5ce15db9` | 12.24–15.47 |
-| west room SOUTH wall | 196 | `b03bc2a4-8624-4354-aaab-33ddca71d81b` | 12.50–15.47 |
-| west room NORTH wall | 198 | `a577d53d-de51-4853-924b-a7a873be8e8e` | 12.50–15.47 |
+| 0.0 | 31 | one 157.6 m³ parent | baseline; two sliver cells; 22↔26 not connected |
+| 0.4 | 30 | 78.049 m³ | slivers absorbed, parent split, 22↔26 connected |
+| 0.47 | 30 | 78.049 m³ | 0.474 pair not yet merged (near-miss diagnostic) |
+| 0.5 | 30 | 88.385 m³ | 0.474 pair merged, room reclaims the void (+10.336); no room lost |
 
-### B1 — the room-killer (missed junction follow → open NW corner)
-
-After src199 moves onto the tower-face plane, `DragAbuttingWallEnds` must carry the abutting
-perpendicular walls' ends onto the new plane. The south wall (src196) end at y=-9.414 lay *inside*
-src199's foot span and was dragged to x=-0.345 correctly. The **north** wall (src198) end at
-y=-2.306 lay **46 mm beyond** src199's foot end (the moved wall's face stops 46 mm short of the
-corner it turns) → the old `PlanDistancePointToSegment > STACK_FOLLOW_END_TOLERANCE (0.02)` test
-rejected it → not dragged. The Z-blind plan loop (`ExtendWalls`) then extended the north wall's
-west end to the nearest wall *line* in plan — the tower L6/L7 face at x=+0.003 — 15 m above,
-because the true target (x=-0.345) needs 0.474 m > `DEFAULT_MaxExtension` 0.4. The NW corner was
-left open by ~0.298 m ⇒ the west room never closed ⇒ dropped from the cell complex (29 cells).
-
-**Fix.** `DragAbuttingWallEnds`/`DraggedEnd` now use `TerminatesOnFootLine`: perpendicular
-distance to the foot **line** ≤ `STACK_FOLLOW_END_TOLERANCE` (0.02, unchanged) **and** along-line
-overhang ≤ new `STACK_FOLLOW_END_OVERHANG = 0.1` (the import corner-undershoot; observed 0.046 m).
-Within the segment span the behaviour is byte-identical to the old distance-to-segment test — the
-new constant only widens the along-line capture past the ends. No fixture coordinates or GUIDs.
-
-### B2 — abnormally tall walls (graze cap selection)
-
-**First invalid stage: wall-to-cap extension** (`ConditionStage` step 2 →
-`Panel3DSnapSolver.Extend` → `ExtendWallToNearestCap`). The offending statement is the
-`ExtendTopTo(capBox.Max.Z + overshoot)` (and its bottom mirror) executed after
-`NearestCoveringCap` returns a cap the wall only bbox-**grazes**.
-
-`NearestCoveringCap` accepted any cap whose plan bbox merely intersected the wall bbox (tol 1e-6)
-and read the cap plane's Z **at the wall centre** — an extrapolation when the cap does not
-physically reach over that point. Once src196/src198 sat on the tower-face plane, they grazed the
-tower's stepped floor plates by ~40–50 mm in plan and were extended one-to-four storeys past their
-own ceiling:
-
-| wall | pre-fix Extend | post-fix Extend |
-|---|---|---|
-| src196 south (centre 1.706,-9.414) | Top 15.47 → **18.39** (plate z=18.34) | 15.47 → **15.47** |
-| src198 north (centre 1.706,-2.260) | Top 15.47 → **27.54** (plate z=27.49) | 15.47 → **15.47** |
-| src3 tower face (centre -0.345,-13.2) | 15.47 → 18.39 (CONTAINS sample) | 15.47 → 18.39 (unchanged — legitimate) |
-
-**Fix.** `NearestCoveringCap` gained a `grazeContinuationBand` parameter (caller passes
-`max(overshoot, roofOvershoot)` = 0.5). A **flat** (near-horizontal) cap whose footprint does
-**not** contain the sample point is admissible only if its surface lies within the band of the wall
-extreme — it may only *continue* the wall's own boundary (the near-graze coplanar-neighbour-tile
-case whole-level-flat's corridor walls legitimately rely on), never *relocate* the wall to another
-storey. A cap that **contains** the sample point is trusted at any distance (pre-existing rule, so
-the tower face at src3 is unaffected).
-
-**Flat-only discriminator (required, verified).** The far-graze rejection is restricted to flat
-caps (normal within `CapFlatnessConeTolerance` = 15° of vertical). A **pitched** roof grazed in
-plan is exempt: its plane genuinely rises across the wall, and a wall reaching a roof it only grazes
-is exactly the E2 sloped-plane target the real-export home fixtures depend on. Without this
-restriction the band regressed the managed-path home fixtures (`Revit-home-panels` 14/0 → 14/11
-naked; `AdjacencyCluster-home` 18 → 17 cells) — a flat plate has a single elevation, so a far graze
-necessarily lands on another storey, whereas a pitched roof's extrapolated plane over the wall is a
-legitimate target. The towers plates are perfectly horizontal (normal.Z = 1), so the towers fix is
-unaffected by the restriction.
-
-### B causal chain (revised hypothesis — confirmed)
-
-```
-0.474 m pair consolidates (correct)
-  → north wall's junction end 46 mm past the foot end is NOT dragged (B1)
-  → plan loop parks that end on an upper tower face line (open NW corner)  → room lost
-  and, independently,
-  → the room's side walls graze upper tower plates and extend cross-storey (B2)
-```
-
-Fix A2 (B1) alone restores the 30-cell topology; fix B2 additionally corrects the wall heights.
-Both are needed for correct geometry.
+Gap 0.5 keeps the same 30-cell topology as gap 0.4, grows the west room and the southeast room by the
+two reclaimed double-wall voids (+20.745 m³ total), removes the two sliver cells, keeps 22↔26, and
+holds the strip walls within z≈12.19–15.47. Integration coverage: `PR61TowersQuantitativeValidationTests`,
+`TowersGap05StageDiagnosticTests`, `TowersBucketLeverDiagnosticTests`.
 
 ---
 
-## A/B/C/D configuration matrix
+## Cross-fixture evidence and golden-change classification
 
-| cfg | gap | code | towers cells | west room | notes |
-|---|---|---|---|---|---|
-| A | 0 | current | 31 | 157.574 (one parent) | baseline; 2 slivers; no 22↔26 |
-| B | 0 | consolidation correctly disabled | 31 | 157.574 | **identical to A** — the towers Extend3D chain feeds RAW panels (no BucketSize stamps), so root cause A never armed on this fixture. A≡B here; A vs B differs only on stamped inputs (e.g. Clean3D outputs / Face3D-home). |
-| C | 0.4 | fixed | 30 | 78.049 | slivers absorbed, north-strip parent splits, 22↔26 joined; **byte-identical to pre-fix** |
-| D | 0.5 | fixed | 30 | 88.385 | as C plus the 0.474 pair reclaimed (+10.336 west, +10.408 SE); no room lost |
+The raw (production-default) path is unaffected — all five raw-path golden signatures are unchanged.
+The changes below are on the managed diagnostic path and the GH `bucketBetweenLevels = 0.21` path;
+each cell difference was matched old↔new by centroid and classified geometrically.
 
-Pre-fix D was 29 cells (west room destroyed). The A≡B equality on this fixture is why root cause A
-had to be proven on Face3D-home (a stamped-input path), not on towers.
+**whole-level-towers, managed (forced, band 0): 21 → 20 cells (−78.783 m³).** The removed cell
+(centroid (39.467, −6.160), 78.784 m³, z=[12.384, 15.290]) had all its neighbours unchanged (it
+dropped, was not merged). Its band-0 closure depended on a bounding wall grazing a tower floor plate
+**≥ 5 m away** (verified: the cell reappears only when `CAP_LOCAL_LEVEL_CONTINUATION` is raised past
+5 m, not at 5 m) — i.e. a multi-storey phantom extension, the exact B2 defect class. Classification:
+**false closure removed** — the wall no longer reaches a plate it does not sit under. The real room is
+preserved on both production paths: raw-first gives 31 cells, and the GH band-0.21 path contains it
+(centroid (39.467, −6.160), 82.696 m³) in both old and new.
+
+**two-level-tilted, managed band 0.21: 9 → 10 cells (+112.009 m³).** The added cell (centroid
+(43.452, −3.533, 6.143), 112.008 m³, floor area 37.713, z=[4.162, 8.124], 6 faces) is the mirror twin
+of the pre-existing (43.452, −22.467, 6.143) cell — identical volume, floor area and Z extent, a
+distinct symmetric location, correctly bounded, within the envelope and on the correct upper storey.
+Classification: **legitimate room recovery** — rejecting the phantom graze that previously blocked its
+closure lets the symmetric room close (and naked edges drop 24 → 21). Accepted.
+
+**whole-level-towers, managed band 0.21: 231 → 228 signature faces.** Cell count (25) and total volume
+(9281.107 m³) are identical old↔new; only the face count falls by 3. Classification: **face cleanup
+without topology change** — three redundant wall faces left by phantom graze extensions are no longer
+produced.
+
+Managed-path golden expectations were updated with these deltas in `GoldenMasterIntegrationTests`.
 
 ---
 
-## Cross-fixture risk
+## Known limitations
 
-The production/raw path is untouched: all five raw-path golden masters are byte-identical. The
-graze-continuation band changes only the managed conditioning path, and only where a wall was
-selecting a cap it does not lie under. Managed-path golden deltas (documented, intended):
-
-- `whole-level-towers` [managed]: 21c/8n/8689.707 → **20c/8n/8610.924** (removes one −78.78 m³
-  artifact cell that two east-junction phantom walls had enclosed; forced-managed diagnostic path).
-- `whole-level-towers` [managed-0.21]: cells/naked/volume byte-identical; faces 231 → **228**
-  (phantom graze-extended wall faces gone).
-- `two-level-tilted` [managed-0.21]: 9c/24n → **10c/21n** (one more room closes, three fewer naked
-  edges — strictly better once cross-storey extensions are removed).
-
-No other fixture moved. `whole-level-flat` managed 22/0 is preserved specifically because the band
-(not hard containment) keeps the corridor walls' legitimate near-graze cap targets.
-
----
-
-## Tests (added / modified)
-
-- `ConsolidateWallStacksTests` — stamped-range cases re-contracted to explicit-arm; new
-  `..._StampedRange_GlobalZero_Inert`, `Clean_StampedRange_GapZero_StaysInert`,
-  `Clean_StampedRange_ArmedSmallGap_ActivatesConsolidation`.
-- `TowersBucketLeverDiagnosticTests` — `..._StampedBucket_MergesWhenArmed` (was `_MergesWithGlobalOff`),
-  new `..._StampedBucket_InertWithGlobalOff` (root cause A pin);
-  `..._FixAcceptance_Gap05StripSurvives` now 30 cells + room-survives asserts;
-  `..._GapSweep_MergedAt05_NearMissAt047` now asserts equal topology + west-room void reclaim.
-- `PR61Face3DHomeParityTests` — B-clean-extend pinned 20 (was 19) + rationale.
-- `GoldenMasterIntegrationTests` — three managed re-pins (above), justified in comments.
-- `PR61TowersQuantitativeValidationTests` — gap-0.5 test rewritten to the fixed outcome
-  (30 cells, west room survives + grows to 88.385); delta test rewritten (30→30, no removed cells,
-  +20.745 attribution).
-- NEW `TowersGap05StageDiagnosticTests` — stage-by-stage tables + hard regression
-  `Towers_Gap05_StripRoomWalls_StayWithinLocalStorey`.
-- NEW `FlatCapCandidateProbeTests` — old-vs-new cap-candidacy diff probe (diagnostic).
-
-## Test results
-
-Full battery, all green (native present):
-
-| suite | result |
-|---|---|
-| `SAM.OCCT.UnitTests` | **617 passed, 0 failed** |
-| `SAM.OCCT.GrasshopperTests` | **15 passed, 0 failed** |
-| `SAM.OCCT.IntegrationTests` | **269 passed, 0 failed, 2 skipped** (18m43s) |
-
-The 2 integration skips are environmental, not coverage gaps: `NativeMissingIntegrationTests`
-(inverse-gated — skips when native IS available) and `LargePanelSewGuardIntegrationTests`
-(size-gated). The integration run includes all 15 golden-master signatures, the PR #61 towers
-quantitative suite (gaps 0 / 0.4 / 0.5 + delta), `WorkflowParityIntegrationTests` (9 fixtures),
-`Extend3DPlaneTargetIntegrationTests` (the E2 home fixtures), `ControlledWorkflow*` (9/9), the
-`Benchmark1500` perf guard, and the new `Towers_Gap05_StripRoomWalls_StayWithinLocalStorey`
-regression.
-
-### Verification note — flat-only refinement (found and fixed during the battery)
-
-The first full-suite run surfaced two managed-path regressions from the initial (flat-agnostic)
-graze band: `Revit-home-panels` (14/0 → 14/11 naked) and `AdjacencyCluster-home` (18 → 17 cells) —
-both real-export fixtures with pitched roofs. Root cause: the band rejected the legitimate E2
-sloped-plane cap targets. Fixed by restricting the far-graze rejection to flat caps (§ Root cause B
-› B2); re-verified all affected fixtures green. (A separate one-off run showed ~56 spurious
-fixture-load failures — `Convert.ToSAM` returning empty under transient file contention; these did
-not recur on clean runs and are unrelated to the change. Every affected test passes deterministically
-in isolation and in the clean full run.)
+- The forced-managed pipeline (`forceManagedPipeline: true`) is a diagnostic tripwire, not a
+  production path. On `whole-level-towers` at band 0 it now under-closes the (39.467, −6.160) room
+  (previously closed only via the phantom extension); both production paths close it. Per-frame
+  extend/fill (which would close it legitimately on the managed path) remains deferred (see the
+  Phase 6c deviation note in `TESTING.md`).
+- `CAP_LOCAL_LEVEL_CONTINUATION` is a fixed 2.0 m band justified empirically against the current
+  fixtures (legitimate continuation ≤ ~1.57 m, cross-storey ≥ ~2.87 m). A fixture with a legitimate
+  grazing cap continuation beyond 2.0 m, or a phantom plate less than 2.0 m above a wall, would need
+  the band revisited; the band is deliberately below one storey pitch so an adjacent-storey plate is
+  never selected by a graze.
