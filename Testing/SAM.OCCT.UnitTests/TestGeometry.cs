@@ -19,6 +19,23 @@ namespace SAM.OCCT.UnitTests
             return Face3D.Create(loops);
         }
 
+        /// <summary>
+        /// A planar face with a single internal opening (hole). Both loops are given as their own
+        /// ordered corner lists; <see cref="Face3D.Create(System.Collections.Generic.IEnumerable{IClosedPlanar3D}, bool)"/>
+        /// selects the larger-area loop as the external boundary and orients the smaller as the hole,
+        /// so the caller need not pre-orient. Used to exercise hole-aware cap containment
+        /// (<see cref="Face3D.On(Point3D, double)"/>) in the wall-to-cap selection.
+        /// </summary>
+        public static Face3D CreatePlanarFaceWithOpening(Point3D[] outerLoop, Point3D[] openingLoop)
+        {
+            List<IClosedPlanar3D> loops = new List<IClosedPlanar3D>
+            {
+                new Polygon3D(new List<Point3D>(outerLoop)),
+                new Polygon3D(new List<Point3D>(openingLoop)),
+            };
+            return Face3D.Create(loops);
+        }
+
         public static Face3D CreateTriangleFace()
         {
             return CreatePlanarFace(

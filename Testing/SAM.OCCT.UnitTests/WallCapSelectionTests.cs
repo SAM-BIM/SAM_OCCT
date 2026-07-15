@@ -16,6 +16,11 @@ namespace SAM.OCCT.UnitTests
     /// continuation band <see cref="Panel3DSnapSolver.CAP_LOCAL_LEVEL_CONTINUATION"/>). No dependence on the
     /// cap's axis-aligned bounding box, world <c>normal.Z</c> flatness, a pitch threshold, or a pitched-cap
     /// exemption.
+    /// <para>The "real cap face" excludes internal openings: Case A uses <see cref="Face3D.On"/>
+    /// (outer-boundary-inclusive, holes excluded), not <see cref="Face3D.InRange"/> (outer loop only). A
+    /// wall sample under an atrium/stairwell opening is therefore NOT physically covered — it is eligible
+    /// only through the bounded Case B continuation, exactly like a sample outside the cap footprint. Tests
+    /// 13–17 exercise this; test 15 fails before the hole-aware swap.</para>
     /// <para>These exercise the production selection through the public <see cref="Panel3DSnapSolver.Extend"/>
     /// (pure managed, no native) and assert the observable outcome — the wall's post-extend Z extent — rather
     /// than reimplementing the selection. Cases marked "fails at 20a7665" are the ones that distinguish this
@@ -45,6 +50,18 @@ namespace SAM.OCCT.UnitTests
             Face3D face = TestGeometry.CreatePlanarFace(
                 new Point3D(x0, y0, zc), new Point3D(x1, y0, zc),
                 new Point3D(x1, y1, zc), new Point3D(x0, y1, zc));
+            return new SnappedPanel(1, face, 1.0, 0.3, Panel3DSnapSolver.DEFAULT_MaxExtension);
+        }
+
+        // A flat cap at elevation zc spanning [x0,x1]x[y0,y1] with a rectangular internal opening
+        // [hx0,hx1]x[hy0,hy1] — the atrium/stairwell hole that makes Case A hole-aware. The real cap
+        // FACE covers the annulus around the opening but NOT the opening itself.
+        private static SnappedPanel HoledFlatCap(double zc, double x0, double x1, double y0, double y1,
+            double hx0, double hx1, double hy0, double hy1)
+        {
+            Face3D face = TestGeometry.CreatePlanarFaceWithOpening(
+                new[] { new Point3D(x0, y0, zc), new Point3D(x1, y0, zc), new Point3D(x1, y1, zc), new Point3D(x0, y1, zc) },
+                new[] { new Point3D(hx0, hy0, zc), new Point3D(hx1, hy0, zc), new Point3D(hx1, hy1, zc), new Point3D(hx0, hy1, zc) });
             return new SnappedPanel(1, face, 1.0, 0.3, Panel3DSnapSolver.DEFAULT_MaxExtension);
         }
 
@@ -263,6 +280,95 @@ namespace SAM.OCCT.UnitTests
 
             Assert.True(MinZ(wall) < -1.4, $"Downward extension must reach the floor; MinZ={MinZ(wall)}");
             Assert.True(MaxZ(wall) >= WallTop - Distance, $"Top must be unchanged; MaxZ={MaxZ(wall)}");
+        }
+
+        // ── Hole-aware Case A (Root Cause B2, Sol Phase-1): a cap's real face is the annulus around an
+        //    internal opening, not the opening itself. A wall sample under the opening is NOT physically
+        //    covered — it is only ever eligible through the bounded Case B continuation, exactly like a
+        //    sample outside the cap footprint. Case A now uses Face3D.On (hole-aware) instead of
+        //    Face3D.InRange (outer-loop only). ──
+
+        // 13. Sample in solid cap material with the opening off to the side: Case A still extends at any
+        //     gap, through a holed cap. (Guards that the hole-aware swap did not break ordinary coverage.)
+        [Fact]
+        public void Extend_HoledCapSampleInSolidMaterial_ExtendsAtAnyGap()
+        {
+            SnappedPanel wall = Wall(); // plan centre (2,0)
+            // Cap 3 m above the wall top (gap 3.0 > band 2.0); opening [3,4]x[-0.5,0.5] does NOT hold (2,0).
+            SnappedPanel cap = HoledFlatCap(6.0, -1, 5, -1, 1, 3, 4, -0.5, 0.5);
+            RunExtend(new List<SnappedPanel> { wall, cap });
+
+            Assert.True(MaxZ(wall) > 5.9,
+                $"Case A through solid cap material must extend at any gap; MaxZ={MaxZ(wall)}");
+        }
+
+        // 14. Sample inside the opening, cap within the continuation band (gap 1.9 < 2.0): NOT Case A, but
+        //     admitted via Case B — an in-opening sample behaves exactly like an outside-footprint graze.
+        [Fact]
+        public void Extend_SampleInsideOpeningNearCap_ExtendsViaCaseB()
+        {
+            SnappedPanel wall = Wall();
+            // Opening [1.5,2.5]x[-0.5,0.5] holds the wall centre (2,0); cap z=4.9, gap 1.9 < band 2.0.
+            SnappedPanel cap = HoledFlatCap(4.9, -1, 5, -1, 1, 1.5, 2.5, -0.5, 0.5);
+            RunExtend(new List<SnappedPanel> { wall, cap });
+
+            Assert.True(MaxZ(wall) > 4.8,
+                $"A sample inside the opening within the Case B band must extend; MaxZ={MaxZ(wall)}");
+        }
+
+        // 15. Sample inside the opening, cap a storey up (gap 3.0 > 2.0): rejected. THE Sol-defect regression
+        //     test — at HEAD Face3D.InRange ignores the hole, treats the sample as covered (Case A) and
+        //     extends the wall to z=6 at unlimited gap. Passes only after the Face3D.On swap.
+        [Fact]
+        public void Extend_SampleInsideOpeningFarCap_Rejected()
+        {
+            SnappedPanel wall = Wall();
+            SnappedPanel cap = HoledFlatCap(6.0, -1, 5, -1, 1, 1.5, 2.5, -0.5, 0.5); // gap 3.0 > band 2.0
+            RunExtend(new List<SnappedPanel> { wall, cap });
+
+            Assert.True(MaxZ(wall) < 3.5,
+                $"A cap whose opening sits over the wall, a storey up, must be rejected; MaxZ={MaxZ(wall)}");
+        }
+
+        // 16. Opening-boundary determinism. A sample exactly ON the opening edge counts as cap material
+        //     (hole containment is edge-exclusive) → Case A → extends far. The same sample 1 mm inside the
+        //     opening is NOT material → Case B → rejected at a 3 m gap. Deterministic across the tolerance.
+        [Fact]
+        public void Extend_SampleOnOpeningBoundary_DeterministicToleranceBehaviour()
+        {
+            // D1: opening left edge x=2 passes exactly through the wall centre (2,0) → on-edge = material.
+            SnappedPanel wallOn = Wall();
+            SnappedPanel capOn = HoledFlatCap(6.0, -1, 5, -1, 1, 2, 3, -0.5, 0.5); // gap 3.0
+            RunExtend(new List<SnappedPanel> { wallOn, capOn });
+            Assert.True(MaxZ(wallOn) > 5.9,
+                $"A sample on the opening boundary is cap material (Case A) and must extend; MaxZ={MaxZ(wallOn)}");
+
+            // D2: opening now starts at x=1.999, so the same (2,0) is 1 mm INSIDE the opening → not material.
+            SnappedPanel wallIn = Wall();
+            SnappedPanel capIn = HoledFlatCap(6.0, -1, 5, -1, 1, 1.999, 3, -0.5, 0.5); // gap 3.0
+            RunExtend(new List<SnappedPanel> { wallIn, capIn });
+            Assert.True(MaxZ(wallIn) < 3.5,
+                $"A sample 1 mm inside the opening is not covered and must be rejected at a 3 m gap; MaxZ={MaxZ(wallIn)}");
+        }
+
+        // 17. Downward variant: a floor whose opening sits under the wall a storey below (gap 3.0) is
+        //     rejected; the same holed floor within the band (gap 1.5) extends via Case B.
+        [Fact]
+        public void Extend_SampleInsideOpeningDownward_FarFloorRejectedNearFloorExtends()
+        {
+            // Far: floor z=-3, opening [1.5,2.5]x[-0.5,0.5] holds the centre; gap 3.0 > band 2.0 → rejected.
+            SnappedPanel wallFar = Wall();
+            SnappedPanel floorFar = HoledFlatCap(-3.0, -1, 5, -1, 1, 1.5, 2.5, -0.5, 0.5);
+            RunExtend(new List<SnappedPanel> { wallFar, floorFar });
+            Assert.True(MinZ(wallFar) > -0.1,
+                $"A floor whose opening sits under the wall a storey below must be rejected; MinZ={MinZ(wallFar)}");
+
+            // Near: identical holed floor at z=-1.5, gap 1.5 < band 2.0 → Case B extends downward.
+            SnappedPanel wallNear = Wall();
+            SnappedPanel floorNear = HoledFlatCap(-1.5, -1, 5, -1, 1, 1.5, 2.5, -0.5, 0.5);
+            RunExtend(new List<SnappedPanel> { wallNear, floorNear });
+            Assert.True(MinZ(wallNear) < -1.4,
+                $"A holed floor within the continuation band must extend downward via Case B; MinZ={MinZ(wallNear)}");
         }
     }
 }

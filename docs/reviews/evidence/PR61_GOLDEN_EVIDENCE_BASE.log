@@ -1,0 +1,53 @@
+# PR #61 golden evidence — BASE run (real execution)
+# Date:                2026-07-15
+# Worktree:            SAM_OCCT-wt61-goldenbase (git worktree add --detach 7a677de; refs untouched)
+# Commit SHA:          7a677de63b611c0baf2996548f1542f65471605a (PR #61 head, OLD state — predates the
+#                      accepted B2 cap-selection redesign at 331ca6b and the hole-aware fix)
+# Native DLL:          build\SAM.Occt.Native.dll (copied from the main build; ABI-compatible — the
+#                      native does the boolean/sew ops, the OLD managed cap-selection logic at 7a677de
+#                      produces the OLD-state cell/face counts regardless of native minor version)
+# Native DLL SHA256:   F177228B3551BA8B42A6D992DB176A3F02801B78638BA79C39CCE7BA290966CC
+# SAM dependency SHA:  63e4c64b1a71e8f6fd0a617d0c89a64164a784d1 (..\SAM, branch perf/mappanels-spatial-prefilter)
+# SAM_Solver dep SHA:  3155a13135f5abf5afbace29f6a8b72a79d52dcc (..\SAM_Solver)
+# Test source:         PR61GoldenEvidenceBaseRecordingTests.cs — a recording-only copy of the head
+#                      evidence test (asserts stripped, since they encode the NEW state); lived only in
+#                      the throwaway worktree and is NOT part of the PR. Decode path identical to head.
+# Command:
+#   dotnet test Testing/SAM.OCCT.IntegrationTests \
+#     --filter "FullyQualifiedName~PR61GoldenEvidenceBaseRecordingTests|FullyQualifiedName~GoldenMasterIntegrationTests" \
+#     --logger "console;verbosity=detailed"
+# ------------------------------------------------------------------------------
+# OLD state (before the B2 redesign + hole fix). Compare against PR61_GOLDEN_EVIDENCE_HEAD.log (NEW
+# state). No byte identity is claimed: no canonical output hash is generated.
+# ==============================================================================
+
+=== golden-master signatures at 7a677de (GoldenMasterIntegrationTests) ===
+whole-level-towers.sam   [managed]:      21 cell(s); 8689.707 m3; 8 naked; 180 face(s)   (NEW: 20 / 8610.924 / 178)
+whole-level-towers.sam   [managed-0.21]: 25 cells; 0 naked; 9281.107190604413 m3; 231 faces   (NEW: 228 faces)
+two-level-tilted.sam     [managed-0.21]: 9 cells; 24 naked; 2082.4100099648185 m3; 412 faces   (NEW: 10 / 21 / 2194.419 / 397)
+two-level-tilted.sam     [managed]:      15 cell(s); 2307.863 m3; 32 naked; 375 face(s)   (unchanged)
+
+=== (a) whole-level-towers, managed band 0: the phantom cell is PRESENT at 7a677de ===
+[a] managed band 0: cells=21 naked=8 phantom=PRESENT centroid=(39.467,-6.160,13.837) vol=78.784 area=27.113 z=[12.384,15.290] faces=7
+[a] raw path: cells=32 room@(39.467,-6.160)=PRESENT vol=75.443
+# The 21st cell — the ≈78.784 m³ cross-storey closure — is PRESENT here; it is ABSENT in the HEAD run
+# (20 cells). Its neighbours are unchanged (it dropped, was not merged). The raw production path is
+# unaffected: 32 cells with the real room present (vol 75.443), identical old↔new.
+
+=== (b) two-level-tilted, managed 0.21: the mirror twin is ABSENT at 7a677de ===
+[b] two-level-tilted managed 0.21: cells=9
+    recovered twin @(43.452,-3.533) = ABSENT
+    existing  twin @(43.452,-22.467) = PRESENT vol=112.008 area=37.713 z=[4.162,8.124]
+# Only the existing twin closes here (9 cells). Its mirror at (43.452,-3.533) is ABSENT — blocked by the
+# phantom graze. The HEAD run recovers it (10 cells) with equal vol/area/Z, proving legitimate recovery.
+
+=== (c) whole-level-towers, managed 0.21: 231 faces at 7a677de (HEAD: 228) ===
+[c] towers managed 0.21: cells=25 faces=231 totalVolume=9281.107 adjacencies=19
+    sorted per-cell volumes:
+    [73.998, 80.817, 82.696, 86.381, 105.259, 114.778, 115.356, 119.577, 124.117, 153.037, 159.373, 163.261, 174.145, 250.827, 609.444, 609.444, 625.860, 625.860, 625.860, 625.860, 625.860, 625.860, 625.861, 625.865, 1251.712]
+# 25 cells, total volume 9281.107, 19 adjacencies, and the SAME 25 sorted per-cell volumes as the HEAD
+# run — only the face count differs (231 here vs 228 at HEAD). Cell identities, volumes and adjacency
+# are unchanged: the 231 -> 228 drop is redundant-face cleanup, no topology change.
+
+# Result: PR61GoldenEvidenceBaseRecordingTests 1/1 passed; GoldenMasterIntegrationTests 15/15 passed
+# (against the OLD 7a677de golden pins).

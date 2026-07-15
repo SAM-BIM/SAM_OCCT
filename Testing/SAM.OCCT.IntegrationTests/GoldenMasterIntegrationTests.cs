@@ -165,7 +165,8 @@ namespace SAM.OCCT.IntegrationTests
             // junction (centres (43.68, -9.80) / (43.68, -1.80), tops 15.41) being extended to the east
             // tower's z=27.49 plate they merely bbox-graze by ~50 mm in plan — 12 m phantom walls that
             // enclosed one artifact cell (-78.78 m³) on this forced-managed diagnostic path. The raw-path
-            // golden (the production outcome, 31 cells) is byte-identical.
+            // golden (the production outcome) is UNCHANGED - the raw-first path never reaches NearestCoveringCap
+            // (it adopts the watertight input directly), so this managed-path fix cannot move it.
             yield return new object[] { "whole-level-towers.sam", 20, 8, 8610.924 };
         }
 
@@ -211,8 +212,9 @@ namespace SAM.OCCT.IntegrationTests
             // when that cap's surface is more than the overshoot band from the wall's own extreme:
             // • two-level-tilted: 9 cells / 24 naked → 10 / 21 (one more room closes, three fewer
             //   naked edges — strictly better closure once phantom cross-storey extensions are gone).
-            // • whole-level-towers: cells (25), naked (0) and volume BYTE-IDENTICAL; only the face
-            //   count drops 231 → 228 (the phantom graze-extended wall faces disappear).
+            // • whole-level-towers: cells (25), naked (0) and volume UNCHANGED (within tolerance); only the
+            //   face count drops 231 → 228 (the phantom graze-extended wall faces disappear). Cell identities
+            //   and adjacency are unchanged - see PR61GoldenEvidenceIntegrationTests / the base/head logs.
             yield return new object[] { "two-level-tilted.sam", 10, 21, 2194.4185132571847, 397 };
             yield return new object[] { "whole-level-towers.sam", 25, 0, 9281.10719060441, 228 };
         }

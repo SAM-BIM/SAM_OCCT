@@ -1305,8 +1305,10 @@ dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj -
 ## Plane-target cap extension (docs/EXTEND3D_ROBUST_HANDOVER.md, Phase E2)
 
 E2 makes `Panel3DSnapSolver.Extend` grow each wall to the ACTUAL cap surface instead of a flat Z at the
-cap's ridge height. Cap SELECTION is the pre-E2 nearest-cap-over-the-wall-centre rule verbatim; what
-changes is the TARGET, gated by a discriminator (`IsCapFlatRelativeToWall`):
+cap's ridge height. Cap SELECTION at E2 was still the pre-E2 nearest-cap-over-the-wall-centre rule (later
+replaced by the Root Cause B2 real-face rule — Case A on the cap material via `Face3D.On` / Case B graze
+within the continuation band; see `docs/PR61_TOWERS_GAP05_ROOT_CAUSE.md`); what E2 changes is the TARGET,
+gated by a discriminator (`IsCapFlatRelativeToWall`):
 
 - A cap **flat relative to its wall** (its normal aligned within 15° of the wall's own in-plane up-axis
   — a level floor/ceiling, *including a rigidly tilted level* where wall and slab tilt together) keeps
@@ -1822,6 +1824,7 @@ Clean3D/Extend3D — runs everywhere, no native call):
 Golden masters stay **byte-identical with flags off**: `GoldenMasterIntegrationTests`
 (`Solve3D_ManagedPath_...`, `Solve3D_ManagedPath021_...`, `Solve3D_RawPath_...`) is unchanged by P3 — the
 MaxExtend revert restores the pre-P3 signatures exactly (all 15 pinned rows pass), so no golden was
+re-baselined in this phase.
 
 
 ### Consolidation / double-wall merge tests (Phase 1–2, 2026-07-12)
@@ -1843,4 +1846,33 @@ MaxExtend revert restores the pre-P3 signatures exactly (all 15 pinned rows pass
   roll-up, cap seam-crossing diagnostics.
 
 - `Towers_DoubleWallGap_FixAcceptance_Gap05StripSurvives` — Phase 1d acceptance: gap 0.5
-  must give 29 cells (strip space survives); gap 0.47 ⇒ 29 cells, no merge.re-baselined in this phase.
+  must give 30 cells (strip space survives); gap 0.47 ⇒ 30 cells, no merge.
+
+### Hole-aware cap selection + permanent golden evidence (PR #61 Phase 2, 2026-07-15)
+
+Root Cause B2's cap-selection Case A originally used `Face3D.InRange`, which tests only a cap's OUTER
+loop and ignores internal openings — a wall sample under an atrium/stairwell hole was treated as
+physically covered and accepted at unlimited vertical gap. The fix is a one-line predicate swap to the
+hole-aware `Face3D.On` (outer-boundary-inclusive, internal openings excluded) in
+`Panel3DSnapSolver.NearestCoveringCap`; an in-opening sample is now handled exactly like an
+outside-footprint sample — not Case A, eligible only via the bounded Case B continuation.
+
+- `WallCapSelectionTests` (unit, pure-managed) — cases 13–17 add hole coverage on a flat cap with an
+  internal rectangular opening, driving the production `Extend`: (13) sample in solid material extends at
+  any gap through a holed cap; (14) sample inside the opening within the 2.0 m band extends via Case B;
+  (15) sample inside the opening a storey up (gap 3 m) is rejected — **fails before the swap**, the
+  Sol-defect regression; (16) on-opening-edge = material (Case A) vs 1 mm inside = rejected, deterministic
+  across the tolerance; (17) downward far-floor rejected / near-floor extends. Cases 1–12 (hole-free) are
+  a strict no-op under the swap (`On ≡ InRange` when a face has no internal edges).
+- `PR61GoldenEvidenceIntegrationTests` (integration, native-gated) — permanent geometric classification of
+  the three accepted managed/0.21 golden changes, decoded via the `GoldenMasterIntegrationTests` path
+  (Solve3D → Create.Shells): (a) the removed towers band-0 cell is a cross-storey **phantom** (absent under
+  the fix; podium walls stop at 15.290, not the 27.49 tower plate; the real room kept on raw and 0.21
+  paths); (b) the added two-level-tilted 0.21 cell is the legitimate **mirror twin** (equal vol 112.008 /
+  area 37.713 / Z, symmetric about the envelope mid, non-overlapping, inside the envelope); (c) the towers
+  0.21 231→228 face drop is **cleanup without topology change** (same 25 cells, total volume, 19
+  adjacencies and the same 25 sorted per-cell volumes; only redundant faces removed). Old-state numbers
+  that the current code cannot produce (the 21st phantom cell, 231 faces, the 9-cell two-level state) are
+  captured by a real base run at PR #61 head 7a677de in
+  `docs/reviews/evidence/PR61_GOLDEN_EVIDENCE_{BASE,HEAD}.log`. No byte identity is claimed (no canonical
+  output hash is generated).

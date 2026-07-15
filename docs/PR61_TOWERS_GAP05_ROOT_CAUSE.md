@@ -59,9 +59,12 @@ floor plates by ~40–50 mm and were extended one-to-four storeys past their own
 For each plan-bbox-overlapping cap whose surface over the wall sample is on the grow side:
 
 - **Case A — physical containment.** The wall sample projected onto the cap plane, `(x, y, capZ)`,
-  lies inside the real cap face (`Face3D.InRange`, boundary-inclusive, holes ignored). The wall
-  genuinely sits under/over the cap, so it is a valid target at any vertical gap (a wall grows to its
-  own ceiling however far above).
+  lies on the real cap material (`Face3D.On`, outer-boundary-inclusive, internal openings excluded).
+  The wall genuinely sits under/over the cap, so it is a valid target at any vertical gap (a wall grows
+  to its own ceiling however far above). A sample under an internal opening (an atrium/stairwell hole)
+  is not covered — it falls to Case B, exactly like a sample outside the cap footprint. (An earlier
+  version used `Face3D.InRange`, which tests only the outer loop and wrongly accepted an in-opening
+  sample at unlimited gap; `WallCapSelectionTests` cases 13–17 pin the fix.)
 - **Case B — bounded boundary continuation.** The sample lies outside the real face (a graze). Valid
   only when the cap surface over the sample is within `CAP_LOCAL_LEVEL_CONTINUATION` (2.0 m) of the
   wall extreme — the cap continues the wall's own floor/roof boundary within its local level rather
@@ -128,6 +131,10 @@ without topology change** — three redundant wall faces left by phantom graze e
 produced.
 
 Managed-path golden expectations were updated with these deltas in `GoldenMasterIntegrationTests`.
+Permanent geometric evidence for all three classifications lives in the native-gated
+`PR61GoldenEvidenceIntegrationTests`, with base/head console captures committed at
+`docs/reviews/evidence/PR61_GOLDEN_EVIDENCE_BASE.log` (7a677de, OLD state) and
+`docs/reviews/evidence/PR61_GOLDEN_EVIDENCE_HEAD.log` (NEW state). No byte identity is claimed.
 
 ---
 
@@ -141,5 +148,7 @@ Managed-path golden expectations were updated with these deltas in `GoldenMaster
 - `CAP_LOCAL_LEVEL_CONTINUATION` is a fixed 2.0 m band justified empirically against the current
   fixtures (legitimate continuation ≤ ~1.57 m, cross-storey ≥ ~2.87 m). A fixture with a legitimate
   grazing cap continuation beyond 2.0 m, or a phantom plate less than 2.0 m above a wall, would need
-  the band revisited; the band is deliberately below one storey pitch so an adjacent-storey plate is
-  never selected by a graze.
+  the band revisited; the band is deliberately below one storey pitch, so a cap a full storey (~3.05 m)
+  above a wall is not selected by a graze. It is a bound between the two measured populations, not a
+  guarantee that no adjacent-storey surface is ever selectable — a plate 2–3 m above a wall would still
+  fall inside the band; the band holds because the real fixtures separate cleanly.

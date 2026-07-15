@@ -1,0 +1,55 @@
+# PR #61 golden evidence — HEAD run (real execution)
+# Date:                2026-07-15
+# Branch:              debug/pr61-towers-gap05
+# State:               working tree of the PR #61 Phase-2 change set (hole-aware Root Cause B2
+#                      cap selection: Face3D.InRange -> Face3D.On), parent 6562afc. This log is
+#                      committed in the same change set as the source it measures.
+# Native DLL:          build\SAM.Occt.Native.dll
+# Native DLL SHA256:   F177228B3551BA8B42A6D992DB176A3F02801B78638BA79C39CCE7BA290966CC
+# SAM dependency SHA:  63e4c64b1a71e8f6fd0a617d0c89a64164a784d1 (..\SAM, branch perf/mappanels-spatial-prefilter)
+# SAM_Solver dep SHA:  3155a13135f5abf5afbace29f6a8b72a79d52dcc (..\SAM_Solver)
+# Test source:         PR61GoldenEvidenceIntegrationTests.cs (this change set)
+# Command:
+#   dotnet test Testing/SAM.OCCT.IntegrationTests --no-build \
+#     --filter "FullyQualifiedName~PR61GoldenEvidenceIntegrationTests|FullyQualifiedName~GoldenMasterIntegrationTests" \
+#     --logger "console;verbosity=detailed"
+# ------------------------------------------------------------------------------
+# NEW state (this fix + the accepted B2 redesign at 331ca6b). Compare against
+# PR61_GOLDEN_EVIDENCE_BASE.log (PR #61 head 7a677de, OLD state). No byte identity is claimed:
+# no canonical output hash is generated.
+# ==============================================================================
+
+=== golden-master signatures (GoldenMasterIntegrationTests) ===
+whole-level-towers.sam   [managed]:      20 cell(s); 8610.924 m3; 8 naked; 178 face(s)
+whole-level-towers.sam   [managed-0.21]: 25 cells; 0 naked; 9281.10719060441 m3; 228 faces
+whole-level-towers.sam   [raw]:          32 cell(s); 9430.665 m3; 0 naked; 215 face(s)
+two-level-tilted.sam     [managed-0.21]: 10 cells; 21 naked; 2194.4185132571847 m3; 397 faces
+two-level-tilted.sam     [managed]:      15 cell(s); 2307.863 m3; 32 naked; 375 face(s)
+
+=== (a) whole-level-towers, managed band 0: the removed ≈78.784 m³ cell is a cross-storey phantom ===
+[a] managed band 0: cells=20 naked=8 phantomProbe(39.467,-6.160,13.837)=ABSENT
+    tallest vertical wall top near east-tower junction = 15.290 (phantom needed ≈27.49)
+[a] raw path: cells=32 naked=0 room@(39.467,-6.160)=PRESENT vol=75.443 z=[12.440,15.410]
+[a] managed 0.21: cells=25 room@(39.467,-6.160)=PRESENT vol=82.696
+# The phantom is ABSENT under the fix; the podium walls stop at their own storey top (15.290),
+# never reaching the z≈27.49 tower plate they merely bbox-graze; and the REAL room at (39.467,-6.160)
+# is preserved on both production paths (raw 32 cells; managed-0.21 25 cells).
+
+=== (b) two-level-tilted, managed 0.21: the added ≈112.009 m³ cell is the legitimate mirror twin ===
+[b] two-level-tilted managed 0.21: cells=10
+    recovered (43.452,-3.533,6.143) vol=112.008 area=37.713 z=[4.162,8.124]
+    existing  (43.452,-22.467,6.143) vol=112.008 area=37.713 z=[4.162,8.124]
+    envelope y=[-27.350,1.347] mid=-13.002
+# Equal volume (112.008), equal floor area (37.713) and equal Z interval ([4.162,8.124]); same X;
+# Y-centres symmetric about the envelope mid (-3.533 + -22.467 = -26.000 = 2 × -13.000); bounding
+# boxes Y-disjoint; both inside the envelope. A legitimate recovered room, not a spurious closure.
+
+=== (c) whole-level-towers, managed 0.21: 231 → 228 faces is redundant-face cleanup, no topology change ===
+[c] towers managed 0.21: cells=25 faces=228 totalVolume=9281.107 adjacencies=19
+    sorted per-cell volumes (cell-identity witness; identical old↔new at 231↔228 faces):
+    [73.998, 80.817, 82.696, 86.381, 105.259, 114.778, 115.356, 119.577, 124.117, 153.037, 159.373, 163.261, 174.145, 250.827, 609.444, 609.444, 625.860, 625.860, 625.860, 625.860, 625.860, 625.860, 625.861, 625.865, 1251.712]
+# 25 cells, total volume 9281.107, 19 cell-to-cell face adjacencies, and the 25 sorted per-cell
+# volumes above are IDENTICAL to the BASE run (231 faces). Only the face count fell 231 -> 228:
+# three redundant faces removed, no cell added, removed, split or merged.
+
+# Result: PR61GoldenEvidenceIntegrationTests 3/3 passed; GoldenMasterIntegrationTests 15/15 passed.

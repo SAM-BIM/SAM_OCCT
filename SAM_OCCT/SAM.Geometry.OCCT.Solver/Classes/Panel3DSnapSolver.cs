@@ -2377,9 +2377,11 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>
         /// Managed extend: grow each (vertical) wall up to the nearest cap - the floor or roof that sits above
         /// it and covers it in plan - so the native resolve can trim the wall against that surface and close the
-        /// volume. E2 (docs/EXTEND3D_ROBUST_HANDOVER.md): the SELECTION is the pre-E2 nearest-cap-over-the-wall
-        /// -centre rule (so rigidly-tilted and flat levels stay byte-identical), but the TARGET is now the
-        /// cap's real surface. A cap that is flat relative to the wall (a level floor/ceiling, incl. a tilted
+        /// volume. The SELECTION is the nearest covering cap over the wall centre, validated against the cap's
+        /// ACTUAL face (Root Cause B2, see <see cref="NearestCoveringCap"/>): Case A - the sample lies on the cap
+        /// material (<see cref="Face3D.On"/>, internal openings excluded), valid at any gap; Case B - a graze
+        /// (sample outside the face or under an opening), valid only within <see cref="CAP_LOCAL_LEVEL_CONTINUATION"/>.
+        /// The TARGET (E2, docs/EXTEND3D_ROBUST_HANDOVER.md) is the cap's real surface. A cap that is flat relative to the wall (a level floor/ceiling, incl. a tilted
         /// level) still uses the scalar extend to the cap elevation + overshoot; only a cap genuinely PITCHED
         /// relative to the wall (a real sloped roof over a vertical wall) is followed as a sloped plane, so the
         /// wall gains a matching sloped top instead of a flat one at the ridge height - the sloped-roof models
@@ -2447,9 +2449,10 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>
         /// Extends one wall in one direction (<paramref name="up"/> = to a roof/ceiling above; false = to a
-        /// floor below) to the single nearest covering cap over the wall centre. Cap SELECTION is the pre-E2
-        /// rule verbatim (nearest cap whose surface over the wall centre clears the wall extreme, whole-wall
-        /// plan overlap), so the accepted managed baselines do not move on the fixtures E1 already conditioned.
+        /// floor below) to the single nearest covering cap over the wall centre. Cap SELECTION is the Root Cause
+        /// B2 real-face rule (see <see cref="NearestCoveringCap"/>): the nearest covering cap whose surface over
+        /// the wall centre clears the wall extreme and that is valid by Case A (the sample lies on the cap
+        /// material, holes excluded) or Case B (a graze within <see cref="CAP_LOCAL_LEVEL_CONTINUATION"/>).
         /// <para>What E2 changes is the TARGET: a cap that is flat RELATIVE TO THIS WALL (its normal aligned
         /// with the wall's own up-axis - a level floor/ceiling, including a rigidly TILTED level where wall and
         /// slab tilt together) takes the pre-E2 scalar extend to the cap's world extreme + overshoot
@@ -2643,7 +2646,11 @@ namespace SAM.Geometry.OCCT.Solver
         /// (Revit-home / AdjacencyCluster-home / Face3D-home) is ~1.57 m, while the smallest cross-storey graze
         /// - the whole-level-towers podium wall vs. the tower's next-storey floor plate - is ~2.87 m (about one
         /// 3.05 m storey pitch). 2.0 m clears the former and rejects the latter with margin on both sides. It is
-        /// deliberately below one storey pitch so a grazing cap on an adjacent storey can never be selected.</para>
+        /// deliberately below one storey pitch: a cap a full storey (~3.05 m) above a wall is not selected by a
+        /// graze. This is a bound between the two MEASURED populations, not a guarantee that no adjacent-storey
+        /// surface is ever selectable - a plate 2-3 m above a wall would still fall inside the band; the band
+        /// holds because the real fixtures separate cleanly (legitimate continuation &lt;= ~1.57 m, cross-storey
+        /// &gt;= ~2.87 m).</para>
         /// </summary>
         public const double CAP_LOCAL_LEVEL_CONTINUATION = 2.0;
 
@@ -2655,11 +2662,15 @@ namespace SAM.Geometry.OCCT.Solver
         /// <para>A candidate is valid in one of two ways, both rigid-frame-invariant (they use the cap's own
         /// face and plane, never a world-axis bbox as containment):</para>
         /// <para><b>Case A - physical containment.</b> The wall sample projected onto the cap plane,
-        /// (<paramref name="x"/>, <paramref name="y"/>, capZ), lies inside the real cap face
-        /// (<see cref="Face3D.InRange"/>, boundary-inclusive). The wall genuinely sits under/over the cap, so it
-        /// is a valid target at ANY vertical gap (a wall grows up to its own ceiling however far above).</para>
-        /// <para><b>Case B - bounded boundary continuation.</b> The sample lies OUTSIDE the real cap face (a
-        /// graze - the plane value there is an extrapolation beyond the physical face). It is valid only when
+        /// (<paramref name="x"/>, <paramref name="y"/>, capZ), lies on the real cap MATERIAL
+        /// (<see cref="Face3D.On"/>, outer-boundary-inclusive, internal openings EXCLUDED). The wall genuinely
+        /// sits under/over the cap, so it is a valid target at ANY vertical gap (a wall grows up to its own
+        /// ceiling however far above). A sample under an internal opening (an atrium/stairwell hole) is NOT
+        /// Case A - the cap has no material there - so it falls to Case B, exactly like a sample outside the
+        /// cap footprint. (Face3D.InRange would test only the outer loop and wrongly accept it at any gap.)</para>
+        /// <para><b>Case B - bounded boundary continuation.</b> The sample lies OUTSIDE the real cap face, or
+        /// inside one of its internal openings (a graze - the plane value there is an extrapolation beyond the
+        /// physical material). It is valid only when
         /// the cap surface over the sample is within <see cref="CAP_LOCAL_LEVEL_CONTINUATION"/> of the wall
         /// extreme: the cap continues the wall's boundary within its own local level rather than jumping a
         /// storey. This admits a wall reaching the pitched roof or the neighbouring cap tile it grazes (up to
@@ -2695,9 +2706,14 @@ namespace SAM.Geometry.OCCT.Solver
                     continue; // the cap surface here is beyond the wall extreme on the WRONG side - not a cap
                 }
 
-                // Real-face validity: Case A (sample inside the actual cap face) at any gap, else Case B
-                // (graze - sample outside the face) only within the local-level continuation band.
-                bool contained = capFace3D.InRange(new Point3D(x, y, capZ), toleranceDistance);
+                // Real-face validity: Case A (sample on the actual cap MATERIAL) at any gap, else Case B
+                // (graze - sample outside the face, OR inside an internal opening) only within the local-level
+                // continuation band. Face3D.On is hole-aware (outer-boundary-inclusive, internal openings
+                // excluded); Face3D.InRange would test only the outer loop and wrongly treat a sample under an
+                // atrium/opening as physically covered - accepted then at unlimited vertical gap. The tol quirk
+                // in On (its outer InRange call uses the default Tolerance.Distance rather than forwarding
+                // toleranceDistance) is inert here: this call site always passes tol.Distance (== 1e-6).
+                bool contained = capFace3D.On(new Point3D(x, y, capZ), toleranceDistance);
                 if (!contained && System.Math.Abs(capZ - wallExtreme) > CAP_LOCAL_LEVEL_CONTINUATION)
                 {
                     continue; // grazing cap beyond the wall's local level - another storey's surface
