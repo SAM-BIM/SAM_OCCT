@@ -754,55 +754,18 @@ namespace SAM.Geometry.OCCT.Solver
                 return false; // no edge had evidence at all - let the caller fall back
             }
 
-            // Mitred per-edge offset: each edge's own (possibly unmoved) infinite line, offset outward by its
-            // own growth; vertex j is the intersection of edge (j-1)'s and edge j's offset lines, so a
-            // zero-growth edge keeps its own line exactly and only its shared corners may slide along it.
-            List<Geometry.Planar.Point2D> offsetStart = new List<Geometry.Planar.Point2D>(n);
-            List<Geometry.Planar.Point2D> offsetEnd = new List<Geometry.Planar.Point2D>(n);
-            for (int i = 0; i < n; i++)
-            {
-                Geometry.Planar.Point2D a2 = boundary2D[i];
-                Geometry.Planar.Point2D b2 = boundary2D[(i + 1) % n];
-                if (growth[i] <= tolerance || !TryOutward2D(a2, b2, centroid2D, tolerance, out Geometry.Planar.Vector2D outward2D))
-                {
-                    offsetStart.Add(a2);
-                    offsetEnd.Add(b2);
-                    continue;
-                }
-
-                Geometry.Planar.Vector2D offset = outward2D * growth[i];
-                offsetStart.Add(a2.GetMoved(offset));
-                offsetEnd.Add(b2.GetMoved(offset));
-            }
-
-            List<Geometry.Planar.Point2D> newVertices = new List<Geometry.Planar.Point2D>(n);
-            for (int j = 0; j < n; j++)
-            {
-                int prev = (j - 1 + n) % n;
-                Geometry.Planar.Point2D intersection = Geometry.Planar.Query.Intersection(
-                    offsetStart[prev], offsetEnd[prev], offsetStart[j], offsetEnd[j], false, tolerance);
-
-                // Parallel offset lines (a straight run of colinear edges, or two zero-growth edges sharing a
-                // line): the shared vertex is just this edge's own (possibly moved) start.
-                newVertices.Add(intersection ?? offsetStart[j]);
-            }
-
-            List<Geometry.Planar.Segment2D> newSegments = new List<Geometry.Planar.Segment2D>(n);
-            for (int j = 0; j < n; j++)
-            {
-                newSegments.Add(new Geometry.Planar.Segment2D(newVertices[j], newVertices[(j + 1) % n]));
-            }
-
-            // Fail closed: a mitred reconstruction that crosses itself (a sharp reflex corner overshooting past
-            // an adjacent edge) is rejected outright - the caller falls back to the uniform GrowOutwardTo rather
-            // than adopting a self-intersecting face.
-            List<Geometry.Planar.Segment2D> selfIntersections = Geometry.Planar.Query.SelfIntersectionSegment2Ds(newSegments, double.MaxValue, tolerance);
-            if (selfIntersections != null && selfIntersections.Count > n)
+            // Reconstruct the grown loop with topology-safe joins: an ordinary corner keeps its exact mitre; a
+            // remote or near-parallel mitre (which the legacy infinite-line intersection amplified into a
+            // multi-metre spike) is replaced by a deterministic bevel bounded to the two adjacent measured
+            // movements; a self-intersecting result is rejected outright, so the caller falls back to the
+            // uniform GrowOutwardTo rather than adopting a bad face. See MeasuredEdgeLoopReconstructor.
+            if (!MeasuredEdgeLoopReconstructor.TryReconstruct(
+                boundary2D, growth, tolerance, out MeasuredEdgeLoopReconstructor.Reconstruction reconstruction))
             {
                 return false;
             }
 
-            Geometry.Planar.Polygon2D newPolygon2D = new Geometry.Planar.Polygon2D(newVertices);
+            Geometry.Planar.Polygon2D newPolygon2D = new Geometry.Planar.Polygon2D(reconstruction.Vertices);
             newPolygon2D.SetOrientation(Geometry.Planar.Query.Orientation(boundary2D));
 
             int holesBefore = face3D.GetInternalEdge3Ds()?.Count ?? 0;
@@ -899,47 +862,15 @@ namespace SAM.Geometry.OCCT.Solver
                 return false;
             }
 
-            // Mitred per-edge offset — same reconstruction as GrowEdgesToWalls.
-            List<Geometry.Planar.Point2D> offsetStart = new List<Geometry.Planar.Point2D>(n);
-            List<Geometry.Planar.Point2D> offsetEnd = new List<Geometry.Planar.Point2D>(n);
-            for (int i = 0; i < n; i++)
-            {
-                Geometry.Planar.Point2D a2 = boundary2D[i];
-                Geometry.Planar.Point2D b2 = boundary2D[(i + 1) % n];
-                if (growth[i] <= tolerance || !TryOutward2D(a2, b2, centroid2D, tolerance, out Geometry.Planar.Vector2D outward2D))
-                {
-                    offsetStart.Add(a2);
-                    offsetEnd.Add(b2);
-                    continue;
-                }
-
-                Geometry.Planar.Vector2D offset = outward2D * growth[i];
-                offsetStart.Add(a2.GetMoved(offset));
-                offsetEnd.Add(b2.GetMoved(offset));
-            }
-
-            List<Geometry.Planar.Point2D> newVertices = new List<Geometry.Planar.Point2D>(n);
-            for (int j = 0; j < n; j++)
-            {
-                int prev = (j - 1 + n) % n;
-                Geometry.Planar.Point2D intersection = Geometry.Planar.Query.Intersection(
-                    offsetStart[prev], offsetEnd[prev], offsetStart[j], offsetEnd[j], false, tolerance);
-                newVertices.Add(intersection ?? offsetStart[j]);
-            }
-
-            List<Geometry.Planar.Segment2D> newSegments = new List<Geometry.Planar.Segment2D>(n);
-            for (int j = 0; j < n; j++)
-            {
-                newSegments.Add(new Geometry.Planar.Segment2D(newVertices[j], newVertices[(j + 1) % n]));
-            }
-
-            List<Geometry.Planar.Segment2D> selfIntersections = Geometry.Planar.Query.SelfIntersectionSegment2Ds(newSegments, double.MaxValue, tolerance);
-            if (selfIntersections != null && selfIntersections.Count > n)
+            // Same topology-safe reconstruction as GrowEdgesToWalls (bounded mitre / deterministic bevel,
+            // self-intersection rejected). See MeasuredEdgeLoopReconstructor.
+            if (!MeasuredEdgeLoopReconstructor.TryReconstruct(
+                boundary2D, growth, tolerance, out MeasuredEdgeLoopReconstructor.Reconstruction reconstruction))
             {
                 return false;
             }
 
-            Geometry.Planar.Polygon2D newPolygon2D = new Geometry.Planar.Polygon2D(newVertices);
+            Geometry.Planar.Polygon2D newPolygon2D = new Geometry.Planar.Polygon2D(reconstruction.Vertices);
             newPolygon2D.SetOrientation(Geometry.Planar.Query.Orientation(boundary2D));
 
             int holesBefore = face3D.GetInternalEdge3Ds()?.Count ?? 0;
