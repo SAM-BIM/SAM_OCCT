@@ -1,0 +1,29 @@
+{
+  "fixture": "two-level-tilted.sam",
+  "status": "incomplete",
+  "testedCorrections": [
+    {
+      "stage": "Extend3D output",
+      "panelIndices": [8, 9, 27, 30],
+      "operation": "all non-empty subsets grown outward by 0.5 m",
+      "resultSpaces": 27
+    },
+    {
+      "stage": "source Panels",
+      "panelIndices": [45, 46, 123, 124],
+      "operation": "all non-empty subsets grown outward by 0.5 m and 1.0 m before Extend3D",
+      "resultSpaces": 27
+    },
+    {
+      "stage": "Extend3D output",
+      "panelIndex": 9,
+      "changedEdge": {
+        "beforeY": -19.674949,
+        "afterY": -19.296959,
+        "movementVector": [0.0, 0.377990, 0.0]
+      },
+      "resultSpaces": 27
+    }
+  ],
+  "measuredFinding": "The upper and lower plane intersections of profiled wall 65 are already contained by output caps 8, 9, 27 and 30; full-profile cap growth alone does not restore either adjacent room."
+}

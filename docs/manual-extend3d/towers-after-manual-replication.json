@@ -1,0 +1,37 @@
+{
+  "fixture": "whole-level-towers.sam",
+  "status": "space count and floor area reproduced; requested volume differs",
+  "sourcePanelIndex": 205,
+  "sourcePanelGuid": "37ba6b21-8be6-4973-aa51-70baeb9ed66d",
+  "outputPanelIndex": 5,
+  "panelType": "Floor",
+  "changedEdge": {
+    "before": [
+      [23.193952, -0.778020, 12.24],
+      [18.347091, -0.755919, 12.24]
+    ],
+    "after": [
+      [23.193952, -0.698020, 12.24],
+      [18.347091, -0.675919, 12.24]
+    ],
+    "movementVector": [0.0, 0.08, 0.0],
+    "movementDistance": 0.08
+  },
+  "coveredWalls": [
+    {
+      "outputPanelIndex": 125,
+      "bbox": [[17.142706, -9.344236, 12.19], [17.142706, -0.744236, 15.436334]]
+    },
+    {
+      "outputPanelIndex": 105,
+      "bbox": [[21.921446, -8.917228, 12.19], [21.951086, -0.694236, 15.409650]]
+    }
+  ],
+  "result": {
+    "spaces": 31,
+    "floorArea": 3210.934713,
+    "volume": 9760.515642,
+    "requestedVolume": 9760.501049,
+    "volumeDelta": 0.014593
+  }
+}
