@@ -121,7 +121,8 @@ namespace SAM.Geometry.OCCT.Solver
             SolverDiagnostics diagnostics = null,
             SourceMap sourceMap = null,
             double bucketBetweenLevels = 0.0,
-            List<CleanRecord> cleanRecords = null)
+            List<CleanRecord> cleanRecords = null,
+            double doubleWallGap = 0.0)
         {
             Result result = new Result();
             if (panels == null || panels.Count == 0)
@@ -146,6 +147,17 @@ namespace SAM.Geometry.OCCT.Solver
             //    panels onto one backer plane, and align consecutive vertical wall segments offset by a small
             //    step jog, repeated until nothing changes (see SnapToFixedPoint).
             result.SnapIterationCount = SnapToFixedPoint(panels, tol, alignColinearOffset, diagnostics, MaxSnapIterations, cleanRecords);
+
+            // 2a. OPT-IN explicit double-wall consolidation (default doubleWallGap = 0 -> skipped, byte-identical):
+            //     collapse each residual chain of near-parallel, overlapping vertical walls within the user's
+            //     declared gap onto its dominant plane in one deterministic pass. Runs AFTER the fixed point
+            //     because it exists to finish what the pairwise snap cannot - the Snapped-frozen residue planes
+            //     of a 3+ wall stack, and anti-parallel pairs beyond the void guard the user declares artifacts.
+            //     Also activates when any panel carries a stamped ConsolidationRange > 0 (per-panel override).
+            if (doubleWallGap > tol.Distance || panels.Any(x => x?.ConsolidationRange > tol.Distance))
+            {
+                Panel3DSnapSolver.ConsolidateWallStacks(panels, doubleWallGap, tol.Angle, tol.Distance, tol.VerticalAngle, diagnostics, cleanRecords);
+            }
 
             // 2b. Normalize each level's caps onto that level's own datum plane (Phase 6c). Cluster the current
             //     cap faces into RAW level frames (the pinned 0.15 m band - UNCHANGED), then optionally merge

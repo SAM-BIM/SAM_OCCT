@@ -11,6 +11,7 @@ C++/OpenCASCADE layer (`SAM.Occt.Native`).
 | --- | --- | --- |
 | `Testing/SAM.OCCT.UnitTests` | Pure-managed logic that runs identically anywhere: `OcctBuildOptions`, `OcctDiagnostic`, the `OcctNativeInputBuilder` serializer, and the `Query` input guard clauses (which return before any native call). | No |
 | `Testing/SAM.OCCT.IntegrationTests` | Real OCCT boolean / cell-complex operations (cells, volumes, face adjacencies), **and** the graceful *native-missing* contract. | Gated on native availability |
+| `Testing/SAM.OCCT.GrasshopperTests` | PR #61 GH component contract tests. Instantiates production Grasshopper components, inspects registered GUIDs, inputs, outputs, access, and persistent defaults. The Grasshopper SDK assembly is resolved at runtime from the restored NuGet package (no Rhino installation needed), so these tests always execute — a resolution failure is a loud test failure, never a silent skip. | No (GH SDK from NuGet) |
 
 Anything whose outcome depends on whether the native library is loadable lives in
 the integration project, never in the unit project — so the unit suite cannot be
@@ -67,6 +68,9 @@ dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj
 # Integration tests — build the native layer first, then run
 .\build-native.ps1 -SkipVcpkgInstall
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj
+
+# Grasshopper component contract tests — GH SDK resolved from the NuGet cache; always execute
+dotnet test Testing/SAM.OCCT.GrasshopperTests/SAM.OCCT.GrasshopperTests.csproj
 ```
 
 If the native library is not on the load path, the integration tests skip and
@@ -82,6 +86,7 @@ dotnet build SAM_OCCT.sln -c Debug
 dotnet build Grasshopper/SAM.Analytical.Grasshopper.OCCT/SAM.Analytical.Grasshopper.OCCT.csproj -c Debug
 dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj -c Debug
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj -c Debug
+dotnet test Testing/SAM.OCCT.GrasshopperTests/SAM.OCCT.GrasshopperTests.csproj -c Debug
 ```
 
 ## Continuous integration
@@ -1812,4 +1817,25 @@ Clean3D/Extend3D — runs everywhere, no native call):
 Golden masters stay **byte-identical with flags off**: `GoldenMasterIntegrationTests`
 (`Solve3D_ManagedPath_...`, `Solve3D_ManagedPath021_...`, `Solve3D_RawPath_...`) is unchanged by P3 — the
 MaxExtend revert restores the pre-P3 signatures exactly (all 15 pinned rows pass), so no golden was
-re-baselined in this phase.
+
+
+### Consolidation / double-wall merge tests (Phase 1–2, 2026-07-12)
+
+- `ConsolidateWallStacksTests` — Pure-managed unit tests for `ConsolidateWallStacks`:
+  cap-follow (`DragAbuttingCapEdges`) drags abutting cap edges by exactly the move distance;
+  non-abutting caps remain untouched; other-storey caps (z outside band) untouched; gap 0 /
+  no move ⇒ no-op. Stamped pair merges with global off; one-sided stamped ranges both ways;
+  travel cap = max(member, dominant); stamped caps merge while unstamped caps are untouched.
+  `SnapStage.Clean` activates on ranges with gap 0. Near-miss emitted + bounded + suppressed
+  when overlap/ratio fails. All 15 existing facts unchanged (no-stamp guard).
+
+- `ParameterPrecedenceTests.ResolveConsolidationRanges_*` — Unit tests for the
+  `ResolveConsolidationRanges` resolver: stamped BucketSize ⇒ value; unstamped ⇒ 0.
+
+- `TowersBucketLeverDiagnosticTests.Towers_DoubleWallGap_FillMargin_DefectDiagnostic` —
+  Phase 0 matrix test {gap 0.4, 0.47, 0.5} × {fillMargin 0.4, 0.5}: cell diff vs baseline,
+  wall z-span / super-tall / coplanar-duplicate report, ExtendRecords + NoTargetWithinReach
+  roll-up, cap seam-crossing diagnostics.
+
+- `Towers_DoubleWallGap_FixAcceptance_Gap05StripSurvives` — Phase 1d acceptance: gap 0.5
+  must give 29 cells (strip space survives); gap 0.47 ⇒ 29 cells, no merge.re-baselined in this phase.

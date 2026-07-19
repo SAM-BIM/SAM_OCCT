@@ -70,6 +70,23 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>Threaded to each <see cref="Panel3DSnapSolver.NormalizeCapOffset"/>.</summary>
         public double NormalizeCapOffset { get; set; } = 0.3;
 
+        /// <summary>Threaded to each <see cref="Panel3DSnapSolver.BucketBetweenLevels"/>.</summary>
+        public double BucketBetweenLevels { get; set; } = 0.0;
+
+        /// <summary>Threaded to each <see cref="Panel3DSnapSolver.FillMargin"/>.</summary>
+        public double FillMargin { get; set; } = 0.5;
+
+        /// <summary>Threaded to each <see cref="Panel3DSnapSolver.DirectionalCapGrow"/>.</summary>
+        public bool DirectionalCapGrow { get; set; } = true;
+
+        /// <summary>Threaded to each <see cref="Panel3DSnapSolver.DoubleWallGap"/> (explicit double-wall
+        /// consolidation; default 0 = off).</summary>
+        public double DoubleWallGap { get; set; } = 0.0;
+
+        /// <summary>Threaded to each <see cref="Panel3DSnapSolver.ConsolidationRanges"/> (per-panel
+        /// merge ranges; stamp a panel's <c>SolverParameter.BucketSize</c> to set its per-panel range).</summary>
+        public List<double> ConsolidationRanges { get; set; }
+
         // ---- Outputs (mirror Panel3DSnapSolver's public surface for the adopted best-effort result) ----
 
         /// <summary>The adopted resolved output faces (baseline, or the last accepted escalation round).</summary>
@@ -594,6 +611,11 @@ namespace SAM.Geometry.OCCT.Solver
                 Up = Up,
                 AlignColinearOffset = AlignColinearOffset,
                 NormalizeCapOffset = NormalizeCapOffset,
+                BucketBetweenLevels = BucketBetweenLevels,
+                FillMargin = FillMargin,
+                DirectionalCapGrow = DirectionalCapGrow,
+                DoubleWallGap = DoubleWallGap,
+                ConsolidationRanges = ConsolidationRanges,
                 MinCellVolume = tune.MinCellVolume,
                 SewSafetyFactor = tune.SewSafetyFactor,
                 ConsolidateRebuild = tune.ConsolidateRebuild

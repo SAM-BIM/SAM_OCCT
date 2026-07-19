@@ -55,6 +55,10 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>An opposed-partition collapse was attempted and rejected (gate failed).</summary>
         RejectedCollapse,
 
+        /// <summary>A wall stack was consolidated onto one plane by the explicit double-wall pass
+        /// (<see cref="Panel3DSnapSolver.ConsolidateWallStacks"/>, opt-in via <c>doubleWallGap</c>).</summary>
+        ConsolidatedStack,
+
         /// <summary>Records which resolve level (raw/snapped/conditioned) was adopted, and why.</summary>
         AdoptedLevel,
 
@@ -116,6 +120,14 @@ namespace SAM.Geometry.OCCT.Solver
         /// Appended at the end of the enum so existing members keep their ordinal values (public-enum binary
         /// contract).
         /// </summary>
-        LevelGroupOverMerge
+        LevelGroupOverMerge,
+
+        /// <summary>Consolidation near-miss (Phase 1c): a wall pair passes the parallel+overlap+ratio gates
+        /// for <see cref="Panel3DSnapSolver.ConsolidateWallStacks"/> but fails ONLY the gap — the
+        /// separation is within 2× the pair gap — so raising <c>doubleWallGap</c> (or stamping a larger
+        /// per-panel range) would merge them. Never silent: the diagnostic names both centroids and the
+        /// required value so the user can see a near-merge without guessing. Appended at the end so
+        /// existing members keep their ordinal values (public-enum binary contract).</summary>
+        ConsolidationNearMiss
     }
 }

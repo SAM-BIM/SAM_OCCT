@@ -21,7 +21,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     /// round only when the closure signature does not regress. When the baseline is already watertight
     /// this behaves exactly like SAMOCCT.Solve3D.
     /// </summary>
-    public class SAMOCCTAutoTune3D : GH_SAMVariableOutputParameterComponent
+    public class SAMOCCTAutoTune3DLegacy : GH_SAMVariableOutputParameterComponent
     {
         public override Guid ComponentGuid => new Guid("9de8b4c0-14f6-4828-b966-aa57cf58143b");
 
@@ -29,7 +29,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
-        public SAMOCCTAutoTune3D()
+        public SAMOCCTAutoTune3DLegacy()
           : base("SAMOCCT.AutoTune3D", "SAMOCCT.AutoTune3D", "Diagnosis-driven closure: runs the raw-first 3D panel solver, then - only when naked edges remain or closure needed a fabricated gap-fill patch - bounded rounds of measured-to-target wall extension on the implicated panels only, accepted only when the closure signature does not regress. Behaves exactly like SAMOCCT.Solve3D on an already-watertight model.", "SAM", "OCCT")
         {
         }

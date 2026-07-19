@@ -55,6 +55,7 @@ namespace SAM.Geometry.OCCT.Solver
                 case CleanRecordKind.SnappedToBacker: return "snapped-to-backer";
                 case CleanRecordKind.CapNormalized: return "cap-normalized";
                 case CleanRecordKind.CoplanarMerged: return "coplanar-merged";
+                case CleanRecordKind.StackConsolidated: return "stack-consolidated";
                 case CleanRecordKind.DroppedInvalid: return "dropped-invalid";
                 case CleanRecordKind.Preserved: return "preserved";
                 default: return Kind.ToString();

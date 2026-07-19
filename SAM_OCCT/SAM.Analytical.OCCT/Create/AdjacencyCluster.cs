@@ -744,6 +744,17 @@ namespace SAM.Analytical.OCCT
                     "Parity check: {0} relation(s) added vs {1} expected (2 x {2} shared face adjacency(ies) + {3} envelope face(s)); {4} face(s) had TopologyKey==0 (silently skipped); {5} panel(s) received zero relation(s).",
                     relationCount, expectedRelationCount, faceAdjacencyCount, envelopeFaceCount, topologyKeyZeroFaceCount, zeroRelationPanelCount));
 
+            if (zeroRelationPanelCount > 0)
+            {
+                // Named, not just counted (plan §10-P4 item 2): a panel bounding zero spaces is exactly the
+                // "orphan cluster panel" signal ValidateSpaces' PanelContributionFinder re-derives independently -
+                // surfacing the Guids here too means a GH user sees it on the builder's own diagnostic feed.
+                List<System.Guid> zeroRelationGuids = panels.Values.Select(x => x.Guid).Where(x => !relatedPanelGuids.Contains(x)).OrderBy(x => x).Take(20).ToList();
+                cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_ZERO_RELATION_PANELS", string.Format(
+                    "{0} panel(s) bound zero spaces (first {1} shown): {2}{3}",
+                    zeroRelationPanelCount, zeroRelationGuids.Count, string.Join(", ", zeroRelationGuids), zeroRelationPanelCount > zeroRelationGuids.Count ? ", ..." : string.Empty));
+            }
+
             if (relationCount == 0)
             {
                 return null;
@@ -817,6 +828,21 @@ namespace SAM.Analytical.OCCT
                 if (location == null)
                 {
                     return null;
+                }
+
+                // D7 (docs/CONTROLLED_WORKFLOW_PLAN.md §1): FindSeedSpace only ever returns the first
+                // UNCLAIMED seed whose location this shell contains, so a second expected seed landing in an
+                // already-claimed cell is silently dropped to a generic "Cell N" name with no signal that two
+                // expected spaces occupy one built cell. Scanning ALL containing seeds here (used or not)
+                // recovers that signal without changing which seed wins (still FindSeedSpace's own choice).
+                List<Space> containingSeeds = seedSpaces == null
+                    ? new List<Space>()
+                    : seedSpaces.Where(x => x?.Location != null && (shell.Inside(x.Location, options.FuzzyTolerance, options.Tolerance) || shell.On(x.Location, options.Tolerance))).ToList();
+                if (containingSeeds.Count > 1)
+                {
+                    cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_MERGED_SEED_CELL", string.Format(
+                        "Cell {0} contains {1} expected seed space location(s) ({2}) - only one becomes this cell's identity; the rest are the \"expected spaces merged\" signal, not a dropped cell.",
+                        i, containingSeeds.Count, string.Join(", ", containingSeeds.Select(x => string.Format("{0} ({1})", x.Name, x.Guid)))));
                 }
 
                 Space space = FindSeedSpace(shell, seedSpaces, usedSeedSpaceGuids, options);

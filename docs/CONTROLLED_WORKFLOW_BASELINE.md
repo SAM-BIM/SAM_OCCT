@@ -118,6 +118,167 @@ Separator scan (vertical panel strictly between the two locations, requiring the
 2. **P3:** wall-to-cap extension on the 3 merged datums; the x≈3.3–3.7 partitions (South1|South2, North1|North0, North1|North2, East1|South2) must reach floor+ceiling or emit skip/risk records saying why not; no cap growth into West3's column (z≈15.29 within its footprint).
 3. **P4:** 9 cells / 9 matched / 0 missing / 0 merged / 0 split / 0 extra / West3 (GUID `02a1ae27…`) double-height true / 0 orphan cluster panels — on this original fixture, **contingent on North1's separator question (§5) resolving** in P2/P3's favor; otherwise P4 must decide (with the real matcher, not this diagnostic) whether North1 needs a corrected panel or whether an existing wall simply isn't reaching where expected.
 
-## 8. Suite status at capture
+## 8. P4 addendum (2026-07-10, `feat/cw-p4-acceptance`) — hard acceptance status on the chain
 
-Unit: **495/495 passed**. Integration: **185 passed / 3 skipped / 0 failed** (baseline test included; perf benchmark skipped via `SAM_OCCT_SKIP_PERF=1`). Note: building the full solution's Grasshopper projects fails on their post-build deploy (`copy` into `%APPDATA%\SAM`) while Rhino/Grasshopper is running — close Rhino for full-solution builds; the test projects and solver libraries build clean regardless.
+Chain run: `Clean3D(bucketBetweenLevels: 0.21)` -> `Extend3D(inputAlreadyClean: true, directionalCapGrow: true,
+bucketBetweenLevels: 0.21)` -> `Create.AdjacencyCluster` rebuild path (seeds = `ExpectedSpaceSet.ToSeedSpaces()`,
+built from the CLEANED panels, not the raw originals — see note below) -> `SpaceMatcher`.
+
+**Result: 9 of 9 spaces matched cleanly** (East1/South1 corner-closure gap resolved — see fix below).
+All spaces match with 0 merged/split/incorrectly-bounded/missing anywhere, 3 level groups (12.24/15.29/18.34),
+0 orphan cluster panels. 2 benign Extra cells from coplanar-cap coalescing. Pinned in
+`Testing/SAM.OCCT.IntegrationTests/ControlledWorkflowAcceptanceIntegrationTests.cs`
+(`AcceptanceChain_FixtureNineSpaces_AllNineMatchCleanly`).
+
+**East1|South1 corner-closure gap — RESOLVED (2026-07-10).** The root cause was fragmented cap strips at the
+Z=15.29 intermediate level in the East1|South1 corner. The four-skin separator band left cap panels split into
+narrow Y-range strips with ~0.1–0.4 m gaps between them. The directional cap grow (`directionalCapGrow=true`)
+only extends cap edges toward facing WALLS — caps on the same plane with a gap between them have no wall to
+grow toward, leaving the cap strips separated with insufficient overlap for MakerVolume to form watertight
+intersections with walls.
+
+**Fix: coplanar-cap coalescing pass in Fill** (`SAM.Geometry.OCCT.Solver/Classes/Panel3DSnapSolver.cs` Fill
+method, second pass at end). When `directionalCapGrow` is active, after all caps have been grown toward walls,
+a second pass detects caps with coplanar neighbours within the fill margin and applies a uniform
+`GrowOutward(margin)` to each. This closes the inter-cap gaps that directional wall-based growth alone leaves
+open. The pass is skipped when `directionalCapGrow=false` (the solver's default) because `GrowOutwardTo` /
+`GrowOutward` already handle uniform expansion in that path. No fillMargin increase is needed — the
+default 0.5 m works. West3's double-height is preserved (verified: `DoubleHeightOk[West3Guid] == true`).
+
+**Sweep evidence (fillMargin 0.1–1.0 on the 9-space fixture, after the coplanar-cap coalescing fix):**
+| fillMargin | dirCapGrow | matched | notes |
+|-----------|------------|---------|-------|
+| 0.1–0.2    | either     | 4       | Too small — North0/1, South2 also missing |
+| 0.3        | either     | 6–7     | North1 closes; East1/South1 still missing |
+| 0.4–0.5    | either     | 7–9     | East1/South1 close at 0.5 with the coalescing pass |
+| 0.6+       | either     | 9       | All match; coalescing pass closes the gap at 0.5 |
+
+**Prior (incorrect) diagnoses superseded:**
+- The overlap-ratio near-miss (~96.76%) was a red herring (disproven by single-clean-separator test).
+- The wider SewingTolerance (0.20 m) was diagnostic evidence of a gap but not a fix.
+- All per-panel overrides (BucketSize, MaxExtend, Weight) were exhaustively tested and do not help.
+
+**Code changes for this fix:**
+- `Panel3DSnapSolver.Fill()`: added coplanar-cap coalescing second pass (gated on `directionalCapGrow`).
+- `SnappedPanel.GrowEdgesToCaps()`: new method for mathematical cap-to-cap edge detection (available as a
+  building block; the coalescing pass uses the simpler `GrowOutward` approach).
+- `OcctBuildOptions.MergeCoplanarBeforeBuild`: new option for managed coplanar pre-merge before native build.
+- `Create.Shells()`: wires `MergeCoplanarBeforeBuild` to run `MergeCoplanarFace3Ds` before MakerVolume.
+- No ConditionStage reorder needed; no fillMargin increase needed.
+
+### Pipeline optimization review (2026-07-10)
+
+A systematic comparison of the controlled workflow (`Clean3D → Extend3D → AdjacencyCluster`) against the
+solver pipeline (`Solve3D`) identified these gaps and optimizations:
+
+**Gap in the AdjacencyCluster path (now closed):** The solver's `ResolveStage` runs a managed coplanar
+pre-merge (`MergeCoplanarFace3Ds`) BEFORE the native MakerVolume build. This collapses overlapping coplanar
+faces from the fill/extend step, which is what lets the kernel form a zoned cell complex. The AdjacencyCluster
+path (`CellComplexByPanels → Create.Shells`) had no equivalent — overshooting faces went directly to
+MakerVolume without pre-merge. **New `OcctBuildOptions.MergeCoplanarBeforeBuild`** adds this step, gated
+behind a flag (default off, enabled for the controlled workflow chain).
+
+**Gap in cap growth (now closed):** The solver's `HealStage.SewV2` performs an adaptive residual sew with
+tolerance capping and fusion veto after MakerVolume. The AdjacencyCluster path has `SewBeforeBuild` (pre-build
+sew) but no post-build adaptive sew. The coplanar-cap coalescing pass (above) addresses the root cause at
+the managed level, before the native build.
+
+**Investigated but NOT changed:**
+- `NearestCoveringCap` plan overlap tolerance: the geometric tolerance (1e-6 m) is overly strict for
+  building-scale models. Increasing it to `MacroDistance` (0.001 m) or 0.01 m changes the wall-to-cap
+  matching for Face3D-home and AdjacencyCluster-home fixtures, causing golden-master regressions. Left for
+  a future focused PR with fixture re-baselining.
+- ConditionStage order (Fill before Extend): tested but not needed — the coplanar-cap coalescing pass
+  addresses the same gap without reordering.
+- SewV2 port to AdjacencyCluster path: deferred. The pre-build sew (SewBeforeBuild) + managed pre-merge
+  (MergeCoplanarBeforeBuild) + coplanar-cap coalescing provide three layers of defense.
+
+**Notable pipeline differences (Solve3D has these, AdjacencyCluster does not):**
+- `HealStage.RetainDroppedV2` — re-adds clean geometry for dropped sources. Not applicable: AdjacencyCluster
+  doesn't compare source-vs-output faces; SpaceMatcher handles cell matching differently.
+- `GapFill.FromNakedWires` — patches residual naked-boundary loops. Not applicable: AdjacencyCluster
+  produces cells via its own MakerVolume call which shouldn't leave naked loops.
+- `PanelReconstruction.Build` with aperture re-hosting — Solve3D uses source-aware Guid policy. The
+  controlled workflow uses `BuildPanels` (simpler attribution). Not a gap: the controlled workflow's
+  output is the AdjacencyCluster, not rebuilt panels.
+- `ConsolidationRebuild` — final `Create.Shells` over resolved+patches+retained. Not applicable:
+  AdjacencyCluster already does its own `Create.Shells` as the primary build.
+
+Diagnostic tests added:
+- `EastSouthExtendDiagnosticTests` — pins wall vertical-extension skips
+- `EastSouthFillMarginSweepTests` — sweeps fillMargin × directionalCapGrow
+- `EastSouthFullSweepDetailedTests` — writes full sweep to file
+- `FullFixtureFixedConfigTests` — confirms 9/9 with the fix
+
+**Builder diagnostics added this phase** (`SAM_OCCT/SAM.Analytical.OCCT/Create/AdjacencyCluster.cs`, builder
+layer only, no solver change): `SAM_OCCT_ANALYTICAL_MERGED_SEED_CELL` names every case where >1 expected seed
+space lands in one built cell (previously `FindSeedSpace` silently kept only the first — D7); and
+`SAM_OCCT_ANALYTICAL_ZERO_RELATION_PANELS` lists (up to 20) the Guids of cluster panels bounding zero spaces,
+alongside the pre-existing aggregate `SAM_OCCT_ANALYTICAL_PARITY` count.
+
+**`ExpectedSpaceSet` level-datum source correction** (validation layer,
+`SAM_OCCT/SAM.Analytical.OCCT.Solver/Classes/ExpectedSpaceSet.cs` usage — no class-code change, a call-site
+correction): the P1-era design fed `ExpectedSpaceSet.Create` the raw ORIGINAL input panels so its own
+independent `LevelFrame.Cluster` + 1-D merge could work "self-contained... independent of P2 plumbing." Now
+that P2 exists, this diverges from reality: `SnapStage.Clean`'s raw-frame clustering runs on panels already
+processed by `StripInternalEdges`/`SnapOpposedPartitions`/`SnapToFixedPoint`, never on the untouched originals,
+so the two clusterings see materially different input (22 raw slab-skin elevations vs. the post-snap set) and
+can disagree. Verified on this fixture: from the raw originals, `ExpectedSpaceSet` computed 4 groups at
+12.160/12.503/15.210/18.260 — none matching the real built-cell datums; from the CLEANED panels (Clean3D's own
+output), it computed the correct 12.240/15.290/18.340. The acceptance test now sources `levelSourcePanels` from
+the cleaned panels. No `ExpectedSpaceSet`/`SpaceMatcher` code changed — only which panels the caller passes.
+
+## 9. Suite status at capture (optimizations + parameter discovery + sol review)
+
+Unit: **617/617 passed**. Integration: **277 passed / 2 skipped / 0 failed**.
+
+P4 acceptance: **9/9 expected spaces matched** with 2 benign Extra cells remaining from the
+coplanar-cap coalescing pass. This is "9/9 expected spaces matched", NOT "fully valid with no
+extra cells" — the 2 Extra cells are pinned (not asserted away) so a regression producing MORE
+extras is caught.
+
+## 10. Parameter discovery — AutoTune3D + ParameterDiscoverySolver
+
+**`ParameterDiscoverySolver`** sweeps `bucketBetweenLevels × fillMargin × directionalCapGrow` over
+plausible ranges, runs the full managed pipeline for each combination, scores by closure quality, and
+reports the best configuration. The GH component `SAMOCCT.AutoTune3D` v0.2.0 exposes this via a
+`discoverParameters_` toggle.
+
+**Results on the 9-space fixture (face-only sweep):**
+| bucketBetweenLevels | fillMargin | directionalCapGrow | cells | naked |
+|---------------------|------------|-------------------|-------|-------|
+| 0.21 | 0.5 | true | 13 | 0 | ← **best** (our production config) |
+| 0.3 | 0.5 | true | 13 | 0 |
+| 0.4 | 0.5 | true | 13 | 0 |
+| 0.5 | 0.5 | true | 13 | 0 |
+
+**Results on whole-level-towers (face-only sweep):**
+| bucketBetweenLevels | fillMargin | directionalCapGrow | cells | naked |
+|---------------------|------------|-------------------|-------|-------|
+| **0.4** | **0.3** | **false** | **33** | **5** | ← **best (+8 vs baseline)** |
+| 0.15 | 0.4 | false | 26 | 0 |
+| 0.21 | 0.3 | false | 28 | 4 |
+
+The towers result matches the known tuned config (band=0.4, fillMargin≈0.3-0.4 from
+`WorkflowParity_WholeLevelTowers_FixtureTuning04`). The discovery sweep finds this automatically
+without manual fixture knowledge.
+
+**GH workflow for parameter discovery:**
+```
+[SAMOCCT.AutoTune3D] discoverParameters_=true
+    → OptimalBand  ──→ [SAMOCCT.Extend3D] bucketBetweenLevels_
+    → OptimalFill  ──→ [SAMOCCT.Extend3D] fillMargin_
+    → OptimalDirCap ──→ [SAMOCCT.Extend3D] directionalCapGrow_
+                          inputAlreadyClean_=true
+                          → [SAMOCCT.CreateAdjacencyCluster] MergeCoplanarBeforeBuild=true
+                          → [SAMOCCT.MergeCoplanarAdjacencyCluster]
+```
+
+**Only 3 Extend3D inputs are active** on the controlled chain (inputAlreadyClean=true):
+`fillMargin_`, `bucketBetweenLevels_`, `directionalCapGrow_`. The other 4 Stage-A inputs
+(minBucketSize_, thicknessFactor_, alignColinearOffset_, normalizeCapOffset_) are INERT —
+Stage A is skipped when inputAlreadyClean=true.
+
+**Parameter estimators** (available as starting points for the sweep):
+- `BucketSizeEstimator` — derives bucketBetweenLevels from cap elevation frame clustering
+- `FillMarginEstimator` — measures inter-cap and cap-wall gaps, detects fragmented cap strips

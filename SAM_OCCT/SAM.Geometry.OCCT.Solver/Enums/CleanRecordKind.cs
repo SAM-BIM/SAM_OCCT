@@ -26,6 +26,11 @@ namespace SAM.Geometry.OCCT.Solver
         /// that collapses overlapping/contained clean faces into one).</summary>
         CoplanarMerged,
 
+        /// <summary>A wall projected onto its stack's dominant plane during the explicit double-wall
+        /// consolidation pass (<see cref="Panel3DSnapSolver.ConsolidateWallStacks"/>, active only when the
+        /// caller sets <c>doubleWallGap</c> &gt; 0).</summary>
+        StackConsolidated,
+
         /// <summary>A source panel became invalid/degenerate during clean and was dropped from the output.</summary>
         DroppedInvalid,
 

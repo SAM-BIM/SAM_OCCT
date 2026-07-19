@@ -554,6 +554,176 @@ sharply:
 clean bucket and the level grouping must be set on the **Clean3D** component upstream — Extend3D is only
 conditioning the already-clean panels. The `INPUT_INERT` diagnostic on each run states this explicitly.
 
+### The full chain end to end (+ CreateAdjacencyCluster + ValidateSpaces)
+
+The complete controlled chain adds the native rebuild and a GUID-based validation stage:
+
+```text
+Panels ─▶ SAMOCCT.Clean3D ─▶ SAMOCCT.Extend3D ─▶ SAMOCCT.CreateAdjacencyCluster ─▶ SAMOCCT.ValidateSpaces
+          bucketBetweenLevels  inputAlreadyClean=true   seeds = expected Spaces        _expectedSpaces (+ GUIDs)
+          = 0.21               directionalCapGrow=true   (or ExpectedSpaceSet seeds)    doubleHeightSpaces_
+                               bucketBetweenLevels=0.21
+```
+
+- **`SAMOCCT.CreateAdjacencyCluster`** builds the cells (the native MakerVolume split) from the extended
+  panels, seeded by the Spaces you expect. Its diagnostics name two failure modes that used to be silent:
+  `SAM_OCCT_ANALYTICAL_MERGED_SEED_CELL` (more than one expected seed landed in one built cell) and
+  `SAM_OCCT_ANALYTICAL_ZERO_RELATION_PANELS` (generated cluster panels that bound no space).
+- **`SAMOCCT.ValidateSpaces`** compares the built cells against the expected Spaces **by GUID** and reports
+  the outcome. It never changes geometry — it is the scorecard.
+
+### What to wire to `SAMAnalytical.Visualize` after each stage
+
+Bake/visualize the panel output of each stage to *see* what it did before trusting the next one:
+
+| After | Visualize | What you are checking |
+|---|---|---|
+| Clean3D | `Panels` (+ `Slits`, `SlitPanels`) | Double walls collapsed to one; `Slits` shows any parallel pair the bucket did **not** capture (gap > bucket). Panels carry BucketSize/Weight so Visualize draws the capture slab in the middle of each panel. |
+| Extend3D | `Panels` (+ `OpenPanels`) | Walls reach their caps; floors/roofs grew out. `OpenPanels` are walls whose feet still do not close a loop — raise their `MaxExtend`/bucket. |
+| CreateAdjacencyCluster | the cell `Shells` | One watertight cell per room, sitting on the 3 level datums. |
+| ValidateSpaces | `MatchedSpaces` / `MissingSpaces` / `ExtraShells` / `SuspectedSeparatorPanels` | Which rooms matched, which are missing, which cells are spurious, and which input panels *should* have separated a merged pair but did not. |
+
+### Reading `ValidateSpaces`
+
+The `Report` output is the authoritative scorecard; its header is the one line to read first:
+
+```text
+SAM_OCCT_SPACEMATCH: SUMMARY expected=9 cells=8 matched=7 merged=0 missing=2 split=0 incorrect=0 extra=1
+```
+
+`Valid` is `true` only when every expected Space matched exactly one cell with a consistent span, every
+requested double-height check passed, and there are no extra cells or orphan cluster panels. When it is not,
+the typed outputs point at the cause: `MissingSpaces` (no cell), `MergedSpaces` (two rooms in one cell),
+`SplitSpaces` / `IncorrectlyBoundedSpaces` (wrong span), `ExtraShells` (spurious cell),
+`SuspectedSeparatorPanels` (an input wall that should have divided a merged pair but did not contribute),
+`OrphanClusterPanels` (generated panels bounding nothing), and `DoubleHeightOk` (per requested
+double-height Space, in input order).
+
+### Worked example — the 9-space fixture, stage by stage (fixed workflow)
+
+Fixture: `Testing/SAM.OCCT.IntegrationTests/Fixtures/ControlledWorkflow/Panels-9SpacesModel.sam` (66 panels)
+and `Spaces-9SpacesModel.sam` (9 Spaces; West3 GUID `02a1ae27-5461-4b41-ad07-008ccd9d1159` is the
+double-height room). Wiring `0.21 / true / true` as above:
+
+| Stage | Expected output |
+|---|---|
+| Clean3D | 66 → **43** panels; `LevelFrames` = **5** raw datums; `LevelGroups` = **3** (12.24 / 15.29 / 18.34 m). |
+| Extend3D | 43 panels; `inputAlreadyClean_=true`, `fillMargin_=0.5`, `directionalCapGrow_=true`. |
+| CreateAdjacencyCluster | 11 cells (`SewBeforeBuild=true, SewingTolerance=0.01, MergeCoplanarBeforeBuild=true`). |
+| ValidateSpaces | `matched=9`, `missing=0`, `extra=2`, `merged=0 split=0 incorrect=0`, West3 `DoubleHeightOk=true`, `0` orphan panels. |
+
+**All 9 rooms match** — the East1/South1 corner-closure gap is resolved by coplanar-cap coalescing
+(docs/CONTROLLED_WORKFLOW_BASELINE.md §8). The Extra cells are benign overshoot artefacts from the
+coplanar-cap coalescing pass (which closes inter-cap gaps that directional wall-based growth leaves open).
+
+### Parameter discovery (AutoTune3D)
+
+For unknown models, run `SAMOCCT.AutoTune3D` with `_discover=true` (the default) to find the optimal
+`bucketBetweenLevels`, `fillMargin`, `directionalCapGrow`, bucket, and align values automatically:
+
+```
+[SAMOCCT.AutoTune3D]  _discover=true, _panels=original
+    → Band  ──→ [SAMOCCT.Extend3D]  bucketBetweenLevels_
+    → Fill  ──→ [SAMOCCT.Extend3D]  fillMargin_
+    → Bucket──→ [SAMOCCT.Extend3D]  bucket_
+    → Align ──→ [SAMOCCT.Extend3D]  alignColinearOffset_
+    → Gap   ──→ [SAMOCCT.Extend3D]  doubleWallGap_
+    → DirGrow ─→ [SAMOCCT.Extend3D]  directionalCapGrow_
+                   inputAlreadyClean_=true  (if downstream of Clean3D)
+                   → [SAMOCCT.CreateAdjacencyCluster]  mergeCoplanarBeforeBuild_=true
+                   → [SAMOCCT.ValidateSpaces]
+```
+
+On the 9-space fixture this discovers `band=0.21, fill=0.5, dir=true` (the production config).
+On whole-level-towers it discovers `band=0.4, fill=0.3, dir=false` (33 cells, +8 vs baseline of 25 cells at band=0 bucket=0.4).
+
+**Only 3 Extend3D inputs are active** when `inputAlreadyClean_=true` (the chained workflow):
+`fillMargin_`, `bucketBetweenLevels_`, `directionalCapGrow_`. The other Stage-A inputs
+(`minBucketSize_`, `alignColinearOffset_`, `normalizeCapOffset_`, `doubleWallGap_`) are
+INERT — Stage A is skipped on the `inputAlreadyClean` path. See the input-effect matrix
+above for the full mapping.
+
+### Merging stubborn double walls — `doubleWallGap_` (2026-07-11)
+
+`minBucketSize_` and `alignColinearOffset_` cannot merge two classes of wall pair, no matter how
+far they are raised (proven on `whole-level-towers.sam`, where a bucket sweep 0.2→1.0 changed
+nothing):
+
+1. **Multi-skin wall stacks** (3–4 parallel walls drawn within ~0.5 m). The pairwise snap merges
+   them two at a time, but every merged panel is frozen (`Snapped`), so the stack converges to 2–3
+   residue planes instead of one — leaving tiny sliver spaces (the towers' 0.055 m / 0.139 m cells
+   at (6.76, −23.31) and (6.76, −23.21)).
+2. **Anti-parallel pairs wider than 0.3 m** (the towers' 0.345 m tower-face/block-wall slot). The
+   snap's void guard deliberately protects gaps above a wall thickness as real shafts — at ANY
+   bucket size.
+
+`doubleWallGap_` (Extend3D/Clean3D/Solve3D/AutoTune3D; `_gap` on AutoTune3D; default **0 = off**)
+is the explicit override for both: after the snap converges, every chain of overlapping
+(anti)parallel walls whose neighbouring planes sit within the gap is consolidated onto its
+dominant plane in one deterministic pass — each wall travelling at most the gap, and abutting
+perpendicular wall ends dragged along so the plan loop stays closed.
+
+On whole-level-towers, `doubleWallGap_=0.4` removes both sliver cells (merged into the
+neighbouring room) and joins the block room to the tower space through one shared wall
+(31 → 29 cells, no collapse). All other fixtures except Revit-home are unchanged at 0.4;
+Revit-home loses 4 narrow duct-like cells — the documented trade-off: **a REAL corridor or shaft
+narrower than the gap is closed too**, so raise the value deliberately, per model.
+
+### Caps follow consolidated walls (2026-07-12)
+
+When `doubleWallGap_` (or a stamped per-panel range) consolidates walls, caps
+(floors/roofs) whose edge abutted the old wall plane are dragged by the same
+distance so they remain watertight against the moved wall. Without this drag,
+the cap's edge stays at the old plane, leaving an open seam the fill pass
+(capped by `fillMargin_`) may not bridge — observed on whole-level-towers
+where a 0.474 m consolidation move at gap 0.5 exceeded the 0.4 m fill margin
+and lost a strip space near (3.706, −5.836).
+
+**`fillMargin_` to `doubleWallGap_` interaction:** when `doubleWallGap_`
+exceeds `fillMargin_`, caps displaced by consolidation may not be re-grown by
+the fill pass. The solver emits a diagnostic (`ConsolidatedStack`) when this
+condition is met. To guarantee caps close across the vacated strip, raise
+`fillMargin_` to at least `doubleWallGap_`. The cap-drag fix (above) handles
+caps on the same storey; caps on storey boundaries also benefit from this
+warning.
+
+### Per-panel consolidation ranges — stamped `BucketSize` (2026-07-12)
+
+A `SolverParameter.BucketSize` stamp on a panel (set via SAM_Solver
+`SolverProperties`, inspectable with `SAMAnalytical.Visualize`) also acts as
+that panel's consolidation range in `doubleWallGap_` merges:
+
+| Property | Meaning |
+|---|---|
+| `BucketSize` (stamped) | Per-panel snap half-width AND consolidation range |
+| `MaxExtend` (stamped) | Per-panel lateral extend reach (= Visualize's "snapRange") |
+| `Weight` (stamped) | Per-panel backer priority |
+| `doubleWallGap_` (global) | 3D analogue of 2D `SnapSolver.PerpendicularMergeTolerance`; fallback for unstamped walls |
+
+**One side suffices:** a stamped wall merges an unstamped partner at the
+stamped value. Caps only participate when stamped. The dominant wall
+(largest area) stays regardless of stamps. The stamp works in any of
+Clean3D, Extend3D, or Solve3D — set it once via SolverProperties and all
+three components respect it.
+
+Workflow: SolverProperties → stamp BucketSize → Clean3D/Extend3D/Solve3D
+→ Visualize (inspect ranges).
+
+### Diagnosing a stubborn gap — the East1|South1 corner (2026-07-10, now resolved)
+
+The East1/South1 corner had a ~0.1–0.4 m gap between fragmented cap strips at Z=15.29. The
+diagnostic workflow for finding such gaps (still useful for future models):
+
+1. Run `SAMOCCT.Extend3D` with `directionalCapGrow_=true`, inspect `Diagnostics`.
+2. Look for `SAM_OCCT_EXTEND3D_SKIP: ... NoTargetWithinReach` — walls that could not find a cap.
+3. Wire the extended panels into `SAMOCCT.CreateAdjacencyCluster` and `SAMOCCT.ValidateSpaces`.
+4. Missing spaces with walls present → likely a cap-to-wall or cap-to-cap gap.
+
+Fix applied: a coplanar-cap coalescing pass in Fill grows caps with coplanar neighbours uniformly,
+closing inter-cap gaps that directional wall-based growth cannot reach. See
+`docs/CONTROLLED_WORKFLOW_BASELINE.md` §8 for the full diagnosis trail (including the disproven
+overlap-ratio and SewingTolerance theories).
+
 ## Large Building Strategy
 
 Avoid sending very large whole-building shell sets through one interactive
