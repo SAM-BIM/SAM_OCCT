@@ -166,7 +166,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
             // The voluntary input is absent on old saved components AND fresh placements, so this fallback is
             // the effective GH default. Version-gated: documents saved before 0.5.0 keep the core default 0.
-            double bucketBetweenLevels = SolverComponentDefaults.BucketBetweenLevelsFallback(ComponentVersion, "0.6.0");
+            double bucketBetweenLevels = SolverComponentDefaults.BucketBetweenLevelsFallback(ComponentVersion, "0.5.0");
             index = Params.IndexOfInputParam("bucketBetweenLevels_");
             if (index != -1)
             {

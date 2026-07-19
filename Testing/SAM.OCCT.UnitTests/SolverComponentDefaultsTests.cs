@@ -22,6 +22,8 @@ namespace SAM.OCCT.UnitTests
         [InlineData("0.5.0", "0.5.0", 0.21)] // fresh placement at the introducing version
         [InlineData("0.6.0", "0.5.0", 0.21)] // any later placement
         [InlineData("0.7.0", "0.7.0", 0.21)] // Extend3D introducing version
+        [InlineData("0.8.0", "0.7.0", 0.21)] // Extend3D saved between introduction (0.7.0) and a later component bump keeps 0.21 - the gate argument is the INTRODUCING version, not the current one
+        [InlineData("0.5.1", "0.5.0", 0.21)] // Clean3D saved after introduction but before a later bump keeps 0.21
         [InlineData("0.4.0", "0.5.0", 0.0)]  // Clean3D saved before P2 - document behavior frozen
         [InlineData("0.6.0", "0.7.0", 0.0)]  // Extend3D saved before P2
         [InlineData("0.5.0", "0.6.0", 0.0)]  // Solve3D saved before P2
