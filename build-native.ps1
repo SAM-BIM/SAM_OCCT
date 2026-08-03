@@ -25,8 +25,8 @@ $nativeOutput = Join-Path $repoRoot "build"
 $manifestInstalled = Join-Path $repoRoot "vcpkg_installed"
 
 function Test-FileExists($path, $label) {
-    if (-not (Test-Path -LiteralPath $path)) {
-        throw "$label not found: $path"
+    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
+        throw "$label not found: '$path'"
     }
 }
 

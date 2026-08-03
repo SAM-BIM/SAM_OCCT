@@ -20,7 +20,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("d6950fec-cea4-4b48-9099-8943a7765e81");
 
-        public override string LatestComponentVersion => "0.6.0";
+        public override string LatestComponentVersion => "0.6.1";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -38,6 +38,12 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_GenericObject shells = new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "_shells", NickName = "_shells", Description = "Closed space volumes. Accepts SAM Shells, closed Rhino Breps/polysurfaces, Rhino Meshes, or SAM Mesh3Ds. Each item should represent one intended space/cell: meshes have their faces assembled into a single Shell.", Access = GH_ParamAccess.list };
                 shells.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(shells, ParamVisibility.Binding));
+
+                GooSpaceParam spaces = new () { Name = "spaces_", NickName = "spaces_", Description = "Optional existing Spaces to match into shell cells. If supplied, matching spaces preserve metadata and names.", Access = GH_ParamAccess.list, Optional = true };
+                spaces.DataMapping = GH_DataMapping.Flatten;
+                result.Add(new GH_SAMParam(spaces, ParamVisibility.Binding));
+
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "names_", NickName = "names_", Description = "Optional names for shell-derived seed spaces, used when spaces_ is not supplied or not matched.", Access = GH_ParamAccess.list, Optional = true }, ParamVisibility.Binding));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number elevationGround = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "elevationGround_", NickName = "elevationGround_", Description = "Ground elevation", Access = GH_ParamAccess.item };
                 elevationGround.SetPersistentData(0.0);
@@ -66,6 +72,14 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 tolerance.SetPersistentData(Tolerance.Distance);
                 result.Add(new GH_SAMParam(tolerance, ParamVisibility.Voluntary));
 
+                // meshInput_ tessellates Brep/surface input with Rhino's mesher before building,
+                // instead of converting the Brep straight to a SAM Shell. A curved (NURBS) Brep face
+                // often converts to self-intersecting, non-watertight planar SAM faces that OCCT
+                // cannot close (MakerVolume status 40); a clean planar mesh of the same Brep closes.
+                global::Grasshopper.Kernel.Parameters.Param_Boolean meshInput = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "meshInput_", NickName = "meshInput_", Description = "Mesh Brep/surface input (Rhino BRepMesh) into a planar triangle soup before the OCCT build, rather than converting the Brep directly to a SAM Shell. Turn this on when Breps with curved/NURBS faces fail to build a watertight volume. Rhino Meshes and SAM Shells/Mesh3Ds are unaffected. Default false.", Access = GH_ParamAccess.item };
+                meshInput.SetPersistentData(false);
+                result.Add(new GH_SAMParam(meshInput, ParamVisibility.Voluntary));
+
                 // Sewing heals a triangulated / near-touching face soup into shared topology BEFORE
                 // MakerVolume, instead of relying on MakerVolume's fuzzy-tolerance guesswork. It is
                 // always applied to mesh-derived shells (a mesh is exactly such a soup); this toggle
@@ -76,14 +90,6 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Boolean sew = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "sew_", NickName = "sew_", Description = "Sew-and-heal faces before the OCCT volume build. Mesh input is always sewn (it is a triangle soup). Default true, matching the solver's own validated build recipe; set false to disable for SAM Shell / closed Brep input that is already watertight.", Access = GH_ParamAccess.item };
                 sew.SetPersistentData(true);
                 result.Add(new GH_SAMParam(sew, ParamVisibility.Voluntary));
-
-                // meshInput_ tessellates Brep/surface input with Rhino's mesher before building,
-                // instead of converting the Brep straight to a SAM Shell. A curved (NURBS) Brep face
-                // often converts to self-intersecting, non-watertight planar SAM faces that OCCT
-                // cannot close (MakerVolume status 40); a clean planar mesh of the same Brep closes.
-                global::Grasshopper.Kernel.Parameters.Param_Boolean meshInput = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "meshInput_", NickName = "meshInput_", Description = "Mesh Brep/surface input (Rhino BRepMesh) into a planar triangle soup before the OCCT build, rather than converting the Brep directly to a SAM Shell. Turn this on when Breps with curved/NURBS faces fail to build a watertight volume. Rhino Meshes and SAM Shells/Mesh3Ds are unaffected. Default false.", Access = GH_ParamAccess.item };
-                meshInput.SetPersistentData(false);
-                result.Add(new GH_SAMParam(meshInput, ParamVisibility.Binding));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number meshDeflection = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "meshDeflection_", NickName = "meshDeflection_", Description = "Max chord deviation (model units) for meshInput_: how far a planar mesh triangle may deviate from the true curved surface. Smaller hugs curvature with more triangles; larger is coarser. Flat faces are unaffected (kept coarse). Default 0.1.", Access = GH_ParamAccess.item };
                 meshDeflection.SetPersistentData(0.1);
@@ -97,11 +103,6 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 weldMesh.SetPersistentData(true);
                 result.Add(new GH_SAMParam(weldMesh, ParamVisibility.Voluntary));
 
-                GooSpaceParam spaces = new GooSpaceParam() { Name = "spaces_", NickName = "spaces_", Description = "Optional existing Spaces to match into shell cells. If supplied, matching spaces preserve metadata and names.", Access = GH_ParamAccess.list, Optional = true };
-                spaces.DataMapping = GH_DataMapping.Flatten;
-                result.Add(new GH_SAMParam(spaces, ParamVisibility.Voluntary));
-
-                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "names_", NickName = "names_", Description = "Optional names for shell-derived seed spaces, used when spaces_ is not supplied or not matched.", Access = GH_ParamAccess.list, Optional = true }, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Boolean run = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "_run", NickName = "_run", Description = "Run", Access = GH_ParamAccess.item };
                 run.SetPersistentData(false);
