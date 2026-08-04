@@ -170,6 +170,20 @@ namespace SAM.Analytical.OCCT.Solver
 
             // Air policy: rejoin the caller's original air panels and every solver-fabricated GapFill air
             // panel - both bypass solving/space creation but belong in the analytical output.
+            //
+            // Known limitation: these panels are only added as objects, never related to a Space. That
+            // pairing has never been built here - the cells the solve resolves are matched to spaces by
+            // centre location, and air panels take no part in the cell build at all, so there is nothing
+            // to relate them to at this point. Consequently Query.FloorArea cannot see them: it collects a
+            // space's boundaries through Query.NormalDictionary, which walks the cluster's space-to-panel
+            // relations, so an unrelated air panel contributes nothing to SpaceParameter.Area even though
+            // Air is an accepted floor type. Moving the UpdateFloorAreas recalculation after this loop
+            // would therefore be a no-op, not a fix.
+            //
+            // Closing the gap needs new geometry rather than a floor-area change: each air panel would
+            // have to be matched to the cell whose boundary its face lies on (for example by testing its
+            // face centroid against the resolved cell shells) before a relation could be added. That is
+            // solver work and is deliberately out of scope here.
             foreach (Panel airPanel in inputAirPanels.Concat(solvedAirPanels))
             {
                 cluster.AddObject(airPanel);
