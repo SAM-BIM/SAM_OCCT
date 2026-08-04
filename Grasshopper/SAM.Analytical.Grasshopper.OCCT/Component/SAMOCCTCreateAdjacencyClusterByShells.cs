@@ -20,7 +20,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("d6950fec-cea4-4b48-9099-8943a7765e81");
 
-        public override string LatestComponentVersion => "0.6.1";
+        public override string LatestComponentVersion => "0.6.2";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -88,7 +88,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 // options (AvoidInternalShapes=false, SewBeforeBuild=true, SewingTolerance=0.01) - see
                 // docs/CELLCOMPLEX_FIRST_HANDOVER.md §A "Diagnosed seam". Still overridable per-run.
                 global::Grasshopper.Kernel.Parameters.Param_Boolean sew = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "sew_", NickName = "sew_", Description = "Sew-and-heal faces before the OCCT volume build. Mesh input is always sewn (it is a triangle soup). Default true, matching the solver's own validated build recipe; set false to disable for SAM Shell / closed Brep input that is already watertight.", Access = GH_ParamAccess.item };
-                sew.SetPersistentData(true);
+                sew.SetPersistentData(false);
                 result.Add(new GH_SAMParam(sew, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number meshDeflection = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "meshDeflection_", NickName = "meshDeflection_", Description = "Max chord deviation (model units) for meshInput_: how far a planar mesh triangle may deviate from the true curved surface. Smaller hugs curvature with more triangles; larger is coarser. Flat faces are unaffected (kept coarse). Default 0.1.", Access = GH_ParamAccess.item };
