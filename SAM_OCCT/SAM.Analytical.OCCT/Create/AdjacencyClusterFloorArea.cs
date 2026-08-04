@@ -5,6 +5,7 @@ using SAM.Core;
 using SAM.Core.OCCT;
 using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
+using System;
 using System.Collections.Generic;
 
 namespace SAM.Analytical.OCCT
@@ -29,7 +30,7 @@ namespace SAM.Analytical.OCCT
                 maxAngle);
 
             OcctBuildOptions effectiveOptions = options ?? new OcctBuildOptions();
-            result?.UpdateSpaceAreas(Tolerance.Angle, effectiveOptions.Tolerance, effectiveOptions.FuzzyTolerance);
+            ApplySpaceAreas(result, effectiveOptions.Tolerance, effectiveOptions.FuzzyTolerance);
             return result;
         }
 
@@ -50,7 +51,7 @@ namespace SAM.Analytical.OCCT
                 maxAngle);
 
             OcctBuildOptions effectiveOptions = options ?? new OcctBuildOptions();
-            result?.UpdateSpaceAreas(Tolerance.Angle, effectiveOptions.Tolerance, effectiveOptions.FuzzyTolerance);
+            ApplySpaceAreas(result, effectiveOptions.Tolerance, effectiveOptions.FuzzyTolerance);
             return result;
         }
 
@@ -70,8 +71,43 @@ namespace SAM.Analytical.OCCT
                 fuzzyTolerance,
                 excludeCellIndices);
 
-            result?.UpdateSpaceAreas(Tolerance.Angle, tolerance, fuzzyTolerance);
+            ApplySpaceAreas(result, tolerance, fuzzyTolerance);
             return result;
+        }
+
+        private static void ApplySpaceAreas(AdjacencyCluster adjacencyCluster, double toleranceDistance, double toleranceSnap)
+        {
+            List<Space> spaces = adjacencyCluster?.GetSpaces();
+            if (spaces == null)
+            {
+                return;
+            }
+
+            foreach (Space space in spaces)
+            {
+                Shell shell = space == null ? null : adjacencyCluster.Shell(space);
+                BoundingBox3D boundingBox3D = shell?.GetBoundingBox();
+                if (boundingBox3D == null || !boundingBox3D.IsValid())
+                {
+                    continue;
+                }
+
+                double height = boundingBox3D.Max.Z - boundingBox3D.Min.Z;
+                if (double.IsNaN(height) || double.IsInfinity(height) || height <= toleranceDistance)
+                {
+                    continue;
+                }
+
+                double area = shell.Area(height / 2, Tolerance.Angle, toleranceDistance, toleranceSnap);
+                if (double.IsNaN(area) || double.IsInfinity(area) || area <= 0)
+                {
+                    continue;
+                }
+
+                Space updated = new Space(space);
+                updated.SetValue(SpaceParameter.Area, area);
+                adjacencyCluster.AddObject(updated);
+            }
         }
     }
 }
