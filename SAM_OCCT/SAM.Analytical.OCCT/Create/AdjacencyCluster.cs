@@ -384,7 +384,17 @@ namespace SAM.Analytical.OCCT
                     if (panel != null)
                     {
                         defaultedCount++;
-                        defaultedGuids.Add(panel.Guid);
+
+                        // Air is excluded from reclassification. A virtual Air boundary must stay Air: SAM's
+                        // floor-area calculation now accepts a geometrically valid Air panel as a space's floor
+                        // surface, so there is no area-driven reason to convert it, and UpdatePanelTypes would
+                        // otherwise turn it into a physical FloorExposed/Roof/WallExternal with a real
+                        // construction. Every other defaulted type was guessed from the raw plane normal and
+                        // does need correcting.
+                        if (panelType != PanelType.Air)
+                        {
+                            defaultedGuids.Add(panel.Guid);
+                        }
                     }
                 }
 
@@ -449,7 +459,9 @@ namespace SAM.Analytical.OCCT
             // owning cell is arbitrary, so a floor could be left typed Roof - which then reads as a missing
             // floor downstream and made an OCCT space's floor area disagree with the identical SAM geometry.
             // Restricting both passes to defaultedGuids preserves the original intent of not resetting types or
-            // constructions: a panel that inherited real identity from a supplied panel is never touched.
+            // constructions: a panel that inherited real identity from a supplied panel is never touched, and
+            // neither is a virtual Air boundary (see where defaultedGuids is populated). defaultedGuids only
+            // ever holds panels created by THIS call, so nothing outside this operation can be reclassified.
             if (defaultedGuids.Count != 0)
             {
                 result.UpdatePanelTypes(0, defaultedGuids);
