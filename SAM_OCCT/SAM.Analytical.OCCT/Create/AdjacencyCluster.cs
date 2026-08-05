@@ -317,6 +317,11 @@ namespace SAM.Analytical.OCCT
             // Only the Guid is unsafe to duplicate: the second-and-later faces still inherit the source's
             // construction and type (they ARE pieces of that same physical element), but get a fresh Guid.
             HashSet<System.Guid> claimedGuids = new HashSet<System.Guid>();
+            // Panels whose type/construction was DEFAULTED from the raw face plane normal rather than inherited
+            // from a source panel. A decoded face's plane normal has arbitrary orientation relative to its
+            // owning cell, so that guess can call a floor a Roof and vice versa; these Guids are handed to
+            // SAM's own classification below once the normals are space-relative.
+            HashSet<System.Guid> defaultedGuids = new HashSet<System.Guid>();
             int inheritedCount = 0, defaultedCount = 0, ambiguousCount = 0, freshGuidCount = 0, smallFaceCount = 0;
             foreach (ResolvedCellFace cellFace in resolvedCellComplex.Faces)
             {
@@ -379,6 +384,17 @@ namespace SAM.Analytical.OCCT
                     if (panel != null)
                     {
                         defaultedCount++;
+
+                        // Air is excluded from reclassification. A virtual Air boundary must stay Air: SAM's
+                        // floor-area calculation now accepts a geometrically valid Air panel as a space's floor
+                        // surface, so there is no area-driven reason to convert it, and UpdatePanelTypes would
+                        // otherwise turn it into a physical FloorExposed/Roof/WallExternal with a real
+                        // construction. Every other defaulted type was guessed from the raw plane normal and
+                        // does need correcting.
+                        if (panelType != PanelType.Air)
+                        {
+                            defaultedGuids.Add(panel.Guid);
+                        }
                     }
                 }
 
@@ -434,10 +450,30 @@ namespace SAM.Analytical.OCCT
                 "SAM_OCCT_ANALYTICAL_PANEL_IDENTITY: {0} panel(s) fully inherited identity (construction/type/Guid) from a supplied panel; {1} inherited construction/type but got a fresh Guid because the matched source panel's Guid was already claimed by an earlier cell face (never a silent collision that drops a panel); {2} defaulted ({3} of them because the geometric match was ambiguous, never mis-attributed).",
                 inheritedCount, freshGuidCount, defaultedCount, ambiguousCount));
 
-            // Keep normals consistent with the relations; do NOT reset panel types or constructions, so the
-            // inherited identity survives (unmatched faces keep the default type/construction assigned above).
+            // Keep normals consistent with the relations, which makes each panel's normal space-outward.
             result = result.UpdateNormals(false, true, false, fuzzyTolerance, tolerance);
             result.Normalize(false);
+
+            // Reclassify ONLY the defaulted panels, now that their normals are space-relative. The type they
+            // were given above came from the decoded face's raw plane normal, whose orientation relative to the
+            // owning cell is arbitrary, so a floor could be left typed Roof - which then reads as a missing
+            // floor downstream and made an OCCT space's floor area disagree with the identical SAM geometry.
+            // Restricting both passes to defaultedGuids preserves the original intent of not resetting types or
+            // constructions: a panel that inherited real identity from a supplied panel is never touched, and
+            // neither is a virtual Air boundary (see where defaultedGuids is populated). defaultedGuids only
+            // ever holds panels created by THIS call, so nothing outside this operation can be reclassified.
+            if (defaultedGuids.Count != 0)
+            {
+                result.UpdatePanelTypes(0, defaultedGuids);
+                result.SetDefaultConstructionByPanelType(defaultedGuids);
+            }
+
+            // Same shared calculation as every other creation path (see DirectAdjacencyCluster) so a space
+            // built straight from a resolved complex carries the same SpaceParameter.Area contract.
+            int areaCount = result.UpdateFloorAreas(silverSpacing: fuzzyTolerance, tolerance_Distance: tolerance);
+            diagnostics.Add(string.Format(
+                "SAM_OCCT_ANALYTICAL_SPACE_AREAS: Applied SAM's canonical floor area to {0} of {1} space(s). Any shortfall kept whatever area the space already carried rather than storing an invalid value.",
+                areaCount, spaceByCellIndex.Count));
 
             return result;
         }
@@ -767,6 +803,17 @@ namespace SAM.Analytical.OCCT
             result.UpdatePanelTypes(0);
             result.SetDefaultConstructionByPanelType();
             cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_FINALIZE", string.Format("Direct rebuild finalized normals, panel types, and constructions in {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
+
+            // Space area is deliberately NOT derived here from the native cell geometry: an OCCT-created space
+            // must carry the same SpaceParameter.Area a SAM-created space would. The completed cluster is
+            // handed to SAM's shared calculation, which reads the floor panels this rebuild just produced, so
+            // there is exactly one set of geometric floor rules across both repositories. Volume stays as the
+            // native cell volume assigned in CreateSpaces.
+            int areaCount = result.UpdateFloorAreas(silverSpacing: options.FuzzyTolerance, tolerance_Distance: options.Tolerance);
+            cellComplexResult.AddDiagnostic(
+                areaCount == spaces.Count ? OcctDiagnosticSeverity.Info : OcctDiagnosticSeverity.Warning,
+                "SAM_OCCT_ANALYTICAL_SPACE_AREAS",
+                string.Format("Applied SAM's canonical floor area to {0} of {1} space(s). Any shortfall kept whatever area the space already carried rather than storing an invalid value.", areaCount, spaces.Count));
 
             return result;
         }
