@@ -50,11 +50,11 @@ jobs:
           )
 
           # Match the SAM dependency to this repo's line of development. The
-          # sow/2026-Q2 SAM branch carries the System.Text.Json migration, so its
+          # sow/2026-Q3 SAM branch carries the System.Text.Json migration, so its
           # public API no longer leaks Newtonsoft.Json types into SAM_OCCT (the
           # default branch still does, which breaks the compile with CS0012).
           # Falls back to the default branch if that branch does not exist yet.
-          $depBranch = 'sow/2026-Q2'
+          $depBranch = 'sow/2026-Q3'
 
           foreach ($r in $deps) {
             if (Test-Path $r) { continue }
