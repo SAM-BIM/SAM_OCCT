@@ -45,7 +45,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "names_", NickName = "names_", Description = "Optional names for shell-derived seed spaces, used when spaces_ is not supplied or not matched.", Access = GH_ParamAccess.list, Optional = true }, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number elevationGround = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "elevationGround_", NickName = "elevationGround_", Description = "Ground elevation", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number elevationGround = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "elevationGround_", NickName = "elevationGround_", Description = "Ground elevation [m]", Access = GH_ParamAccess.item };
                 elevationGround.SetPersistentData(0.0);
                 result.Add(new GH_SAMParam(elevationGround, ParamVisibility.Voluntary));
 
@@ -53,11 +53,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 maxDistance.SetPersistentData(0.01);
                 result.Add(new GH_SAMParam(maxDistance, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number maxAngle = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "maxAngle_", NickName = "maxAngle_", Description = "Advanced SAM rebuild panel matching angle", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number maxAngle = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "maxAngle_", NickName = "maxAngle_", Description = "Advanced SAM rebuild panel matching angle [rad]", Access = GH_ParamAccess.item };
                 maxAngle.SetPersistentData(0.0872664626);
                 result.Add(new GH_SAMParam(maxAngle, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number fuzzyTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "fuzzyTolerance_", NickName = "fuzzyTolerance_", Description = "OCCT fuzzy tolerance. Also used as SAM silver spacing for seed space and shell checks.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number fuzzyTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "fuzzyTolerance_", NickName = "fuzzyTolerance_", Description = "OCCT fuzzy tolerance [m]. Also used as SAM silver spacing for seed space and shell checks.", Access = GH_ParamAccess.item };
                 fuzzyTolerance.SetPersistentData(Tolerance.MacroDistance);
                 result.Add(new GH_SAMParam(fuzzyTolerance, ParamVisibility.Voluntary));
 
@@ -68,7 +68,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 minArea.SetPersistentData(0.01);
                 result.Add(new GH_SAMParam(minArea, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT and SAM model tolerance", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT and SAM model tolerance [m]", Access = GH_ParamAccess.item };
                 tolerance.SetPersistentData(Tolerance.Distance);
                 result.Add(new GH_SAMParam(tolerance, ParamVisibility.Voluntary));
 

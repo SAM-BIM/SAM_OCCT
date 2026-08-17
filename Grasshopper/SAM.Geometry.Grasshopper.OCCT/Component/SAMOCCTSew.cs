@@ -35,7 +35,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "_face3Ds", NickName = "_face3Ds", Description = "Boundary faces/surfaces to sew into a closed volume. Accepts SAM Face3Ds and geometry that converts to Face3Ds.", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number sewingTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "sewingTolerance_", NickName = "sewingTolerance_", Description = "OCCT sewing tolerance: coincident / near-touching face edges within this distance are joined into shared topology. Increase it to bridge larger gaps between faces.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number sewingTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "sewingTolerance_", NickName = "sewingTolerance_", Description = "OCCT sewing tolerance [m]: coincident / near-touching face edges within this distance are joined into shared topology. Increase it to bridge larger gaps between faces.", Access = GH_ParamAccess.item };
                 sewingTolerance.SetPersistentData(Tolerance.MacroDistance);
                 result.Add(new GH_SAMParam(sewingTolerance, ParamVisibility.Binding));
 
@@ -43,7 +43,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 makeSolid.SetPersistentData(true);
                 result.Add(new GH_SAMParam(makeSolid, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT build tolerance (face topology key quantization).", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT build tolerance [m] (face topology key quantization).", Access = GH_ParamAccess.item };
                 tolerance.SetPersistentData(Tolerance.Distance);
                 result.Add(new GH_SAMParam(tolerance, ParamVisibility.Voluntary));
 
