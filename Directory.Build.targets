@@ -1,0 +1,60 @@
+<Project>
+
+  <!--
+    H12 release-provenance stamping (Q3 2026).
+
+    SAM_OCCT deliberately does NOT import the standard SAM Directory.Build.props used by
+    other SAM-BIM repos: that file also drives AssemblyVersion and Deterministic, and
+    SAM_OCCT's existing 1.0.* AssemblyVersion / assembly-identity scheme must not change
+    (see AGENTS.md, PROJECT_PROGRESS.md). This file stamps FileVersion and
+    InformationalVersion ONLY, and ONLY on a CI/release build that supplies SAMVersion.
+    A local developer build (SAMVersion unset) is completely untouched.
+
+    Scope: the 8 SAM-owned managed assemblies (GenerateAssemblyInfo=false, non-test).
+    AssemblyVersion is intentionally never emitted here.
+  -->
+
+  <Target Name="_GenerateSAMOcctVersionFile"
+          BeforeTargets="CoreCompile"
+          Condition="'$(SAMVersion)' != '' AND '$(GenerateAssemblyInfo)' != 'true' AND '$(IsTestProject)' != 'true'">
+
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(SAMVersion)', '^\d+\.\d+\.\d+\.\d+$'))"
+           Text="SAMVersion '$(SAMVersion)' is not a well-formed four-part version (expected e.g. 2026.3.214.0) - refusing to stamp $(MSBuildProjectName)." />
+
+    <PropertyGroup>
+      <_SAMOcctInformationalVersion Condition="'$(InformationalVersion)' != ''">$(InformationalVersion)</_SAMOcctInformationalVersion>
+      <_SAMOcctInformationalVersion Condition="'$(_SAMOcctInformationalVersion)' == '' AND '$(SAMSourceRevision)' != ''">$(SAMVersion)+$(SAMSourceRevision)</_SAMOcctInformationalVersion>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_SAMOcctVersionLine Include="// &lt;auto-generated /&gt;" />
+      <!-- FileVersion only. AssemblyVersion stays governed by each project's own
+           AssemblyInfo.cs (or absent, staging 0.0.0.0) and must never be emitted here. -->
+      <_SAMOcctVersionLine Include="[assembly: System.Reflection.AssemblyFileVersionAttribute(&quot;$(SAMVersion)&quot;)]" />
+      <_SAMOcctVersionLine Include="[assembly: System.Reflection.AssemblyInformationalVersionAttribute(&quot;$(_SAMOcctInformationalVersion)&quot;)]" Condition="'$(_SAMOcctInformationalVersion)' != ''" />
+    </ItemGroup>
+
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <WriteLinesToFile
+      File="$(IntermediateOutputPath)SAMOcctVersion.g.cs"
+      Lines="@(_SAMOcctVersionLine)"
+      Overwrite="true"
+      WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)SAMOcctVersion.g.cs" KeepDuplicates="false" />
+      <FileWrites Include="$(IntermediateOutputPath)SAMOcctVersion.g.cs" />
+    </ItemGroup>
+
+    <!--
+      Coupled with the generated file above by construction (same Target/Condition): a
+      build can never suppress the legacy AssemblyFileVersion("1.0.*") line (guarded with
+      #if !SAM_FILEVERSION_STAMPED in the 5 AssemblyInfo.cs files that carry it) without
+      also generating the replacement attribute right here.
+    -->
+    <PropertyGroup>
+      <DefineConstants>$(DefineConstants);SAM_FILEVERSION_STAMPED</DefineConstants>
+    </PropertyGroup>
+
+  </Target>
+
+</Project>
