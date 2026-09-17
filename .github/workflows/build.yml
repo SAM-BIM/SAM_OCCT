@@ -36,6 +36,48 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Compute SAMVersion (H12 provenance stamping)
+        id: samver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Same convention as SAM_Deploy/installer.yml and the other SAM-BIM repos'
+          # build.yml: prefer head_ref when it's a sow branch (release-promotion PRs),
+          # else base_ref on PR events / ref_name on push/dispatch events.
+          $headRef = '${{ github.head_ref }}'
+          $baseRef = '${{ github.base_ref }}'
+          $refName = '${{ github.ref_name }}'
+          if ($headRef -match '^sow/\d{4}-Q\d$') {
+            $ref = $headRef
+          } elseif ('${{ github.event_name }}' -eq 'pull_request') {
+            $ref = $baseRef
+          } else {
+            $ref = $refName
+          }
+          $run = ${{ github.run_number }} % 60000
+          if ($ref -match 'sow/(\d{4})-Q(\d)') {
+            $v = "$($Matches[1]).$($Matches[2]).$run.0"
+            $src = "branch '$ref'"
+          } else {
+            $now = (Get-Date).ToUniversalTime()
+            $quarter = [int][Math]::Ceiling($now.Month / 3.0)
+            $v = "$($now.Year).$quarter.$run.0"
+            $src = "date $($now.ToString('yyyy-MM-dd')) (ref '$ref' not sow/yyyy-Qx)"
+          }
+          Write-Host "SAMVersion = $v (from $src)"
+          "samversion=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          # Expose as env vars so MSBuild/dotnet pick them up (property falls back to the
+          # process environment variable of the same name) for every subsequent step
+          # without threading /p:SAMVersion=... through each invocation individually.
+          "SAMVersion=$v" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          $sha = (& git -C SAM_OCCT rev-parse --short HEAD 2>$null).Trim()
+          if (-not $sha) { $sha = 'unknown' }
+          $infoVer = "$v+$sha"
+          Write-Host "InformationalVersion = $infoVer"
+          "InformationalVersion=$infoVer" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SAMSourceRevision=$sha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Clone dependency repos (siblings)
         shell: pwsh
         run: |
@@ -88,6 +130,11 @@ jobs:
             '/p:UseSharedCompilation=false'
             '/p:RunPostBuildEvent=OnOutputUpdated'
             "/p:ReferencePath=$windowsRef"
+            # H12 provenance stamping: explicit even though SAMVersion/InformationalVersion
+            # are also exported as env vars (MSBuild properties fall back to the environment) -
+            # keeps this step self-documenting and matches the other SAM-BIM repos' convention.
+            "/p:SAMVersion=$env:SAMVersion"
+            "/p:InformationalVersion=$env:InformationalVersion"
           )
 
           # If you really want Platform, use this (quoted) line:
@@ -123,9 +170,21 @@ jobs:
           $unit        = 'SAM_OCCT/Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj'
           $integration = 'SAM_OCCT/Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj'
 
+          # H12 provenance stamping: dotnet test rebuilds the referenced SAM.*.OCCT
+          # projects. Without -p:SAMVersion/-p:InformationalVersion here too, that
+          # rebuild would recompile them at the local-dev (unstamped) fallback and
+          # silently overwrite the CI-stamped Release DLLs the Rebuild step above
+          # just produced - shipping version-inconsistent assemblies. The dedicated
+          # assertion step below re-checks the final on-disk state for this reason.
+          $verArgs = @(
+            "-p:SAMVersion=$env:SAMVersion"
+            "-p:InformationalVersion=$env:InformationalVersion"
+          )
+
           # Unit tests must pass. Coverage is collected for reporting (soft gate).
           dotnet test $unit `
             -c Release `
+            @verArgs `
             --logger "trx;LogFileName=unit.trx" `
             --collect:"XPlat Code Coverage" `
             --results-directory TestResults
@@ -134,8 +193,80 @@ jobs:
           # native library is absent, so this step stays green without it.
           dotnet test $integration `
             -c Release `
+            @verArgs `
             --logger "trx;LogFileName=integration.trx" `
             --results-directory TestResults
+
+      - name: Assert H12 provenance (FileVersion stamped, AssemblyVersion unchanged)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $samVersion = $env:SAMVersion
+          if (-not $samVersion) { throw "SAMVersion env var is not set - the Compute SAMVersion step did not run or failed." }
+
+          # The 8 SAM-owned managed assemblies in scope for H12. Searched recursively (not
+          # a fixed build\ path) because one of them - SAM.Core.Grasshopper.OCCT - has a
+          # pre-existing, unrelated OutputPath quirk in its .csproj (Release|AnyCPU writes to
+          # Grasshopper\build\ instead of the repo-root build\ that every sibling project
+          # uses). That is out of scope for H12 (metadata-only FileVersion stamping) and is
+          # NOT fixed here; searching recursively keeps this assertion correct regardless of
+          # where a project's Release output actually lands.
+          $wildcardAssemblies = @(
+            'SAM.Analytical.OCCT.dll'
+            'SAM.Geometry.OCCT.dll'
+            'SAM.Core.Grasshopper.OCCT.dll'
+            'SAM.Geometry.Grasshopper.OCCT.dll'
+            'SAM.Analytical.Grasshopper.OCCT.dll'
+          )
+          $unversionedAssemblies = @(
+            'SAM.Analytical.OCCT.Solver.dll'
+            'SAM.Core.OCCT.dll'
+            'SAM.Geometry.OCCT.Solver.dll'
+          )
+
+          $failures = @()
+
+          foreach ($name in ($wildcardAssemblies + $unversionedAssemblies)) {
+            $match = Get-ChildItem -Path 'SAM_OCCT' -Recurse -Filter $name -ErrorAction SilentlyContinue |
+                     Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if (-not $match) {
+              $failures += "$name : not found anywhere under SAM_OCCT\"
+              continue
+            }
+
+            $fvi = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($match.FullName)
+            $asmVersion = [System.Reflection.AssemblyName]::GetAssemblyName($match.FullName).Version.ToString()
+
+            Write-Host "$name : FileVersion=$($fvi.FileVersion) ProductVersion=$($fvi.ProductVersion) AssemblyVersion=$asmVersion ($($match.FullName))"
+
+            # H12 criterion: FileVersion must equal SAMVersion for every SAM-owned managed
+            # assembly - this is the whole point of the fix.
+            if ($fvi.FileVersion -ne $samVersion) {
+              $failures += "$name : FileVersion is '$($fvi.FileVersion)', expected '$samVersion'"
+            }
+
+            # Safety criterion: AssemblyVersion is explicitly NOT part of H12 and must never
+            # be SAMVersion. Exact x/y is build-clock-derived for the 1.0.* wildcard group, so
+            # only the un-changed *shape* is asserted, not exact equality across runs.
+            if ($asmVersion -eq $samVersion) {
+              $failures += "$name : AssemblyVersion was stamped to SAMVersion ('$asmVersion') - AssemblyVersion must never change under H12"
+            }
+            if ($unversionedAssemblies -contains $name -and $asmVersion -ne '0.0.0.0') {
+              $failures += "$name : expected AssemblyVersion 0.0.0.0 (no AssemblyVersion attribute), got '$asmVersion'"
+            }
+            if ($wildcardAssemblies -contains $name -and $asmVersion -notmatch '^1\.0\.\d+\.\d+$') {
+              $failures += "$name : expected AssemblyVersion matching 1.0.x.y (from AssemblyVersion(""1.0.*"")), got '$asmVersion'"
+            }
+          }
+
+          if ($failures.Count -gt 0) {
+            Write-Host "::error::H12 provenance assertion FAILED:"
+            $failures | ForEach-Object { Write-Host "::error::  $_" }
+            throw "H12 provenance assertion failed for $($failures.Count) check(s) - see errors above."
+          }
+
+          Write-Host "H12 provenance assertion PASSED for all 8 SAM-owned managed assemblies (SAMVersion=$samVersion)."
 
       - name: Upload test results & coverage
         if: always()
