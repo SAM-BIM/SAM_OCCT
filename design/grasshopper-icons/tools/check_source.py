@@ -1,10 +1,11 @@
 """Guard rails for the icon redesign diff.
 
-  python check_source.py [base]      (default base: origin/sow/2026-Q3)
+  python check_source.py [base]      (default: merge-base of origin/sow/2026-Q3 and HEAD, so upstream moves are ignored)
 
 1. Vendored design-system files are byte-identical to SAM-BIM/SAM#166 @ cf4d924a (SHA-256).
 2. Every changed line in a component .cs file is an icon-token swap inside an `Icon` getter
    (`<holder>.OLD` -> `<holder>.SAM_GH_*`); generated Resources.Designer.cs / holder blocks are excluded.
+   The only other allowed change is the repository SPDX policy header (2 lines + blank) added at the top of a file.
 3. The set of ComponentGuid values, names, nicknames, categories and exposures is unchanged vs base.
 """
 import hashlib
@@ -22,6 +23,8 @@ VENDORED = {  # file -> SHA-256 (LF line endings) of SAM/design/grasshopper-icon
     "sam_classify.py": "317064816c964e2268e9406aee9ca5f7d82c2bdb34da9c3225a344ca2464b864",  # SAM classify.py
 }
 TOKEN = re.compile(r"\b(?:\w+\.)+\w+")  # any dotted chain, e.g. Properties.Resources.SAM_Small3
+SPDX_HEADER = ("// SPDX-License-Identifier: LGPL-3.0-or-later",
+               "// Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors")
 KEEP_RE = re.compile(r'ComponentGuid|base\(\s*"|GH_Exposure|Category|NickName|new Guid\(|new\("')
 
 
@@ -30,13 +33,14 @@ def git(*args):
 
 
 def main(base):
+    base = git("merge-base", base, "HEAD").strip()
     ok = True
     for f, h in VENDORED.items():
         got = hashlib.sha256(open(os.path.join(HERE, f), "rb").read().replace(b"\r\n", b"\n")).hexdigest()  # autocrlf-safe
         print(f"vendored {f}: {'OK' if got == h else 'MODIFIED'}")
         ok &= got == h
     files = [f for f in git("diff", "--name-only", base, "--", "*.cs").split("\n") if f and not f.startswith("design/")]
-    swaps, bad = 0, []
+    swaps, bad, headers = 0, [], 0
     for f in files:
         if f.endswith("Resources.Designer.cs") or f.startswith("design/"):
             continue
@@ -54,8 +58,19 @@ def main(base):
             if outside:
                 bad.append((f, outside[:4]))
             continue
-        minus = re.findall(r"^-(?!--)(.*)$", diff, re.M)
-        plus = re.findall(r"^\+(?!\+\+)(.*)$", diff, re.M)
+        minus = [x.lstrip("﻿") for x in re.findall(r"^-(?!--)(.*)$", diff, re.M)]
+        plus = [x.lstrip("﻿") for x in re.findall(r"^\+(?!\+\+)(.*)$", diff, re.M)]
+        top = open(os.path.join(REPO, f), encoding="utf-8-sig").read().replace("\r\n", "\n").split("\n")[:3]
+        if ([t.strip() for t in top] == [*SPDX_HEADER, ""] and all(any(p.strip() == h for p in plus) for h in SPDX_HEADER)
+                and all(h not in "\n".join(minus) for h in SPDX_HEADER)):
+            # repository SPDX policy header added at the top of the file (the only allowed non-icon addition)
+            for line in (*SPDX_HEADER, ""):
+                plus.remove(next(p for p in plus if p.strip() == line))
+            headers += 1
+            for m in list(minus):  # a line displaced by the header insertion (e.g. the BOM moving) is unchanged
+                if m in plus:
+                    minus.remove(m)
+                    plus.remove(m)
         if len(minus) != len(plus):
             bad.append((f, "added/removed lines"))
             continue
@@ -70,7 +85,8 @@ def main(base):
                 bad.append((f, a.strip(), b.strip()))
             else:
                 swaps += 1
-    print(f"component .cs files changed: {len(files)}; icon-token swaps: {swaps}; non-icon changes: {len(bad)}")
+    print(f"component .cs files changed: {len(files)}; icon-token swaps: {swaps}; SPDX headers added: {headers}; "
+          f"non-icon changes: {len(bad)}")
     for b in bad[:20]:
         print("  NON-ICON CHANGE:", b)
     ok &= not bad
