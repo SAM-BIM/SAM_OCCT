@@ -1,6 +1,6 @@
 # SAM Grasshopper icon redesign — SAM_OCCT PR record
 
-Branch `feature/sam-gh-icon-redesign`, based on `sow/2026-Q3` @ `e9b453b`. PR: (to be opened).
+Branch `feature/sam-gh-icon-redesign`, based on `sow/2026-Q3` @ `e9b453b`. PR: SAM-BIM/SAM_OCCT#71.
 Propagates the SAM icon design system from SAM-BIM/SAM#166 (head `cf4d924a`, open, not merged) to this repository.
 
 ## Current status
