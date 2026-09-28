@@ -20,7 +20,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellDifference;
 
         public SAMOCCTShellsDifference()
           : base("SAMOCCT.ShellsDifference", "SAMOCCT.ShellsDifference", "Subtract closed cutter volumes from target shells using OCCT", "SAM", "OCCT")

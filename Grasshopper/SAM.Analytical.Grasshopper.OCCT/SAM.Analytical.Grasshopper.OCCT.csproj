@@ -57,6 +57,7 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Resources\SAM_OCCT24.png" />
+    <EmbeddedResource Include="Resources\Icons\SAM_GH_*.png" />
   </ItemGroup>
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
     <!-- Local packaging: must succeed. -->

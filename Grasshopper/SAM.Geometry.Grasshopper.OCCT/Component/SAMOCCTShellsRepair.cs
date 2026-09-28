@@ -20,7 +20,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.2.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellUpdate;
 
         public SAMOCCTShellsRepair()
           : base("SAMOCCT.ShellsRepair", "SAMOCCT.ShellsRepair", "Rebuild and repair each closed shell volume through OCCT", "SAM", "OCCT")

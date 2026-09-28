@@ -27,7 +27,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_AlgorithmRun;
 
         public SAMOCCTAutoTune3DLegacy()
           : base("SAMOCCT.AutoTune3D", "SAMOCCT.AutoTune3D", "Diagnosis-driven closure: runs the raw-first 3D panel solver, then - only when naked edges remain or closure needed a fabricated gap-fill patch - bounded rounds of measured-to-target wall extension on the implicated panels only, accepted only when the closure signature does not regress. Behaves exactly like SAMOCCT.Solve3D on an already-watertight model.", "SAM", "OCCT")

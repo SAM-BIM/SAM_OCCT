@@ -20,7 +20,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_FaceValidate;
 
         public SAMOCCTValidate()
           : base("SAMOCCT.Validate", "SAMOCCT.Validate", "Validate boundary geometry with OCCT (BRepCheck_Analyzer + ShapeAnalysis_FreeBounds + optional BOPAlgo_ArgumentAnalyzer) and locate why it does not close: naked (open) edges, self-intersections and small/invalid faces, each with an XYZ location. Use it to find the gap before SAMOCCT.CreateShells fails to build a watertight volume (issue #37).", "SAM", "OCCT")

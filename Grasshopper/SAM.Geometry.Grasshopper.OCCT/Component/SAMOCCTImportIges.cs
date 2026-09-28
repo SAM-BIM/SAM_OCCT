@@ -19,7 +19,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellPluralImport;
 
         public SAMOCCTImportIges()
           : base("SAMOCCT.ImportIGES", "SAMOCCT.ImportIGES", "Import an IGES file into closed SAM Shell volumes using OCCT", "SAM", "OCCT")

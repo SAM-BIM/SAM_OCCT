@@ -20,7 +20,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellPluralMerge;
 
         public SAMOCCTMergeCoplanarShells()
           : base("SAMOCCT.MergeCoplanarShells", "SAMOCCT.MergeCoplanarShells", "Merge adjacent coplanar faces of each Shell into fewer, larger faces using the OCCT engine (ShapeUpgrade_UnifySameDomain). The closed volume is preserved; only the face count drops.", "SAM", "OCCT")
