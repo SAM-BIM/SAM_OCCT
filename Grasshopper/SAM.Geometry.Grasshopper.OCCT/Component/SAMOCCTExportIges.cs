@@ -20,7 +20,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellPluralExport;
 
         public SAMOCCTExportIges()
           : base("SAMOCCT.ExportIGES", "SAMOCCT.ExportIGES", "Export closed SAM Shell volumes to an IGES file using OCCT", "SAM", "OCCT")
