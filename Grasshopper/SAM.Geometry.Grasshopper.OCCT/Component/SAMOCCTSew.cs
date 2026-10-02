@@ -20,7 +20,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellMerge;
 
         public SAMOCCTSew()
           : base("SAMOCCT.Sew", "SAMOCCT.Sew", "Sew a face soup into the tightest closed SAM Shell using OCCT (BRepBuilderAPI_Sewing + ShapeFix). Unlike SAMOCCT.CreateShells this does not need the faces to already bound a volume - it closes triangulated / near-touching faces that a direct build leaves open (issue #37).", "SAM", "OCCT")
