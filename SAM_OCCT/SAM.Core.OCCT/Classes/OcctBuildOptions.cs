@@ -42,6 +42,13 @@ namespace SAM.Core.OCCT
         public bool SewBeforeBuild { get; set; } = false;
 
         /// <summary>
+        /// Maximum face count allowed to enter the native sew-and-heal path. Large
+        /// analytical panel soups can exhaust the host stack inside OCCT sewing;
+        /// zero or a negative value disables this guard.
+        /// </summary>
+        public int MaxSewFaceCount { get; set; } = 2048;
+
+        /// <summary>
         /// BOP glue mode for the cell-complex build (issue #37 follow-on). When
         /// not <see cref="OcctGlueMode.Off"/> (the default), the builder asks the
         /// boolean kernel to treat coincident faces as shared and skip their
@@ -53,6 +60,17 @@ namespace SAM.Core.OCCT
         /// the glue ABI (v3).
         /// </summary>
         public OcctGlueMode GlueMode { get; set; } = OcctGlueMode.Off;
+
+        /// <summary>
+        /// When true, overlapping coplanar faces are merged before the native
+        /// volume build (mirrors <c>ResolveStage</c>'s coplanar pre-merge).
+        /// This is the managed analogue of <see cref="SewBeforeBuild"/>: where
+        /// sew joins near-touching edges, this merge collapses overlapping
+        /// coplanar faces — the two faces of a grown cap that now overlap
+        /// their neighbour, or an extended wall that crosses a cap plane — into
+        /// one clean surface. Default false preserves the direct build path.
+        /// </summary>
+        public bool MergeCoplanarBeforeBuild { get; set; } = false;
 
         public OcctBuildOptions()
         {
@@ -73,7 +91,9 @@ namespace SAM.Core.OCCT
             RetainTopology = occtBuildOptions.RetainTopology;
             SewingTolerance = occtBuildOptions.SewingTolerance;
             SewBeforeBuild = occtBuildOptions.SewBeforeBuild;
+            MaxSewFaceCount = occtBuildOptions.MaxSewFaceCount;
             GlueMode = occtBuildOptions.GlueMode;
+            MergeCoplanarBeforeBuild = occtBuildOptions.MergeCoplanarBeforeBuild;
         }
 
         /// <summary>

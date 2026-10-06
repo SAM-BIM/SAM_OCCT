@@ -48,6 +48,10 @@
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\build-native.ps1&quot; -Configuration $(Configuration) -SkipVcpkgInstall" />
   </Target>
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Exec Command="copy &quot;$(TargetPath)&quot; &quot;$(TargetDir)\$(ProjectName).gha&quot;&#xD;&#xA;&#xD;&#xA;set SAM_DIR=%25APPDATA%25\SAM&#xD;&#xA;if not exist &quot;%25SAM_DIR%25&quot; mkdir &quot;%25SAM_DIR%25&quot;&#xD;&#xA;if not exist &quot;%25APPDATA%25\Grasshopper\Libraries&quot; mkdir &quot;%25APPDATA%25\Grasshopper\Libraries&quot;&#xD;&#xA;&#xD;&#xA;copy &quot;$(TargetDir)*.dll&quot; &quot;%25SAM_DIR%25&quot;&#xD;&#xA;copy &quot;%25SAM_DIR%25\$(ProjectName).dll&quot; &quot;%25SAM_DIR%25\$(ProjectName).gha&quot;&#xD;&#xA;echo %25SAM_DIR%25 &gt; &quot;%25APPDATA%25\Grasshopper\Libraries\SAM.ghlink&quot;&#xD;&#xA;&#xD;&#xA;::erase &quot;%25SAM_DIR%25\$(ProjectName).dll&quot;&#xD;&#xA;::erase &quot;$(TargetPath)&quot;" />
+    <!-- Local packaging: must succeed. -->
+    <Exec Command="copy &quot;$(TargetPath)&quot; &quot;$(TargetDir)\$(ProjectName).gha&quot;" />
+    <!-- Live-Rhino deployment: best-effort. A running Rhino/Grasshopper session locks the
+         deployed .gha in %APPDATA%\SAM; that must not fail the build (IgnoreExitCode). -->
+    <Exec IgnoreExitCode="true" Command="set SAM_DIR=%25APPDATA%25\SAM&#xD;&#xA;if not exist &quot;%25SAM_DIR%25&quot; mkdir &quot;%25SAM_DIR%25&quot;&#xD;&#xA;if not exist &quot;%25APPDATA%25\Grasshopper\Libraries&quot; mkdir &quot;%25APPDATA%25\Grasshopper\Libraries&quot;&#xD;&#xA;&#xD;&#xA;copy &quot;$(TargetDir)*.dll&quot; &quot;%25SAM_DIR%25&quot;&#xD;&#xA;copy &quot;%25SAM_DIR%25\$(ProjectName).dll&quot; &quot;%25SAM_DIR%25\$(ProjectName).gha&quot;&#xD;&#xA;echo %25SAM_DIR%25 &gt; &quot;%25APPDATA%25\Grasshopper\Libraries\SAM.ghlink&quot;&#xD;&#xA;&#xD;&#xA;::erase &quot;%25SAM_DIR%25\$(ProjectName).dll&quot;&#xD;&#xA;::erase &quot;$(TargetPath)&quot;" />
   </Target>
 </Project>

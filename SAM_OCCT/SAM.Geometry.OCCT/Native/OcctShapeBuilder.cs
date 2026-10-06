@@ -1104,7 +1104,66 @@ namespace SAM.Geometry.OCCT.Native
                 }
             }
 
-            return new OcctValidationReport(isValid, isWatertight, issues);
+            return new OcctValidationReport(isValid, isWatertight, issues, DecodeNakedWires(validationHandle));
+        }
+
+        /// <summary>
+        /// Groups the free-boundary edges of a validation handle into ordered naked-wire polylines
+        /// (ABI v4, observational). Returns null on a pre-v4 native build (or any native fault), so
+        /// the report keeps only its always-available located naked-edge issues and callers degrade
+        /// cleanly. Read while the handle is alive, before sam_occt_free_validation.
+        /// </summary>
+        private static List<OcctNakedWire> DecodeNakedWires(IntPtr validationHandle)
+        {
+            if (!OcctNativeMethods.SupportsHistory)
+            {
+                return null;
+            }
+
+            try
+            {
+                int wireCount = OcctNativeMethods.sam_occt_validation_wire_count(validationHandle);
+                if (wireCount <= 0)
+                {
+                    return null;
+                }
+
+                List<OcctNakedWire> wires = new List<OcctNakedWire>(wireCount);
+                for (int wireIndex = 0; wireIndex < wireCount; wireIndex++)
+                {
+                    if (OcctNativeMethods.sam_occt_validation_wire_info(validationHandle, wireIndex, out int pointCount, out int edgeCount, out int isClosed) != 0 || pointCount <= 0)
+                    {
+                        continue;
+                    }
+
+                    List<Point3D> points = new List<Point3D>(pointCount);
+                    for (int pointIndex = 0; pointIndex < pointCount; pointIndex++)
+                    {
+                        if (OcctNativeMethods.sam_occt_validation_wire_point(validationHandle, wireIndex, pointIndex, out double x, out double y, out double z) == 0)
+                        {
+                            points.Add(new Point3D(x, y, z));
+                        }
+                    }
+
+                    List<int> owners = new List<int>(edgeCount > 0 ? edgeCount : 0);
+                    for (int edgeIndex = 0; edgeIndex < edgeCount; edgeIndex++)
+                    {
+                        owners.Add(OcctNativeMethods.sam_occt_validation_wire_edge_owner(validationHandle, wireIndex, edgeIndex, out int ownerFaceIndex) == 0 ? ownerFaceIndex : -1);
+                    }
+
+                    wires.Add(new OcctNakedWire(points, isClosed != 0, owners));
+                }
+
+                return wires.Count != 0 ? wires : null;
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return null;
+            }
+            catch (DllNotFoundException)
+            {
+                return null;
+            }
         }
 
         private static OcctValidationIssueCategory MapValidationCategory(int category)

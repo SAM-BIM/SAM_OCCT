@@ -44,11 +44,33 @@ namespace sam_occt
         double volume = 0;
     };
 
+    // ABI v4 (Phase 3, observational): per INPUT face, how it maps to the decoded
+    // output faces. `modified`/`generated` hold FLAT OUTPUT ORDINALS (the cell-
+    // major, face-minor enumeration order of Result::cells, i.e. the order the
+    // managed decode SelectMany walk produces); a face shared by two cells has
+    // two ordinals and appears under both. `deleted` marks an input the producing
+    // op removed. Indexed by input ordinal (the caller's flattened face order).
+    struct HistoryRecord
+    {
+        bool deleted = false;
+        std::vector<int> modified;
+        std::vector<int> generated;
+    };
+
     struct Result
     {
         std::vector<Cell> cells;
         std::map<std::string, int> face_keys;
         int next_face_key = 1;
+
+        // ABI v4: observational history + tolerance drift. `history_available`
+        // stays false unless a producing op captured it; the accessors degrade to
+        // that (and the managed layer then keeps the NearestSourceIndex heuristic).
+        bool history_available = false;
+        std::vector<HistoryRecord> history; // indexed by input face ordinal
+        bool tolerance_available = false;
+        double max_tolerance = 0.0;
+        double average_tolerance = 0.0;
     };
 
     // Persistent topology handle (issue #14). Owns a live TopoDS_Shape (a
@@ -109,12 +131,25 @@ namespace sam_occt
     // a mistyped pointer fails cleanly instead of crashing.
     constexpr std::uint32_t validation_magic = 0x53414D56; // "SAMV"
 
+    // ABI v4 (Phase 3): one free-boundary (naked) wire grouped by
+    // ShapeAnalysis_FreeBounds. `points` is the ordered polyline (the closing
+    // vertex is NOT duplicated); `edge_owners[i]` is the input-face index that
+    // free edge i bounds (-1 when unknown). edge_count == points.size() for a
+    // closed wire, points.size() - 1 for an open wire.
+    struct FreeWire
+    {
+        std::vector<Point> points;
+        std::vector<int> edge_owners;
+        bool closed = false;
+    };
+
     struct Validation
     {
         std::uint32_t magic = validation_magic;
         bool is_valid = false;   // BRepCheck valid AND no argument-analyzer faults AND no free bounds
         bool watertight = false; // no free (naked) boundary edges
         std::vector<ValidationIssue> issues;
+        std::vector<FreeWire> wires; // ABI v4: grouped naked loops (may be empty)
     };
 
     inline Validation* as_validation(void* validation_handle)
@@ -169,7 +204,15 @@ namespace sam_occt
         int run_parallel,
         std::vector<TopoDS_Solid>& solids);
 
-    bool append_solid_to_result(const TopoDS_Solid& solid, Result& result, double tolerance);
+    // When ordinal_faces is non-null, the decoded output TopoDS_Face of every
+    // face added to an ACCEPTED cell is appended in flat-ordinal order (ABI v4,
+    // for BRepTools_History translation). Faces of a rejected cell contribute no
+    // ordinal, exactly as they contribute no decoded face.
+    bool append_solid_to_result(
+        const TopoDS_Solid& solid,
+        Result& result,
+        double tolerance,
+        std::vector<TopoDS_Face>* ordinal_faces = nullptr);
 
     // ShapeFix_Shape on the whole shape, then per-solid extraction. Used by the
     // legacy entry points whose boolean output has not been fixed yet; the

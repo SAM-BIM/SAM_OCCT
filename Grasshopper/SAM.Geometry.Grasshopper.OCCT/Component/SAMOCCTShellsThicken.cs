@@ -37,10 +37,10 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 shells.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(shells, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number thickness = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "_thickness", NickName = "_thickness", Description = "Wall thickness. Positive thickens outward, negative inward.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number thickness = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "_thickness", NickName = "_thickness", Description = "Wall thickness [m]. Positive thickens outward, negative inward.", Access = GH_ParamAccess.item };
                 result.Add(new GH_SAMParam(thickness, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT build tolerance", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT build tolerance [m]", Access = GH_ParamAccess.item };
                 tolerance.SetPersistentData(Tolerance.Distance);
                 result.Add(new GH_SAMParam(tolerance, ParamVisibility.Voluntary));
 

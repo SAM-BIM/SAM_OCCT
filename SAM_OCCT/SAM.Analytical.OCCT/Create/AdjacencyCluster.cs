@@ -236,6 +236,333 @@ namespace SAM.Analytical.OCCT
         }
 
         /// <summary>
+        /// Builds a SAM <see cref="AdjacencyCluster"/> directly from a <see cref="ResolvedCellComplex"/> the
+        /// solver already validated (Phase P2), with NO native rebuild - one space per cell, one panel per
+        /// unique cell face (deduped per-decode <see cref="ResolvedCellFace.TopologyKey"/>), relations from
+        /// each face's owner cells. Panel identity (construction/type/Guid) is inherited from a supplied
+        /// <paramref name="panels"/> ONLY on an unambiguous geometric match (exactly one coplanar panel whose
+        /// face contains the cell face's interior point); a zero or ambiguous match falls back to a default
+        /// construction/type and is reported (<c>SAM_OCCT_ANALYTICAL_PANEL_IDENTITY</c>), never silently
+        /// mis-attributed. Returns null when the complex has no cells or no relations form.
+        /// </summary>
+        public static AdjacencyCluster AdjacencyCluster(IEnumerable<Panel> panels, ResolvedCellComplex resolvedCellComplex, out List<string> diagnostics, double minArea = Tolerance.MacroDistance, double maxAngle = 0.0872664626, double tolerance = Tolerance.Distance, double fuzzyTolerance = Tolerance.MacroDistance, IEnumerable<int> excludeCellIndices = null)
+        {
+            diagnostics = new List<string>();
+
+            if (resolvedCellComplex?.Cells == null || resolvedCellComplex.Cells.Count == 0)
+            {
+                diagnostics.Add("SAM_OCCT_ANALYTICAL_COMPLEX_EMPTY: The supplied ResolvedCellComplex has no cells.");
+                return null;
+            }
+
+            List<Panel> panels_Temp = panels?.Where(x => x != null && x.GetFace3D() != null && x.GetFace3D().IsValid()).ToList() ?? new List<Panel>();
+
+            // Cells to omit (e.g. non-Interior cells the caller classified out), addressed BY CELL INDEX -
+            // never a centre-distance match. An excluded cell gets no space; a face it shares with a kept
+            // cell still becomes that cell's (now envelope) panel; a face owned only by excluded cells relates
+            // to nothing.
+            HashSet<int> excluded = excludeCellIndices == null ? new HashSet<int>() : new HashSet<int>(excludeCellIndices);
+
+            // One space per KEPT cell, located at the cell's native centre (or the bbox centre of its owned
+            // faces as a fallback), addressed by cell index.
+            Dictionary<int, Space> spaceByCellIndex = new Dictionary<int, Space>();
+            int count = 1;
+            for (int cellIndex = 0; cellIndex < resolvedCellComplex.Cells.Count; cellIndex++)
+            {
+                if (excluded.Contains(cellIndex))
+                {
+                    continue;
+                }
+
+                ResolvedCell cell = resolvedCellComplex.Cells[cellIndex];
+                Point3D location = cell?.Centre ?? OwnedFacesCentre(resolvedCellComplex, cellIndex);
+
+                if (location != null)
+                {
+                    List<Face3D> ownedFace3Ds = OwnedFace3Ds(resolvedCellComplex, cellIndex);
+                    if (ownedFace3Ds.Count > 0)
+                    {
+                        Shell validationShell = new Shell(ownedFace3Ds);
+                        if (!validationShell.Inside(location, fuzzyTolerance, tolerance) && !validationShell.On(location, tolerance))
+                        {
+                            location = validationShell.InternalPoint3D(fuzzyTolerance, tolerance) ?? OwnedFacesCentre(resolvedCellComplex, cellIndex);
+                        }
+                    }
+                }
+
+                if (location == null)
+                {
+                    diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_COMPLEX_CELL_NO_LOCATION: Cell {0} had no centre and no owned-face geometry to derive one; cannot place a space.", cellIndex));
+                    return null;
+                }
+
+                Space space = new Space(string.Format("Cell {0}", count), location);
+                count++;
+                if (cell != null && !double.IsNaN(cell.Volume))
+                {
+                    space.SetValue(SpaceParameter.Volume, System.Math.Abs(cell.Volume));
+                }
+
+                spaceByCellIndex[cellIndex] = space;
+            }
+
+            // One panel per unique cell face, keyed by its per-decode TopologyKey; identity inherited on an
+            // unambiguous geometric match, defaulted (and counted) otherwise.
+            Dictionary<int, Panel> panelsByKey = new Dictionary<int, Panel>();
+            // A source panel's plane can contain the interior point of more than one distinct cell face (e.g.
+            // a wall spanning past an internal separator) - MatchPanelByGeometry matches each independently, so
+            // two DIFFERENT cell faces can both resolve to the SAME matched.Guid. Re-stamping both with that
+            // Guid would hand back two Panel objects sharing one identity; AdjacencyCluster (Guid-keyed)
+            // silently keeps only the last one added, dropping a panel and its relations with no diagnostic.
+            // Only the Guid is unsafe to duplicate: the second-and-later faces still inherit the source's
+            // construction and type (they ARE pieces of that same physical element), but get a fresh Guid.
+            HashSet<System.Guid> claimedGuids = new HashSet<System.Guid>();
+            // Panels whose type/construction was DEFAULTED from the raw face plane normal rather than inherited
+            // from a source panel. A decoded face's plane normal has arbitrary orientation relative to its
+            // owning cell, so that guess can call a floor a Roof and vice versa; these Guids are handed to
+            // SAM's own classification below once the normals are space-relative.
+            HashSet<System.Guid> defaultedGuids = new HashSet<System.Guid>();
+            int inheritedCount = 0, defaultedCount = 0, ambiguousCount = 0, freshGuidCount = 0, smallFaceCount = 0;
+            foreach (ResolvedCellFace cellFace in resolvedCellComplex.Faces)
+            {
+                if (cellFace?.Face3D == null || panelsByKey.ContainsKey(cellFace.TopologyKey))
+                {
+                    continue;
+                }
+
+                double area = cellFace.Face3D.GetArea();
+                if (!double.IsNaN(area) && area < minArea)
+                {
+                    smallFaceCount++;
+                    continue;
+                }
+
+                PanelType panelType = Query.PanelType(cellFace.Face3D.GetPlane()?.Normal, maxAngle);
+                if (panelType == PanelType.Undefined)
+                {
+                    panelType = PanelType.Air;
+                }
+
+                Panel matched = MatchPanelByGeometry(cellFace.Face3D, panels_Temp, tolerance, out bool ambiguous);
+                Panel panel;
+                if (matched != null)
+                {
+                    // Inherit the matched source panel's construction and type; take THIS face's geometry.
+                    // Built via the same non-trimming factory as the default branch (so identity attribution
+                    // never drops a face the default would keep). Re-stamp with the source Guid only if it is
+                    // still free; if an earlier cell face already claimed it (see comment above), keep the
+                    // fresh Guid the factory assigned so this piece is not silently dropped by AddObject.
+                    Construction construction = matched.Construction ?? Query.DefaultConstruction(panelType);
+                    PanelType matchedType = matched.PanelType != PanelType.Undefined ? matched.PanelType : panelType;
+                    Panel basePanel = global::SAM.Analytical.Create.Panel(construction, matchedType, cellFace.Face3D);
+                    if (basePanel == null)
+                    {
+                        panel = null;
+                    }
+                    else if (claimedGuids.Add(matched.Guid))
+                    {
+                        panel = global::SAM.Analytical.Create.Panel(matched.Guid, basePanel);
+                        if (panel != null)
+                        {
+                            inheritedCount++;
+                        }
+                    }
+                    else
+                    {
+                        panel = basePanel; // construction/type inherited, fresh Guid
+                        freshGuidCount++;
+                    }
+                }
+                else
+                {
+                    if (ambiguous)
+                    {
+                        ambiguousCount++;
+                    }
+
+                    panel = global::SAM.Analytical.Create.Panel(Query.DefaultConstruction(panelType), panelType, cellFace.Face3D);
+                    if (panel != null)
+                    {
+                        defaultedCount++;
+
+                        // Air is excluded from reclassification. A virtual Air boundary must stay Air: SAM's
+                        // floor-area calculation now accepts a geometrically valid Air panel as a space's floor
+                        // surface, so there is no area-driven reason to convert it, and UpdatePanelTypes would
+                        // otherwise turn it into a physical FloorExposed/Roof/WallExternal with a real
+                        // construction. Every other defaulted type was guessed from the raw plane normal and
+                        // does need correcting.
+                        if (panelType != PanelType.Air)
+                        {
+                            defaultedGuids.Add(panel.Guid);
+                        }
+                    }
+                }
+
+                if (panel != null)
+                {
+                    panelsByKey[cellFace.TopologyKey] = panel;
+                }
+            }
+
+            AdjacencyCluster result = new AdjacencyCluster();
+            foreach (Space space in spaceByCellIndex.Values)
+            {
+                result.AddObject(space);
+            }
+
+            foreach (Panel panel in panelsByKey.Values)
+            {
+                result.AddObject(panel);
+            }
+
+            int relationCount = 0;
+            foreach (ResolvedCellFace cellFace in resolvedCellComplex.Faces)
+            {
+                if (cellFace == null || !panelsByKey.TryGetValue(cellFace.TopologyKey, out Panel panel))
+                {
+                    continue;
+                }
+
+                foreach (int ownerCellIndex in cellFace.OwnerCellIndices ?? new List<int>())
+                {
+                    if (!spaceByCellIndex.TryGetValue(ownerCellIndex, out Space space))
+                    {
+                        continue; // excluded or out-of-range owner cell
+                    }
+
+                    if (result.AddRelation(space, panel))
+                    {
+                        relationCount++;
+                    }
+                }
+            }
+
+            if (relationCount == 0)
+            {
+                diagnostics.Add("SAM_OCCT_ANALYTICAL_COMPLEX_NO_RELATIONS: The supplied ResolvedCellComplex produced no space-panel relations.");
+                return null;
+            }
+
+            diagnostics.Add(string.Format(
+                "SAM_OCCT_ANALYTICAL_COMPLEX_CONSUMED: Built adjacency cluster directly from the supplied ResolvedCellComplex (SolveId {0}) with {1} space(s), {2} panel(s), {3} relation(s); {4} face(s) below minArea skipped; {5} face(s) had TopologyKey==0 (excluded from the complex); {6} cell(s) excluded by index.",
+                resolvedCellComplex.SolveId, spaceByCellIndex.Count, panelsByKey.Count, relationCount, smallFaceCount, resolvedCellComplex.TopologyKeyZeroFaceCount, excluded.Count));
+            diagnostics.Add(string.Format(
+                "SAM_OCCT_ANALYTICAL_PANEL_IDENTITY: {0} panel(s) fully inherited identity (construction/type/Guid) from a supplied panel; {1} inherited construction/type but got a fresh Guid because the matched source panel's Guid was already claimed by an earlier cell face (never a silent collision that drops a panel); {2} defaulted ({3} of them because the geometric match was ambiguous, never mis-attributed).",
+                inheritedCount, freshGuidCount, defaultedCount, ambiguousCount));
+
+            // Keep normals consistent with the relations, which makes each panel's normal space-outward.
+            result = result.UpdateNormals(false, true, false, fuzzyTolerance, tolerance);
+            result.Normalize(false);
+
+            // Reclassify ONLY the defaulted panels, now that their normals are space-relative. The type they
+            // were given above came from the decoded face's raw plane normal, whose orientation relative to the
+            // owning cell is arbitrary, so a floor could be left typed Roof - which then reads as a missing
+            // floor downstream and made an OCCT space's floor area disagree with the identical SAM geometry.
+            // Restricting both passes to defaultedGuids preserves the original intent of not resetting types or
+            // constructions: a panel that inherited real identity from a supplied panel is never touched, and
+            // neither is a virtual Air boundary (see where defaultedGuids is populated). defaultedGuids only
+            // ever holds panels created by THIS call, so nothing outside this operation can be reclassified.
+            if (defaultedGuids.Count != 0)
+            {
+                result.UpdatePanelTypes(0, defaultedGuids);
+                result.SetDefaultConstructionByPanelType(defaultedGuids);
+            }
+
+            // Same shared calculation as every other creation path (see DirectAdjacencyCluster) so a space
+            // built straight from a resolved complex carries the same SpaceParameter.Area contract.
+            int areaCount = result.UpdateFloorAreas(silverSpacing: fuzzyTolerance, tolerance_Distance: tolerance);
+            diagnostics.Add(string.Format(
+                "SAM_OCCT_ANALYTICAL_SPACE_AREAS: Applied SAM's canonical floor area to {0} of {1} space(s). Any shortfall kept whatever area the space already carried rather than storing an invalid value.",
+                areaCount, spaceByCellIndex.Count));
+
+            return result;
+        }
+
+        /// <summary>The bounding-box centre of the faces a cell owns in the complex, a fallback space location
+        /// when the native cell centre is absent.</summary>
+        private static Point3D OwnedFacesCentre(ResolvedCellComplex resolvedCellComplex, int cellIndex)
+        {
+            List<BoundingBox3D> boundingBox3Ds = new List<BoundingBox3D>();
+            foreach (ResolvedCellFace cellFace in resolvedCellComplex.Faces)
+            {
+                if (cellFace?.Face3D == null || cellFace.OwnerCellIndices == null || !cellFace.OwnerCellIndices.Contains(cellIndex))
+                {
+                    continue;
+                }
+
+                BoundingBox3D boundingBox3D = cellFace.Face3D.GetBoundingBox();
+                if (boundingBox3D != null && boundingBox3D.IsValid())
+                {
+                    boundingBox3Ds.Add(boundingBox3D);
+                }
+            }
+
+            return boundingBox3Ds.Count == 0 ? null : new BoundingBox3D(boundingBox3Ds).GetCentroid();
+        }
+
+        private static List<Face3D> OwnedFace3Ds(ResolvedCellComplex resolvedCellComplex, int cellIndex)
+        {
+            List<Face3D> face3Ds = new List<Face3D>();
+            foreach (ResolvedCellFace cellFace in resolvedCellComplex.Faces)
+            {
+                if (cellFace?.Face3D == null || cellFace.OwnerCellIndices == null || !cellFace.OwnerCellIndices.Contains(cellIndex))
+                {
+                    continue;
+                }
+
+                face3Ds.Add(cellFace.Face3D);
+            }
+
+            return face3Ds;
+        }
+
+        /// <summary>Conservatively matches a cell face to a supplied panel: returns the sole panel whose face
+        /// is coplanar with the cell face AND contains its interior point. Null when there is no such panel or
+        /// when more than one qualifies (<paramref name="ambiguous"/> = true) - so identity is never
+        /// mis-attributed by guessing between candidates.</summary>
+        private static Panel MatchPanelByGeometry(Face3D face3D, List<Panel> panels, double tolerance, out bool ambiguous)
+        {
+            ambiguous = false;
+            if (panels == null || panels.Count == 0)
+            {
+                return null;
+            }
+
+            Plane facePlane = face3D.GetPlane();
+            Point3D internalPoint = face3D.GetInternalPoint3D(tolerance);
+            if (facePlane == null || internalPoint == null)
+            {
+                return null;
+            }
+
+            Panel matched = null;
+            int candidateCount = 0;
+            foreach (Panel panel in panels)
+            {
+                Face3D panelFace3D = panel.GetFace3D();
+                Plane panelPlane = panelFace3D?.GetPlane();
+                if (panelPlane == null || !panelPlane.Coplanar(facePlane, tolerance))
+                {
+                    continue;
+                }
+
+                if (panelFace3D.On(internalPoint, tolerance))
+                {
+                    candidateCount++;
+                    matched = panel;
+                }
+            }
+
+            if (candidateCount == 1)
+            {
+                return matched;
+            }
+
+            ambiguous = candidateCount > 1;
+            return null;
+        }
+
+        /// <summary>
         /// Logs why a combined MakerVolume rebuild produced a different number of
         /// cells than the input shells, by mapping each input shell's interior to
         /// the rebuilt cell that contains it:
@@ -392,6 +719,9 @@ namespace SAM.Analytical.OCCT
 
             stopwatch.Restart();
             int relationCount = 0;
+            int topologyKeyZeroFaceCount = 0;
+            Dictionary<int, int> topologyKeyOwnerCounts = new Dictionary<int, int>();
+            HashSet<System.Guid> relatedPanelGuids = new HashSet<System.Guid>();
             for (int cellIndex = 0; cellIndex < cellComplexResult.Cells.Count; cellIndex++)
             {
                 IReadOnlyList<OcctCellFace> faces = cellComplexResult.Cells[cellIndex].Faces;
@@ -402,10 +732,21 @@ namespace SAM.Analytical.OCCT
 
                 foreach (OcctCellFace face in faces)
                 {
-                    if (face == null || face.TopologyKey == 0)
+                    if (face == null)
                     {
                         continue;
                     }
+
+                    if (face.TopologyKey == 0)
+                    {
+                        // Parity (P1): a decoded face with no per-decode identity is silently skipped
+                        // by the relation loop below - count it so it is never a silent gap.
+                        topologyKeyZeroFaceCount++;
+                        continue;
+                    }
+
+                    topologyKeyOwnerCounts.TryGetValue(face.TopologyKey, out int ownerCount);
+                    topologyKeyOwnerCounts[face.TopologyKey] = ownerCount + 1;
 
                     if (!panels.TryGetValue(face.TopologyKey, out Panel panel))
                     {
@@ -415,8 +756,39 @@ namespace SAM.Analytical.OCCT
                     if (result.AddRelation(spaces[cellIndex], panel))
                     {
                         relationCount++;
+                        relatedPanelGuids.Add(panel.Guid);
                     }
                 }
+            }
+
+            // Parity diagnostic (P1, SAM_OCCT_ANALYTICAL_PARITY): counting only, does not change the
+            // relationCount==0 refusal below. Expected relation count assumes each shared face is owned
+            // by exactly two cells (the geometrically normal case for a planar cell complex): every
+            // OcctCellComplexResult.FaceAdjacencies entry contributes two relations (one per owning
+            // cell), and every envelope face (TopologyKey owned by exactly one cell) contributes one.
+            // TopologyKey keys are per-decode only (OcctCellComplexResult.BuildFaceAdjacencies); this
+            // never compares keys across two different decodes.
+            int envelopeFaceCount = topologyKeyOwnerCounts.Values.Count(x => x == 1);
+            int faceAdjacencyCount = cellComplexResult.FaceAdjacencies?.Count ?? 0;
+            int expectedRelationCount = (2 * faceAdjacencyCount) + envelopeFaceCount;
+            int zeroRelationPanelCount = panels.Count - relatedPanelGuids.Count;
+            bool parityClean = relationCount == expectedRelationCount && topologyKeyZeroFaceCount == 0 && zeroRelationPanelCount == 0;
+            cellComplexResult.AddDiagnostic(
+                parityClean ? OcctDiagnosticSeverity.Info : OcctDiagnosticSeverity.Warning,
+                "SAM_OCCT_ANALYTICAL_PARITY",
+                string.Format(
+                    "Parity check: {0} relation(s) added vs {1} expected (2 x {2} shared face adjacency(ies) + {3} envelope face(s)); {4} face(s) had TopologyKey==0 (silently skipped); {5} panel(s) received zero relation(s).",
+                    relationCount, expectedRelationCount, faceAdjacencyCount, envelopeFaceCount, topologyKeyZeroFaceCount, zeroRelationPanelCount));
+
+            if (zeroRelationPanelCount > 0)
+            {
+                // Named, not just counted (plan §10-P4 item 2): a panel bounding zero spaces is exactly the
+                // "orphan cluster panel" signal ValidateSpaces' PanelContributionFinder re-derives independently -
+                // surfacing the Guids here too means a GH user sees it on the builder's own diagnostic feed.
+                List<System.Guid> zeroRelationGuids = panels.Values.Select(x => x.Guid).Where(x => !relatedPanelGuids.Contains(x)).OrderBy(x => x).Take(20).ToList();
+                cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_ZERO_RELATION_PANELS", string.Format(
+                    "{0} panel(s) bound zero spaces (first {1} shown): {2}{3}",
+                    zeroRelationPanelCount, zeroRelationGuids.Count, string.Join(", ", zeroRelationGuids), zeroRelationPanelCount > zeroRelationGuids.Count ? ", ..." : string.Empty));
             }
 
             if (relationCount == 0)
@@ -431,6 +803,17 @@ namespace SAM.Analytical.OCCT
             result.UpdatePanelTypes(0);
             result.SetDefaultConstructionByPanelType();
             cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_FINALIZE", string.Format("Direct rebuild finalized normals, panel types, and constructions in {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
+
+            // Space area is deliberately NOT derived here from the native cell geometry: an OCCT-created space
+            // must carry the same SpaceParameter.Area a SAM-created space would. The completed cluster is
+            // handed to SAM's shared calculation, which reads the floor panels this rebuild just produced, so
+            // there is exactly one set of geometric floor rules across both repositories. Volume stays as the
+            // native cell volume assigned in CreateSpaces.
+            int areaCount = result.UpdateFloorAreas(silverSpacing: options.FuzzyTolerance, tolerance_Distance: options.Tolerance);
+            cellComplexResult.AddDiagnostic(
+                areaCount == spaces.Count ? OcctDiagnosticSeverity.Info : OcctDiagnosticSeverity.Warning,
+                "SAM_OCCT_ANALYTICAL_SPACE_AREAS",
+                string.Format("Applied SAM's canonical floor area to {0} of {1} space(s). Any shortfall kept whatever area the space already carried rather than storing an invalid value.", areaCount, spaces.Count));
 
             return result;
         }
@@ -456,17 +839,25 @@ namespace SAM.Analytical.OCCT
                 }
 
                 Point3D location = cell.Center == null ? null : new Point3D(cell.Center);
-                if (location != null)
+                if (location != null && (shell.Inside(location, options.FuzzyTolerance, options.Tolerance) || shell.On(location, options.Tolerance)))
                 {
                     centerLocationCount++;
+                }
+                else
+                {
+                    location = null;
                 }
 
                 if (location == null)
                 {
                     location = BoundingBoxCenter(cell);
-                    if (location != null)
+                    if (location != null && (shell.Inside(location, options.FuzzyTolerance, options.Tolerance) || shell.On(location, options.Tolerance)))
                     {
                         boundingBoxLocationCount++;
+                    }
+                    else
+                    {
+                        location = null;
                     }
                 }
 
@@ -475,12 +866,30 @@ namespace SAM.Analytical.OCCT
                     fallbackStopwatch.Start();
                     location = shell.InternalPoint3D(options.FuzzyTolerance, options.Tolerance);
                     fallbackStopwatch.Stop();
-                    fallbackLocationCount++;
+                    if (location != null)
+                    {
+                        fallbackLocationCount++;
+                    }
                 }
 
                 if (location == null)
                 {
                     return null;
+                }
+
+                // D7 (docs/CONTROLLED_WORKFLOW_PLAN.md §1): FindSeedSpace only ever returns the first
+                // UNCLAIMED seed whose location this shell contains, so a second expected seed landing in an
+                // already-claimed cell is silently dropped to a generic "Cell N" name with no signal that two
+                // expected spaces occupy one built cell. Scanning ALL containing seeds here (used or not)
+                // recovers that signal without changing which seed wins (still FindSeedSpace's own choice).
+                List<Space> containingSeeds = seedSpaces == null
+                    ? new List<Space>()
+                    : seedSpaces.Where(x => x?.Location != null && (shell.Inside(x.Location, options.FuzzyTolerance, options.Tolerance) || shell.On(x.Location, options.Tolerance))).ToList();
+                if (containingSeeds.Count > 1)
+                {
+                    cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_MERGED_SEED_CELL", string.Format(
+                        "Cell {0} contains {1} expected seed space location(s) ({2}) - only one becomes this cell's identity; the rest are the \"expected spaces merged\" signal, not a dropped cell.",
+                        i, containingSeeds.Count, string.Join(", ", containingSeeds.Select(x => string.Format("{0} ({1})", x.Name, x.Guid)))));
                 }
 
                 Space space = FindSeedSpace(shell, seedSpaces, usedSeedSpaceGuids, options);

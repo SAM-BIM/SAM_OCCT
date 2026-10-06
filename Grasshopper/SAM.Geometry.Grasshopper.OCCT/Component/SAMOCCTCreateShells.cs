@@ -35,11 +35,11 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
                 result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_GenericObject() { Name = "_face3Ds", NickName = "_face3Ds", Description = "Boundary faces/surfaces used to form closed volumes. Accepts SAM Face3Ds and geometry that converts to Face3Ds; use this before shell booleans when you only have surfaces.", Access = GH_ParamAccess.list }, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT build tolerance", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT build tolerance [m]", Access = GH_ParamAccess.item };
                 tolerance.SetPersistentData(Tolerance.Distance);
                 result.Add(new GH_SAMParam(tolerance, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number fuzzyTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "fuzzyTolerance_", NickName = "fuzzyTolerance_", Description = "OCCT fuzzy tolerance", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number fuzzyTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "fuzzyTolerance_", NickName = "fuzzyTolerance_", Description = "OCCT fuzzy tolerance [m]", Access = GH_ParamAccess.item };
                 fuzzyTolerance.SetPersistentData(Tolerance.MacroDistance);
                 result.Add(new GH_SAMParam(fuzzyTolerance, ParamVisibility.Voluntary));
 
@@ -47,7 +47,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 sewBeforeBuild.SetPersistentData(false);
                 result.Add(new GH_SAMParam(sewBeforeBuild, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number sewingTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "sewingTolerance_", NickName = "sewingTolerance_", Description = "OCCT sewing tolerance used by sewBeforeBuild_ and by the automatic sew-then-rebuild retry: coincident / near-touching face edges within this distance are joined. Leave 0 to fall back to tolerance_.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number sewingTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "sewingTolerance_", NickName = "sewingTolerance_", Description = "OCCT sewing tolerance [m] used by sewBeforeBuild_ and by the automatic sew-then-rebuild retry: coincident / near-touching face edges within this distance are joined. Leave 0 to fall back to tolerance_.", Access = GH_ParamAccess.item };
                 sewingTolerance.SetPersistentData(0.0);
                 result.Add(new GH_SAMParam(sewingTolerance, ParamVisibility.Voluntary));
 

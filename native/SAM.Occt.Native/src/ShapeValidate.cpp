@@ -31,12 +31,20 @@
 #include <GProp_GProps.hxx>
 #include <OSD.hxx>
 #include <ShapeAnalysis_FreeBounds.hxx>
+#include <ShapeAnalysis_ShapeTolerance.hxx>
+#include <BRep_Tool.hxx>
+#include <BRepTools_WireExplorer.hxx>
 #include <TopAbs.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TopoDS_Vertex.hxx>
+#include <TopoDS_Wire.hxx>
 #include <gp_Pnt.hxx>
 
 #include <memory>
@@ -101,9 +109,71 @@ namespace
         return properties.Mass();
     }
 
+    // Owner-face index of a free edge: its position in the shape's face
+    // enumeration order (which mirrors the order faces were added when the
+    // caller built the shape from its face list), or -1 when the edge bounds no
+    // face in the map. ABI v4, best-effort: managed callers tolerate -1.
+    int edge_owner_index(
+        const TopoDS_Edge& edge,
+        const TopTools_IndexedDataMapOfShapeListOfShape& edge_to_face,
+        const TopTools_IndexedMapOfShape& face_map)
+    {
+        if (!edge_to_face.Contains(edge))
+        {
+            return -1;
+        }
+
+        const TopTools_ListOfShape& faces = edge_to_face.FindFromKey(edge);
+        if (faces.IsEmpty())
+        {
+            return -1;
+        }
+
+        const int index = face_map.FindIndex(faces.First()); // 1-based, 0 when absent
+        return index > 0 ? index - 1 : -1;
+    }
+
+    // Builds one FreeWire (ordered polyline + per-edge owner + closed flag) from a
+    // free-boundary wire. BRepTools_WireExplorer visits the edges in connection
+    // order; CurrentVertex() is the vertex shared with the previous edge (the
+    // start of the current edge in order), so one point per edge gives the corner
+    // sequence. For an OPEN wire the final edge's end vertex is appended (so
+    // point_count = edge_count + 1); a CLOSED wire's closing vertex is NOT
+    // duplicated (point_count = edge_count).
+    FreeWire build_free_wire(
+        const TopoDS_Wire& wire,
+        bool closed,
+        const TopTools_IndexedDataMapOfShapeListOfShape& edge_to_face,
+        const TopTools_IndexedMapOfShape& face_map)
+    {
+        FreeWire free_wire;
+        free_wire.closed = closed;
+
+        TopoDS_Edge last_edge;
+        for (BRepTools_WireExplorer wire_explorer(wire); wire_explorer.More(); wire_explorer.Next())
+        {
+            const TopoDS_Edge& edge = wire_explorer.Current();
+            const gp_Pnt point = BRep_Tool::Pnt(wire_explorer.CurrentVertex());
+            free_wire.points.push_back({ point.X(), point.Y(), point.Z() });
+            free_wire.edge_owners.push_back(edge_owner_index(edge, edge_to_face, face_map));
+            last_edge = edge;
+        }
+
+        if (!closed && !last_edge.IsNull())
+        {
+            const gp_Pnt end = BRep_Tool::Pnt(TopExp::LastVertex(last_edge, Standard_True));
+            free_wire.points.push_back({ end.X(), end.Y(), end.Z() });
+        }
+
+        return free_wire;
+    }
+
     // Free (naked) boundary edges: an edge bounding only one face. Their presence
     // means the shape is not watertight, which is the #1 reason MakerVolume fails
-    // to build a volume. Reported with the edge midpoint and length.
+    // to build a volume. Each free edge is reported as an issue (midpoint + length,
+    // unchanged), and the edges are ALSO grouped into ordered FreeWires (ABI v4)
+    // for GapFill v2 / AutoTune3D / Grasshopper display - from the SAME
+    // ShapeAnalysis_FreeBounds pass, no recomputation.
     void collect_free_bounds(const TopoDS_Shape& shape, Validation& validation)
     {
         // The already-connected constructor uses the shape's existing edge
@@ -111,19 +181,34 @@ namespace
         // tolerance.
         ShapeAnalysis_FreeBounds free_bounds(shape, Standard_False, Standard_True, Standard_False);
 
+        TopTools_IndexedMapOfShape face_map;
+        TopExp::MapShapes(shape, TopAbs_FACE, face_map);
+        TopTools_IndexedDataMapOfShapeListOfShape edge_to_face;
+        TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_to_face);
+
         int free_edge_count = 0;
-        const TopoDS_Shape wire_sets[2] = { free_bounds.GetOpenWires(), free_bounds.GetClosedWires() };
-        for (const TopoDS_Shape& wires : wire_sets)
+        struct WireSet { TopoDS_Shape wires; bool closed; };
+        const WireSet wire_sets[2] = {
+            { free_bounds.GetOpenWires(), false },
+            { free_bounds.GetClosedWires(), true }
+        };
+        for (const WireSet& set : wire_sets)
         {
-            if (wires.IsNull())
+            if (set.wires.IsNull())
             {
                 continue;
             }
 
-            for (TopExp_Explorer edge_explorer(wires, TopAbs_EDGE); edge_explorer.More(); edge_explorer.Next())
+            for (TopExp_Explorer wire_explorer(set.wires, TopAbs_WIRE); wire_explorer.More(); wire_explorer.Next())
             {
-                validation.issues.push_back(edge_issue(TopoDS::Edge(edge_explorer.Current())));
-                ++free_edge_count;
+                const TopoDS_Wire& wire = TopoDS::Wire(wire_explorer.Current());
+                validation.wires.push_back(build_free_wire(wire, set.closed, edge_to_face, face_map));
+
+                for (TopExp_Explorer edge_explorer(wire, TopAbs_EDGE); edge_explorer.More(); edge_explorer.Next())
+                {
+                    validation.issues.push_back(edge_issue(TopoDS::Edge(edge_explorer.Current())));
+                    ++free_edge_count;
+                }
             }
         }
 
@@ -332,6 +417,118 @@ int sam_occt_validation_issue(
     *y = issue.y;
     *z = issue.z;
     *size = issue.size;
+    return 0;
+}
+
+// ---- ABI v4: naked free-boundary wires ----
+
+int sam_occt_validation_wire_count(void* validation_handle)
+{
+    const Validation* validation = as_validation(validation_handle);
+    if (validation == nullptr)
+    {
+        return -1;
+    }
+
+    return static_cast<int>(validation->wires.size());
+}
+
+int sam_occt_validation_wire_info(
+    void* validation_handle,
+    int wire_index,
+    int* point_count,
+    int* edge_count,
+    int* is_closed)
+{
+    const Validation* validation = as_validation(validation_handle);
+    if (validation == nullptr)
+    {
+        return 50;
+    }
+
+    if (point_count == nullptr || edge_count == nullptr || is_closed == nullptr)
+    {
+        return 10;
+    }
+
+    if (wire_index < 0 || wire_index >= static_cast<int>(validation->wires.size()))
+    {
+        return 40;
+    }
+
+    const FreeWire& wire = validation->wires[static_cast<std::size_t>(wire_index)];
+    *point_count = static_cast<int>(wire.points.size());
+    *edge_count = static_cast<int>(wire.edge_owners.size());
+    *is_closed = wire.closed ? 1 : 0;
+    return 0;
+}
+
+int sam_occt_validation_wire_point(
+    void* validation_handle,
+    int wire_index,
+    int point_index,
+    double* x,
+    double* y,
+    double* z)
+{
+    const Validation* validation = as_validation(validation_handle);
+    if (validation == nullptr)
+    {
+        return 50;
+    }
+
+    if (x == nullptr || y == nullptr || z == nullptr)
+    {
+        return 10;
+    }
+
+    if (wire_index < 0 || wire_index >= static_cast<int>(validation->wires.size()))
+    {
+        return 40;
+    }
+
+    const FreeWire& wire = validation->wires[static_cast<std::size_t>(wire_index)];
+    if (point_index < 0 || point_index >= static_cast<int>(wire.points.size()))
+    {
+        return 40;
+    }
+
+    const Point& point = wire.points[static_cast<std::size_t>(point_index)];
+    *x = point.x;
+    *y = point.y;
+    *z = point.z;
+    return 0;
+}
+
+int sam_occt_validation_wire_edge_owner(
+    void* validation_handle,
+    int wire_index,
+    int edge_index,
+    int* input_face_index)
+{
+    const Validation* validation = as_validation(validation_handle);
+    if (validation == nullptr)
+    {
+        return 50;
+    }
+
+    if (input_face_index == nullptr)
+    {
+        return 10;
+    }
+
+    if (wire_index < 0 || wire_index >= static_cast<int>(validation->wires.size()))
+    {
+        return 40;
+    }
+
+    const FreeWire& wire = validation->wires[static_cast<std::size_t>(wire_index)];
+    if (edge_index < 0 || edge_index >= static_cast<int>(wire.edge_owners.size()))
+    {
+        return 40;
+    }
+
+    *input_face_index = wire.edge_owners[static_cast<std::size_t>(edge_index)];
     return 0;
 }
 

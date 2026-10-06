@@ -195,19 +195,95 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
-        public void Snap_EqualWeightPanelsWithinBucket_LaterAbsorbedByEarlier()
+        public void Snap_EqualWeightPanelsWithinBucket_BothMoveToMidplaneAndGrowBuckets()
         {
-            // Equal weight, within-bucket, near-parallel: the later panel is absorbed onto the earlier
-            // backer (deterministic by the stable descending-weight sort) so coincident/offset
-            // "double-wall" pairs of the same weight collapse onto one plane instead of staying apart.
+            // Equal weight, within-bucket, near-parallel: Phase 2b's midpoint rule moves BOTH panels to the
+            // midplane (0.075 = 0.15 / 2) and grows BOTH buckets by the distance moved (0.075), rather than
+            // treating the earlier-sorted panel as an unconditional backer that stays put.
             SnappedPanel a = MakeWallPanel(0, weight: 1, bucketSize: 0.3);
             SnappedPanel b = MakeWallPanel(0.15, weight: 1, bucketSize: 0.3);
             List<SnappedPanel> panels = new List<SnappedPanel> { a, b };
 
-            Panel3DSnapSolver.Snap(panels, toleranceAngle: 0.1, toleranceArcAngle: 0.01);
+            bool changed = Panel3DSnapSolver.Snap(panels, toleranceAngle: 0.1, toleranceArcAngle: 0.01);
 
-            Assert.False(a.Snapped, "The first equal-weight panel is the backer and stays put");
-            Assert.True(b.Snapped, "The second equal-weight panel within the bucket snaps onto the backer");
+            Assert.True(changed);
+            Assert.True(a.Snapped, "Both equal-weight panels move to the midplane");
+            Assert.True(b.Snapped);
+            foreach (Point3D pt in BoundaryPoints(a.Face3D))
+            {
+                Assert.Equal(0.075, pt.Y, 6);
+            }
+            foreach (Point3D pt in BoundaryPoints(b.Face3D))
+            {
+                Assert.Equal(0.075, pt.Y, 6);
+            }
+            Assert.Equal(0.375, a.BucketSize, 6); // 0.3 + 0.075
+            Assert.Equal(0.375, b.BucketSize, 6);
+        }
+
+        [Fact]
+        public void Snap_EqualWeightDifferentBucketSize_LargerBucketPrioritizedAsBacker()
+        {
+            // Equal weight but very different bucket sizes; input list order deliberately puts the SMALL-
+            // bucket panel first (so a Weight-only sort, ignoring BucketSize as a secondary key, would treat
+            // it as higher-priority and fail to reach the far panel). Weight DESC -> BucketSize DESC ordering
+            // (Phase 2b) makes the LARGE-bucket panel the backer regardless of input order, so the 0.3 m
+            // offset (within the large bucket, well outside the small one) is captured.
+            SnappedPanel smallBucket = MakeWallPanel(0, weight: 1, bucketSize: 0.1);
+            SnappedPanel largeBucket = MakeWallPanel(0.3, weight: 1, bucketSize: 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel> { smallBucket, largeBucket };
+
+            bool changed = Panel3DSnapSolver.Snap(panels, toleranceAngle: 0.1, toleranceArcAngle: 0.01);
+
+            Assert.True(changed, "The large-bucket panel's reach should have captured the pair");
+            Assert.True(smallBucket.Snapped);
+            Assert.True(largeBucket.Snapped);
+        }
+
+        [Fact]
+        public void OrderForSnap_TieOnWeightThenBucket_BreaksByWeightThenBucketThenArea()
+        {
+            // Phase 2b full ordering law (2D SnapAndAdjustWalls parity): Weight DESC, then BucketSize DESC,
+            // then Area DESC. Input is deliberately scrambled against every key so a partial sort (weight-only,
+            // or weight+bucket without the area tie-break) would land in a different order.
+            SnappedPanel lowWeight = MakeWallPanel(0, weight: 1, bucketSize: 9.0);              // biggest bucket but lowest weight -> last
+            SnappedPanel tieSmallBucket = MakeWallPanel(1, weight: 5, bucketSize: 0.1);         // top weight, small bucket
+            SnappedPanel tieBigBucket = MakeWallPanel(2, weight: 5, bucketSize: 0.5);           // top weight, big bucket -> first
+            SnappedPanel tieBucketSmallArea = new SnappedPanel(3, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(1, 0, 0), new Point3D(1, 0, 1), new Point3D(0, 0, 1)), 5, 0.1, 0.5); // top weight, same 0.1 bucket, smaller area
+
+            List<SnappedPanel> ordered = Panel3DSnapSolver.OrderForSnap(
+                new List<SnappedPanel> { lowWeight, tieSmallBucket, tieBigBucket, tieBucketSmallArea });
+
+            // Weight 5 group first, ordered big-bucket -> (0.1-bucket: bigger area before smaller area); weight-1 last.
+            Assert.Same(tieBigBucket, ordered[0]);          // weight 5, bucket 0.5
+            Assert.Same(tieSmallBucket, ordered[1]);        // weight 5, bucket 0.1, area 3 (1x3 wall)
+            Assert.Same(tieBucketSmallArea, ordered[2]);    // weight 5, bucket 0.1, area 1 (1x1)
+            Assert.Same(lowWeight, ordered[3]);             // weight 1
+        }
+
+        [Fact]
+        public void OrderForSnap_NullInput_ReturnsEmpty()
+        {
+            Assert.Empty(Panel3DSnapSolver.OrderForSnap(null));
+        }
+
+        [Fact]
+        public void CandidatePanelsNear_MixedDistances_ReturnsOnlyBoxesWithinMargin()
+        {
+            // The bbox pre-filter is a superset gate: it keeps every panel whose 3D box lies within the
+            // margin of the backer's box and rejects the rest before the expensive plane predicates run.
+            // Backer wall at y=0; near wall at y=0.2 (within a 0.3 margin); far wall at y=5 (well outside).
+            SnappedPanel backer = MakeWallPanel(0, weight: 2, bucketSize: 0.3);
+            SnappedPanel near = MakeWallPanel(0.2, weight: 1, bucketSize: 0.3);
+            SnappedPanel far = MakeWallPanel(5.0, weight: 1, bucketSize: 0.3);
+
+            List<SnappedPanel> result = Panel3DSnapSolver
+                .CandidatePanelsNear(backer, new List<SnappedPanel> { near, far }, margin: 0.3)
+                .ToList();
+
+            Assert.Contains(near, result);
+            Assert.DoesNotContain(far, result);
         }
 
         [Fact]
@@ -230,6 +306,34 @@ namespace SAM.OCCT.UnitTests
             foreach (Point3D pt in BoundaryPoints(candidate.Face3D))
             {
                 Assert.Equal(0.2, pt.Y, 6); // unchanged: still on its own y=0.2 plane, not dragged onto the backer at y=0
+            }
+        }
+
+        [Fact]
+        public void Snap_ParallelWallsWithinBucketButLowInPlaneOverlap_NotSnapped()
+        {
+            // Two walls sharing a supporting plane (both near y~0, within a 0.5 m bucket) and near-parallel,
+            // but offset in-plane so their footprints meet only at a corner: backer x[0..2]/z[0..3], candidate
+            // x[1.5..3.5]/z[2..5]. Overlap is 0.5x1 of a 2x3 footprint => ratio ~0.083, well below the
+            // co-parallel floor. The candidate sits at y=0.4 - beyond the step-jog align offset (0.3) so the
+            // abut path cannot fire either, isolating the overlap gate. This is the whole-level-tilted.sam
+            // mis-pair signature (two distinct perimeter walls at a similar plane offset but metres apart
+            // in-plane); the Phase-2b overlap-ratio guard must keep them apart so their collapse cannot merge
+            // two cells. Regression for the tilted-closure fix.
+            SnappedPanel backer = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.5, 0.5);
+            SnappedPanel candidate = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(1.5, 0.4, 2), new Point3D(3.5, 0.4, 2), new Point3D(3.5, 0.4, 5), new Point3D(1.5, 0.4, 5)), 1, 0.5, 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel> { backer, candidate };
+
+            bool changed = Panel3DSnapSolver.Snap(panels, toleranceAngle: 0.1, toleranceArcAngle: 0.01, toleranceDistance: 1e-6);
+
+            Assert.False(changed, "A low-overlap distinct-wall pair must not snap together");
+            Assert.False(candidate.Snapped);
+            Assert.False(backer.Snapped);
+            foreach (Point3D pt in BoundaryPoints(candidate.Face3D))
+            {
+                Assert.Equal(0.4, pt.Y, 6); // candidate stays on its own plane
             }
         }
 
@@ -335,6 +439,153 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(3.0, wall.GetBoundingBox().Max.Z, 3);
         }
 
+        // ── E1: profile-preserving extend (docs/EXTEND3D_ROBUST_HANDOVER.md) ──────────────────
+        // The legacy re-extrude collapsed any non-rectangular wall to a degenerate sliver ("walls
+        // disappear after Extend3D"). These assert SHAPE (base profile, plane normal, openings),
+        // never bounding-box spans alone (R10), since a bbox check passes even under a shear.
+
+        [Fact]
+        public void ExtendTopTo_SlopedBase_PreservesPlanFootprint()
+        {
+            // Cherry-picked from PR #49 (26ac05a). Sloped-base wall grown up to z=5: the sloped base
+            // (0,0)-(4,1) must survive and the wall must not collapse.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 1), new Point3D(4, 0, 3), new Point3D(0, 0, 2)), 1, 0.3, 0.5);
+
+            bool extended = wall.ExtendTopTo(5.0, 1e-6);
+
+            Assert.True(extended);
+            BoundingBox3D box = wall.GetBoundingBox();
+            Assert.Equal(4.0, box.Max.X - box.Min.X, 3);
+            Assert.Equal(5.0, box.Max.Z, 3);
+            Assert.True(wall.GetArea() > 10.0, "Wall extension must not collapse a sloped-base wall to zero area.");
+            // The sloped base's two feet are still boundary vertices (profile preserved, not flattened).
+            List<Point3D> points = BoundaryPoints(wall.Face3D);
+            Assert.Contains(points, p => System.Math.Abs(p.X - 0) <= 1e-6 && System.Math.Abs(p.Z - 0) <= 1e-6);
+            Assert.Contains(points, p => System.Math.Abs(p.X - 4) <= 1e-6 && System.Math.Abs(p.Z - 1) <= 1e-6);
+        }
+
+        [Fact]
+        public void ExtendTopTo_ShiftedTop_UsesExternalEdgeNotDiagonal()
+        {
+            // Cherry-picked from PR #49 (26ac05a). Shifted-top parallelogram grown to z=5: the base
+            // edge (two feet at z=0) is untouched and the top overhang (x up to 5) is preserved.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(5, 0, 3), new Point3D(1, 0, 3)), 1, 0.3, 0.5);
+
+            bool extended = wall.ExtendTopTo(5.0, 1e-6);
+
+            Assert.True(extended);
+            List<Point3D> points = BoundaryPoints(wall.Face3D);
+            Assert.Equal(2, points.Count(x => System.Math.Abs(x.Z) <= 1e-6));
+            Assert.Equal(5.0, wall.GetBoundingBox().Max.Z, 3);
+            Assert.Equal(5.0, wall.GetBoundingBox().Max.X, 3); // overhang preserved (not clipped to the base span)
+        }
+
+        [Fact]
+        public void ExtendTopTo_Gable_FlatTopAtTargetWithoutCollapse()
+        {
+            // A gable (apex at z=3) grown past its ridge to z=5. The plane-ops path flattens the roof
+            // slopes into a flat top at the target (the native kernel re-cuts the true roofline) - the
+            // point of this test is that the wall REACHES the target and does NOT collapse, keeping its
+            // base feet and full plan width.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 2), new Point3D(2, 0, 3), new Point3D(0, 0, 2)), 1, 0.3, 0.5);
+
+            bool extended = wall.ExtendTopTo(5.0, 1e-6);
+
+            Assert.True(extended);
+            BoundingBox3D box = wall.GetBoundingBox();
+            Assert.Equal(5.0, box.Max.Z, 3);
+            Assert.Equal(0.0, box.Min.X, 3);
+            Assert.Equal(4.0, box.Max.X, 3);
+            Assert.True(wall.GetArea() > 15.0, "Gable extension must not collapse the wall.");
+            Assert.Equal(2, BoundaryPoints(wall.Face3D).Count(x => System.Math.Abs(x.Z) <= 1e-6)); // both feet kept
+        }
+
+        [Fact]
+        public void ExtendTopTo_MTopWall_ReachesTargetWithoutCollapse()
+        {
+            // Two-peak (M-top) wall: the single-extreme-edge WIP approach would strand the second peak
+            // below the target while reporting success (R2). The plane-ops path lifts the whole top to
+            // the target.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 2), new Point3D(3, 0, 3),
+                new Point3D(2, 0, 2), new Point3D(1, 0, 3), new Point3D(0, 0, 2)), 1, 0.3, 0.5);
+
+            bool extended = wall.ExtendTopTo(5.0, 1e-6);
+
+            Assert.True(extended);
+            Assert.Equal(5.0, wall.GetBoundingBox().Max.Z, 3);
+            Assert.True(wall.GetArea() > 15.0, "M-top extension must not collapse the wall.");
+        }
+
+        [Fact]
+        public void ExtendTopTo_TiltedWall_PreservesPlaneNormal()
+        {
+            // A wall tilted 10 degrees off vertical: the legacy straight-up re-extrude verticalized it,
+            // dropping its plane (R5). The plane-ops path extends in the wall's OWN plane, so the normal
+            // is unchanged.
+            double angle = 10.0 * System.Math.PI / 180.0;
+            double depth = 3.0 * System.Math.Tan(angle);
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, depth, 3), new Point3D(0, depth, 3)), 1, 0.3, 0.5);
+
+            Vector3D normalBefore = wall.Face3D.GetPlane().Normal.Unit;
+            bool extended = wall.ExtendTopTo(5.0, 1e-6);
+
+            Assert.True(extended);
+            Vector3D normalAfter = wall.Face3D.GetPlane().Normal.Unit;
+            // Same supporting plane (parallel normals) - the tilt is preserved, not flattened to vertical.
+            Assert.Equal(1.0, System.Math.Abs(normalBefore.DotProduct(normalAfter)), 4);
+            Assert.True(System.Math.Abs(normalAfter.Z) > 0.1, "The 10-degree tilt must survive (normal not verticalized).");
+        }
+
+        [Fact]
+        public void ExtendTopTo_WallWithWindow_PreservesOpening()
+        {
+            // A 4x4 wall with a 1x1 window grown up to z=6: the opening must survive the extend (Query.Extend
+            // is union-only, so it never touches interior openings).
+            SnappedPanel wall = new SnappedPanel(0, MakeWallFaceWithHole(), 1, 0.3, 0.5);
+
+            bool extended = wall.ExtendTopTo(6.0, 1e-6);
+
+            Assert.True(extended);
+            Assert.Equal(6.0, wall.GetBoundingBox().Max.Z, 3);
+            Assert.Equal(1, wall.Face3D.GetInternalEdge3Ds()?.Count ?? 0); // window preserved
+            Assert.Empty(wall.ExtendDiagnostics); // no hole dropped on an extend
+        }
+
+        [Fact]
+        public void ExtendBottomTo_SlopedBaseWall_LowersBaseKeepsTop()
+        {
+            // Dedicated ExtendBottomTo coverage (previously only transitive). A sloped-base wall lowered
+            // to z=-1: the top profile survives, the base flattens down to the target, no collapse.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 1), new Point3D(4, 0, 3), new Point3D(0, 0, 2)), 1, 0.3, 0.5);
+
+            bool extended = wall.ExtendBottomTo(-1.0, 1e-6);
+
+            Assert.True(extended);
+            BoundingBox3D box = wall.GetBoundingBox();
+            Assert.Equal(-1.0, box.Min.Z, 3);
+            Assert.Equal(3.0, box.Max.Z, 3); // top unchanged
+            Assert.True(wall.GetArea() > 10.0, "Lowering the base must not collapse the wall.");
+            // The original sloped top's high corner (4,3) is still a boundary vertex.
+            Assert.Contains(BoundaryPoints(wall.Face3D), p => System.Math.Abs(p.X - 4) <= 1e-6 && System.Math.Abs(p.Z - 3) <= 1e-6);
+        }
+
+        [Fact]
+        public void ExtendBottomTo_RectangularWall_LowersBaseAndReturnsTrue()
+        {
+            SnappedPanel wall = MakeWallPanel(0); // base at z = 0, top at z = 3
+            bool extended = wall.ExtendBottomTo(-2.0, 1e-6);
+
+            Assert.True(extended);
+            Assert.Equal(-2.0, wall.GetBoundingBox().Min.Z, 3);
+            Assert.Equal(3.0, wall.GetBoundingBox().Max.Z, 3); // top preserved
+        }
+
         [Fact]
         public void Extend_WallUnderFloorCap_ExtendsUpToCap()
         {
@@ -386,32 +637,292 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(3.0, wallB.GetBoundingBox().Max.Z, 3);
         }
 
+        // ── E2: plane-target cap extension (docs/EXTEND3D_ROBUST_HANDOVER.md) ─────────────────
+        // Walls extend to the ACTUAL cap plane (sloped roof / floor), not a flat Z at the ridge.
+        // Shape assertions (top follows the slope, base preserved, both slopes reached) - never a
+        // bbox-Max-only claim (R10). The five golden fixtures stay on the horizontal-cap scalar path.
+
+        [Fact]
+        public void ExtendTopToPlane_SingleSlopedRoof_TopFollowsRoofSlopeKeepsBaseAndPlane()
+        {
+            // Wall x0..4 z0..3 (flat top); roof sloping in X from z=4 at x=0 to z=6 at x=4 - ABOVE the wall
+            // top everywhere over the wall, so the extended top lands cleanly on the (offset) roof plane
+            // instead of a flat top at the ridge. The E1 scalar path would give a flat top; E2 follows the
+            // slope: the two top corners differ in Z by exactly the roof's rise over the span (2.0).
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+            Face3D roofFace = TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 4), new Point3D(4, 0, 6), new Point3D(4, 1, 6), new Point3D(0, 1, 4));
+            Plane roofPlane = roofFace.GetPlane();
+
+            Vector3D normalBefore = wall.Face3D.GetPlane().Normal.Unit;
+            bool extended = wall.ExtendTopToPlane(roofPlane, capTopZ: 6.0, overshoot: 0.5, tolerance: 1e-6);
+
+            Assert.True(extended);
+            BoundingBox3D box = wall.GetBoundingBox();
+            Assert.Equal(0.0, box.Min.Z, 3); // base preserved - no material added below
+            // Column-wise: the extension never widens the wall's plan extent (E2 review finding - the earlier
+            // Query.Extend construction spilled sideways past the wall's ends, the room-merge vector).
+            Assert.Equal(0.0, box.Min.X, 3);
+            Assert.Equal(4.0, box.Max.X, 3);
+            // Top follows the roof slope (rises toward x=4), not a flat top at a single Z: the E1 scalar path
+            // would give topAtX0 == topAtX4.
+            double topAtX0 = TopZNear(wall.Face3D, 0.0);
+            double topAtX4 = TopZNear(wall.Face3D, 4.0);
+            Assert.True(topAtX4 - topAtX0 > 1.0, $"Top must follow the roof slope (x4 {topAtX4} well above x0 {topAtX0}).");
+            // The reach is clamped at the cap's real top + overshoot (6.5): following the plane further would
+            // build wall with no cap above it to trim against.
+            Assert.Equal(6.5, box.Max.Z, 3);
+            // Where unclamped (the low side), the new top vertex lies ON the offset roof plane.
+            Point3D offsetOrigin = (Point3D)roofPlane.Origin.GetMoved(roofPlane.Normal.Unit * 0.5);
+            Plane offsetPlane = new Plane(offsetOrigin, roofPlane.Normal);
+            Point3D lowSideTop = BoundaryPoints(wall.Face3D).Where(p => System.Math.Abs(p.X) <= 0.1).OrderByDescending(p => p.Z).First();
+            Assert.True(offsetPlane.Distance(lowSideTop) < 1e-3, $"The unclamped top vertex {lowSideTop} must lie on the offset roof plane (d={offsetPlane.Distance(lowSideTop)}).");
+            // Extended in the wall's own (vertical) plane - normal unchanged.
+            Assert.Equal(1.0, System.Math.Abs(normalBefore.DotProduct(wall.Face3D.GetPlane().Normal.Unit)), 4);
+        }
+
+        [Fact]
+        public void Extend_LevelCeilingVsPitchedRoof_RoutesScalarVsPlaneOps()
+        {
+            // The E2 discriminator: a cap that is FLAT RELATIVE TO THE WALL (its normal aligned with the wall's
+            // own up-axis - a level ceiling over a vertical wall) takes the pre-E2 scalar path (no plane-ops),
+            // while a cap PITCHED relative to the wall (a real sloped roof) takes the sloped plane target. The
+            // rigidly-tilted golden fixtures (tilt ~13 degrees, byte-identical under E2) exercise the tilted
+            // FLAT case at integration level; here the level ceiling stands in for it. Same wall both times.
+
+            // Level ceiling above a vertical wall -> flat-relative -> scalar branch (rectangular fast path).
+            SnappedPanel wallA = MakeWallPanel(0); // vertical rectangle z0..3
+            SnappedPanel ceiling = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(-1, -1, 4), new Point3D(2, -1, 4), new Point3D(2, 1, 4), new Point3D(-1, 1, 4)), 1, 0.3, 0.5);
+            SnappedPanel.ResetExtendCensus();
+            Panel3DSnapSolver.Extend(new List<SnappedPanel> { wallA, ceiling }, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6, roofOvershoot: 0.5, includeRoofs: true);
+            Assert.True(wallA.GetBoundingBox().Max.Z > 3.5, "Wall should extend to the level ceiling.");
+            Assert.Equal(0, SnappedPanel.PlaneOpsExtendCount); // level cap took the scalar path
+
+            // A pitched roof over the same wall -> not flat-relative -> the sloped plane target (plane-ops).
+            SnappedPanel wallB = MakeWallPanel(0);
+            SnappedPanel roof = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(-1, -1, 4), new Point3D(2, -1, 6), new Point3D(2, 1, 6), new Point3D(-1, 1, 4)), 1, 0.3, 0.5);
+            SnappedPanel.ResetExtendCensus();
+            Panel3DSnapSolver.Extend(new List<SnappedPanel> { wallB, roof }, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6, roofOvershoot: 0.5, includeRoofs: true);
+            Assert.True(SnappedPanel.PlaneOpsExtendCount > 0, "A pitched roof must engage the sloped plane target.");
+        }
+
+        [Fact]
+        public void Extend_ConformingGableWall_NotCollapsedProfilePreserved()
+        {
+            // A gable-END wall already modelled to the ridge (pentagon reaching z=4) under the two roof slopes.
+            // The pitched slopes take the sloped plane target; unlike the pre-E1 re-extrude (which collapsed
+            // such walls), the plane-ops extend must PRESERVE the wall - never collapse it or drop below its
+            // base - even though it grows by the overshoot the native kernel later trims (the overshoot-then
+            // -trim design that applies to every wall, R8 is "not collapsed", not "byte-identical").
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 2), new Point3D(2, 0, 4), new Point3D(0, 0, 2)), 1, 0.3, 0.5);
+            SnappedPanel roofLeft = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 2), new Point3D(2, 0, 4), new Point3D(2, 1, 4), new Point3D(0, 1, 2)), 1, 0.3, 0.5);
+            SnappedPanel roofRight = new SnappedPanel(2, TestGeometry.CreatePlanarFace(
+                new Point3D(2, 0, 4), new Point3D(4, 0, 2), new Point3D(4, 1, 2), new Point3D(2, 1, 4)), 1, 0.3, 0.5);
+
+            double areaBefore = wall.GetArea();
+            Vector3D normalBefore = wall.Face3D.GetPlane().Normal.Unit;
+
+            List<SnappedPanel> panels = new List<SnappedPanel> { wall, roofLeft, roofRight };
+            Panel3DSnapSolver.Extend(panels, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6, roofOvershoot: 0.5, includeRoofs: true);
+
+            Assert.True(wall.GetArea() >= areaBefore - 1e-6, "A conforming gable wall must not collapse/shrink.");
+            Assert.Equal(0.0, wall.GetBoundingBox().Min.Z, 3); // base preserved - no material below
+            Assert.Equal(1.0, System.Math.Abs(normalBefore.DotProduct(wall.Face3D.GetPlane().Normal.Unit)), 4); // plane preserved
+        }
+
+        [Fact]
+        public void Extend_SteepRoofDivingBelowWallBase_PreservesBaseNoMaterialBelow()
+        {
+            // A steep roof plane that is above the wall top at one end (x=0, z=5) but whose infinite extent
+            // dives below the wall base at the far end (x=4, z=-1). The plane-ops union must NOT add material
+            // below the wall base: the base-preservation guard rejects the diving plane and falls back to the
+            // safe scalar path (which here does not extend, since the roof over the centre sits below the wall
+            // top). The wall base stays at z=0.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+            SnappedPanel roof = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 5), new Point3D(4, 0, -1), new Point3D(4, 1, -1), new Point3D(0, 1, 5)), 1, 0.3, 0.5);
+
+            List<SnappedPanel> panels = new List<SnappedPanel> { wall, roof };
+            Panel3DSnapSolver.Extend(panels, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6, roofOvershoot: 0.5, includeRoofs: true);
+
+            Assert.Equal(0.0, wall.GetBoundingBox().Min.Z, 3); // no material swept below the base
+            Assert.All(BoundaryPoints(wall.Face3D), p => Assert.True(p.Z >= -1e-3, "No boundary vertex may drop below the wall base."));
+        }
+
+        [Fact]
+        public void Extend_WallUnderStackedFloors_StopsAtNearestFloorNoPunchThrough()
+        {
+            // A wall (top z=2.9) under two stacked FLAT caps: a floor at z=3 and a roof at z=6. The wall must
+            // stop at the nearest (z=3), never punch through to z=6 - the nearest-band rule takes only the
+            // floor, not the farther roof. This is what keeps a multi-storey wall bounded to its own level.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 2.9), new Point3D(0, 0, 2.9)), 1, 0.3, 0.5);
+            SnappedPanel floor = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 3), new Point3D(4, 0, 3), new Point3D(4, 1, 3), new Point3D(0, 1, 3)), 1, 0.3, 0.5);
+            SnappedPanel roof = new SnappedPanel(2, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 6), new Point3D(4, 0, 6), new Point3D(4, 1, 6), new Point3D(0, 1, 6)), 1, 0.3, 0.5);
+
+            List<SnappedPanel> panels = new List<SnappedPanel> { wall, floor, roof };
+            Panel3DSnapSolver.Extend(panels, 20 * (System.Math.PI / 180), overshoot: 0.05, toleranceDistance: 1e-6, roofOvershoot: 0.5, includeRoofs: true);
+
+            Assert.True(wall.GetBoundingBox().Max.Z < 4.0,
+                $"Wall must stop at the nearest floor (z=3.05), not punch through to the roof (got {wall.GetBoundingBox().Max.Z}).");
+            Assert.True(wall.GetBoundingBox().Max.Z > 2.9, "Wall should still reach the nearest floor.");
+        }
+
+        [Fact]
+        public void ExtendTopToPlane_CapPlaneParallelToWall_FallsBackToScalarNoThrow()
+        {
+            // A cap plane PARALLEL to the wall plane has no intersection line, so Query.Extend returns null and
+            // the primitive falls back to the scalar-Z path (never throws). Built with a sloped wall and a cap
+            // sharing its normal so the sloped-cap branch (not the horizontal short-circuit) is exercised.
+            double angle = 20.0 * System.Math.PI / 180.0;
+            double depth = 3.0 * System.Math.Tan(angle);
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, depth, 3), new Point3D(0, depth, 3)), 1, 0.3, 0.5);
+            // A cap coincident-parallel with the wall's supporting plane, shifted up: same normal -> no
+            // intersection line with the wall.
+            Plane wallPlane = wall.Face3D.GetPlane();
+            Point3D capOrigin = (Point3D)wallPlane.Origin.GetMoved(new Vector3D(0, 0, 4));
+            Plane capPlane = new Plane(capOrigin, wallPlane.Normal);
+
+            bool extended = wall.ExtendTopToPlane(capPlane, capTopZ: 10.0, overshoot: 0.5, tolerance: 1e-6);
+
+            // Fell back to scalar: grew upward without throwing, tilt preserved (extend in the wall's plane).
+            Assert.True(extended);
+            Assert.True(wall.GetBoundingBox().Max.Z > 3.0, "Parallel-cap fallback should still extend the wall upward.");
+            Assert.True(System.Math.Abs(wall.Face3D.GetPlane().Normal.Unit.Z) > 0.1, "The tilt must survive the fallback.");
+        }
+
         // ──────────────────────────────────────────────────────────────
         // SnappedPanel: lateral (in-plan) extension
         // ──────────────────────────────────────────────────────────────
 
         [Fact]
-        public void ExtendHorizontal_DifferentReachPerEnd_WidensByBothReaches()
+        public void SetVerticalFootprint_WiderFootRectangularWall_WidensAndPreservesHeight()
         {
-            // Wall along X (x 0..2, z 0..3). Grow 0.5 m off one end and 1.0 m off the other.
+            // Retargeted from the retired ExtendHorizontal: a rectangular wall along X (x 0..2, z 0..3)
+            // re-footed to x -0.5..3.0 (0.5 past one end, 1.0 past the other) takes the byte-identical
+            // fast path and grows to plan length 3.5 without changing its height.
             SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
                 new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
 
-            bool extended = wall.ExtendHorizontal(startReach: 0.5, endReach: 1.0, tolerance: 1e-6);
+            bool extended = wall.SetVerticalFootprint(
+                new Geometry.Planar.Point2D(-0.5, 0), new Geometry.Planar.Point2D(3.0, 0), 1e-6);
 
             Assert.True(extended);
             BoundingBox3D box = wall.GetBoundingBox();
-            // Orientation-independent: the plan length grows by 0.5 + 1.0 regardless of which end is "start".
             Assert.Equal(3.5, box.Max.X - box.Min.X, 3);
             Assert.Equal(0.0, box.Min.Z, 3); // height preserved
             Assert.Equal(3.0, box.Max.Z, 3);
         }
 
         [Fact]
-        public void ExtendHorizontal_NoReach_ReturnsFalse()
+        public void SetVerticalFootprint_DegenerateFoot_ReturnsFalse()
         {
             SnappedPanel wall = MakeWallPanel(0);
-            Assert.False(wall.ExtendHorizontal(0, 0, 1e-6));
+            Assert.False(wall.SetVerticalFootprint(
+                new Geometry.Planar.Point2D(0, 0), new Geometry.Planar.Point2D(0, 0), 1e-6));
+        }
+
+        [Fact]
+        public void SetVerticalFootprint_WiderFootShiftedTopWall_WidensWithoutFlattening()
+        {
+            // Retargeted from the retired ExtendHorizontal (PR #49 26ac05a's ShiftedTop case). A shifted-top
+            // parallelogram re-footed wider takes the plane-ops path: it grows past both ends without
+            // flattening its non-rectangular profile or dropping its plane.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(5, 0, 3), new Point3D(1, 0, 3)), 1, 0.3, 0.5);
+
+            bool extended = wall.SetVerticalFootprint(
+                new Geometry.Planar.Point2D(-0.5, 0), new Geometry.Planar.Point2D(6.0, 0), 1e-6);
+
+            Assert.True(extended);
+            BoundingBox3D box = wall.GetBoundingBox();
+            Assert.True(box.Max.X - box.Min.X > 5.0, "Wall should have grown wider than its original 5 m span.");
+            Assert.Equal(0.0, box.Min.Z, 3); // height preserved
+            Assert.Equal(3.0, box.Max.Z, 3);
+            // Profile not flattened: boundary points remain at both z=0 and z=3.
+            List<Point3D> points = BoundaryPoints(wall.Face3D);
+            Assert.Contains(points, p => System.Math.Abs(p.Z) <= 1e-6);
+            Assert.Contains(points, p => System.Math.Abs(p.Z - 3.0) <= 1e-6);
+        }
+
+        [Fact]
+        public void SetVerticalFootprint_ShorterFootShiftedTopWall_TrimsToFoot()
+        {
+            // The ExtensionSolver can also SHORTEN a wall. A shifted-top wall re-footed to x 1..3 is trimmed
+            // (plane-ops cut), keeping the wall body between the new ends.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(5, 0, 3), new Point3D(1, 0, 3)), 1, 0.3, 0.5);
+
+            bool changed = wall.SetVerticalFootprint(
+                new Geometry.Planar.Point2D(1.0, 0), new Geometry.Planar.Point2D(3.0, 0), 1e-6);
+
+            Assert.True(changed);
+            BoundingBox3D box = wall.GetBoundingBox();
+            Assert.True(box.Min.X >= 1.0 - 1e-6, "Left end trimmed to x=1");
+            Assert.True(box.Max.X <= 3.0 + 1e-6, "Right end trimmed to x=3");
+            Assert.True(wall.GetArea() > 3.0, "Trimmed wall must remain a real face, not collapse.");
+        }
+
+        [Fact]
+        public void SetVerticalFootprint_ShortenThroughWindow_EmitsHoleDroppedDiagnostic()
+        {
+            // R6: trimming a wall through a window clips the opening to the boundary. That must never be
+            // silent - a SAM_OCCT_EXTEND3D_HOLE_DROPPED diagnostic is recorded.
+            SnappedPanel wall = new SnappedPanel(0, MakeWallFaceWithHole(), 1, 0.3, 0.5); // 4x4 wall, window x 1..2 z 1..2
+
+            bool changed = wall.SetVerticalFootprint(
+                new Geometry.Planar.Point2D(0.0, 0), new Geometry.Planar.Point2D(1.5, 0), 1e-6);
+
+            Assert.True(changed);
+            Assert.Equal(0, wall.Face3D.GetInternalEdge3Ds()?.Count ?? 0); // window clipped away by the trim
+            Assert.Contains(wall.ExtendDiagnostics, d => d.Contains("SAM_OCCT_EXTEND3D_HOLE_DROPPED"));
+        }
+
+        // ── E1: GetBaseSegment full-extent + deterministic direction (R7) ─────────────────────
+
+        [Fact]
+        public void GetBaseSegment_ParallelogramBaseTopTie_DeterministicFullPlanExtent()
+        {
+            // A parallelogram whose base (x 0..4, z=0) and top (x 1..5, z=3) are equal length: the old
+            // point-order tie-break was non-deterministic (R7). The direction now tie-breaks to the lower
+            // (base) edge, and the extent spans the FULL plan width of ALL boundary points (0..5), not just
+            // one edge's 4 m span.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(5, 0, 3), new Point3D(1, 0, 3)), 1, 0.3, 0.5);
+
+            Segment3D first = wall.GetBaseSegment(1e-6);
+            Segment3D again = wall.GetBaseSegment(1e-6);
+
+            Assert.NotNull(first);
+            Assert.Equal(5.0, first.GetLength(), 3); // full plan extent 0..5, not the base edge's 0..4
+            Assert.Equal(0.0, first.GetStart().Z, 3); // placed at the wall foot
+            Assert.Equal(0.0, first.GetEnd().Z, 3);
+            // Deterministic: same endpoints on a repeat call.
+            Assert.Equal(first.GetStart().X, again.GetStart().X, 6);
+            Assert.Equal(first.GetEnd().X, again.GetEnd().X, 6);
+        }
+
+        [Fact]
+        public void GetBaseSegment_RectangularWall_SpansFullWidthAtFoot()
+        {
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+
+            Segment3D segment = wall.GetBaseSegment(1e-6);
+
+            Assert.NotNull(segment);
+            Assert.Equal(4.0, segment.GetLength(), 3);
+            Assert.Equal(0.0, segment.GetStart().Z, 3);
+            Assert.Equal(0.0, segment.GetEnd().Z, 3);
         }
 
         // ──────────────────────────────────────────────────────────────
@@ -933,28 +1444,49 @@ namespace SAM.OCCT.UnitTests
         // ──────────────────────────────────────────────────────────────
 
         [Fact]
-        public void SnapOpposedPartitions_OpposingSkinsWithinBucket_CollapseOntoSmallerSkin()
+        public void SnapOpposedPartitions_CongruentOpposingSkinsWithinBucket_CollapseOntoOnePlane()
         {
-            // Two room-facing skins of one shared partition: a large skin at y=0 (normal -Y, area 6) and a
-            // smaller skin at y=0.15 (normal +Y, area 3), within the 0.3 m bucket and overlapping in plan.
-            // The pair must collapse onto the SMALLER skin's plane (y=0.15) - the fragile room's side - so
-            // that room closes exactly while the larger room's gap is left for the fill to recover.
+            // Two room-facing skins of one shared partition are the same wall seen from each room, so they are
+            // congruent (equal area): a skin at y=0 (normal -Y) and its twin at y=0.15 (normal +Y), both
+            // 1 x 3, within the 0.3 m bucket and overlapping in plan. They must collapse onto the second
+            // skin's plane (y=0.15) so the fragile room closes exactly while the other room's gap is left for
+            // the fill to recover.
+            SnappedPanel first = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(1, 0, 0), new Point3D(1, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+            SnappedPanel second = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0.15, 0), new Point3D(0, 0.15, 3), new Point3D(1, 0.15, 3), new Point3D(1, 0.15, 0)), 1, 0.3, 0.5);
+
+            // Sanity: the two skins genuinely oppose.
+            Assert.True(first.Plane.Normal.Unit.DotProduct(second.Plane.Normal.Unit) < -0.99, "Skins should be anti-parallel");
+
+            Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { first, second }, 5 * (System.Math.PI / 180), 1e-6);
+
+            // Both skins now lie on the second skin's plane (y = 0.15).
+            foreach (Point3D pt in BoundaryPoints(first.Face3D))
+            {
+                Assert.True(System.Math.Abs(pt.Y - 0.15) < 1e-6, $"Skin point {pt} not collapsed onto the partner skin plane y=0.15");
+            }
+            Assert.True(first.Snapped, "The first skin should have been projected onto its congruent partner's plane");
+        }
+
+        [Fact]
+        public void SnapOpposedPartitions_UnequalAreaOpposingSkins_LeftAlone()
+        {
+            // Anti-parallel, within-bucket, in-plane-overlapping - but the two faces are very different sizes
+            // (area 6 vs 3), so they are NOT one partition's two (congruent) skins: e.g. a long shared wall
+            // caught against a short partition skin. Collapsing such a mis-pair drags the long wall off its
+            // room and merges two rooms into one cell, so the area-ratio gate must leave them put.
             SnappedPanel large = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
                 new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
             SnappedPanel small = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
                 new Point3D(0, 0.15, 0), new Point3D(0, 0.15, 3), new Point3D(1, 0.15, 3), new Point3D(1, 0.15, 0)), 1, 0.3, 0.5);
 
-            // Sanity: the two skins genuinely oppose.
             Assert.True(large.Plane.Normal.Unit.DotProduct(small.Plane.Normal.Unit) < -0.99, "Skins should be anti-parallel");
 
             Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { large, small }, 5 * (System.Math.PI / 180), 1e-6);
 
-            // Both skins now lie on the smaller skin's plane (y = 0.15).
-            foreach (Point3D pt in BoundaryPoints(large.Face3D))
-            {
-                Assert.True(System.Math.Abs(pt.Y - 0.15) < 1e-6, $"Large skin point {pt} not collapsed onto the smaller skin plane y=0.15");
-            }
-            Assert.True(large.Snapped, "The larger skin should have been projected onto the smaller skin's plane");
+            Assert.False(large.Snapped, "Unequal-area opposing faces are a mis-pair and must not be collapsed");
+            Assert.False(small.Snapped, "Unequal-area opposing faces are a mis-pair and must not be collapsed");
         }
 
         [Fact]
@@ -986,6 +1518,58 @@ namespace SAM.OCCT.UnitTests
 
             Assert.False(a.Snapped);
             Assert.False(b.Snapped);
+        }
+
+        [Fact]
+        public void SnapOpposedPartitions_WideVoid_LeftAlone()
+        {
+            // Two walls bounding a 0.35 m shaft void: anti-parallel, within the 0.4 m bucket, overlapping in
+            // plan and congruent - so every pre-Phase-2 gate said "collapse" and the void was deleted. The gap
+            // (0.35 m) is wider than any wall thickness (> the 0.3 m ceiling), so the thickness-separation gate
+            // now keeps them: a real void survives Stage A.
+            SnappedPanel a = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(0, 0, 3), new Point3D(1, 0, 3), new Point3D(1, 0, 0)), 1, 0.4, 0.5);
+            SnappedPanel b = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0.35, 0), new Point3D(1, 0.35, 0), new Point3D(1, 0.35, 3), new Point3D(0, 0.35, 3)), 1, 0.4, 0.5);
+
+            // Sanity: anti-parallel and within the 0.4 m bucket (so the old gates would have collapsed it), but
+            // the 0.35 m separation exceeds the wall-thickness ceiling.
+            Assert.True(a.Plane.Normal.Unit.DotProduct(b.Plane.Normal.Unit) < -0.99, "Void walls should be anti-parallel");
+            Assert.True(a.PerpendicularSeparation(b) > Panel3DSnapSolver.OPPOSED_PARTITION_MAX_SEPARATION, "The void gap should exceed a wall thickness");
+
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+            Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { a, b }, 5 * (System.Math.PI / 180), 1e-6, diagnostics);
+
+            Assert.False(a.Snapped, "A real shaft void must survive Stage A - the two walls must not collapse");
+            Assert.False(b.Snapped);
+            Assert.Contains(diagnostics.All, d => d.Code == DiagnosticCode.RejectedCollapse);
+        }
+
+        [Fact]
+        public void SnapOpposedPartitions_DoorCutSkin_CollapsesViaOverlapGate()
+        {
+            // Two facing-away skins of one partition, but the second carries a door-shaped NOTCH in its
+            // external boundary (a U-shape rising from the floor), so its face AREA is well below the full
+            // skin's - the old full-area 0.97 gate rejected it (~0.68) and left the partition split. Its
+            // bounding FOOTPRINT is unchanged, so the Phase-2 overlap-footprint gate collapses it correctly.
+            SnappedPanel full = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
+
+            // Door notch: outline goes up around a 0.8 x 2.1 opening at the floor, centred on the wall.
+            Face3D doorCut = TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0.15, 0), new Point3D(0, 0.15, 3), new Point3D(2, 0.15, 3), new Point3D(2, 0.15, 0),
+                new Point3D(1.4, 0.15, 0), new Point3D(1.4, 0.15, 2.1), new Point3D(0.6, 0.15, 2.1), new Point3D(0.6, 0.15, 0));
+            SnappedPanel notched = new SnappedPanel(1, doorCut, 1, 0.3, 0.5);
+
+            // Sanity: the notch cut the area well below the full-area gate, but the footprints match.
+            double areaRatio = System.Math.Min(full.GetArea(), notched.GetArea()) / System.Math.Max(full.GetArea(), notched.GetArea());
+            Assert.True(areaRatio < Panel3DSnapSolver.OPPOSED_PARTITION_MIN_OVERLAP_RATIO, "The door notch should defeat the old full-area gate");
+            Assert.True(full.InPlaneOverlapRatio(notched) >= Panel3DSnapSolver.OPPOSED_PARTITION_MIN_OVERLAP_RATIO, "The footprints should still match");
+            Assert.True(full.Plane.Normal.Unit.DotProduct(notched.Plane.Normal.Unit) < -0.99, "Skins should be anti-parallel");
+
+            Panel3DSnapSolver.SnapOpposedPartitions(new List<SnappedPanel> { full, notched }, 5 * (System.Math.PI / 180), 1e-6);
+
+            Assert.True(full.Snapped, "A door-cut skin shares the partition footprint and must collapse via the overlap gate");
         }
 
         // ──────────────────────────────────────────────────────────────
@@ -1039,6 +1623,115 @@ namespace SAM.OCCT.UnitTests
         private static List<Point3D> BoundaryPoints(Face3D face3D)
         {
             return (face3D?.GetExternalEdge3D() as ISegmentable3D)?.GetPoints() ?? new List<Point3D>();
+        }
+
+        /// <summary>The maximum Z among the face's boundary vertices whose plan X is within 0.1 of
+        /// <paramref name="x"/> - the wall's top elevation over that plan location, used by the E2 tests to
+        /// assert the extended top follows a roof slope rather than a flat span.</summary>
+        private static double TopZNear(Face3D face3D, double x)
+        {
+            return BoundaryPoints(face3D).Where(p => System.Math.Abs(p.X - x) <= 0.1).Max(p => p.Z);
+        }
+
+        // ── E3: extend observability records (docs/EXTEND3D_ROBUST_HANDOVER.md) ────────────────
+        // Recording only: the records must match the ACTUAL geometry moves, and a null recorder must be
+        // byte-identical to a recorded run (no geometry change).
+
+        private const double E3VerticalAngle = 20 * System.Math.PI / 180;
+
+        private static SnappedPanel E3ShortWall(double topZ = 2.5)
+        {
+            return new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 0, topZ), new Point3D(0, 0, topZ)), 1, 0.3, 0.5);
+        }
+
+        private static SnappedPanel E3FlatCap(double z = 3.0)
+        {
+            return new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, z), new Point3D(4, 0, z), new Point3D(4, 2, z), new Point3D(0, 2, z)), 1, 0.3, 0.5);
+        }
+
+        [Fact]
+        public void Extend_ShortWallUnderFlatCap_RecordsTopMoveMatchingGeometry()
+        {
+            // A short vertical wall (top z=2.5) under a flat cap at z=3: Extend raises the top to the cap + the
+            // wall overshoot and records ONE applied top op whose to-value is exactly the new top - plus a
+            // Bottom SKIP (P3 §5.4: no cap covers the wall's base either, and that is now recorded, not silent).
+            SnappedPanel wall = E3ShortWall();
+            List<SnappedPanel> panels = new List<SnappedPanel> { wall, E3FlatCap() };
+            List<ExtendRecord> records = new List<ExtendRecord>();
+
+            Panel3DSnapSolver.Extend(panels, E3VerticalAngle, 0.05, 1e-6, 0.5, true, records);
+
+            ExtendRecord top = Assert.Single(records, x => x.Outcome == ExtendOutcome.Applied);
+            Assert.Equal(ExtendOperationKind.Top, top.Kind);
+            Assert.Equal(0, top.PanelIndex);                            // the wall is panel 0
+            Assert.Equal(0, top.SourceIndex);
+            Assert.Equal(1, top.TargetPanelIndex);                      // toward cap panel 1
+            Assert.Equal("cap-scalar", top.TargetKind);                // a flat cap takes the scalar branch
+            Assert.Equal(2.5, top.FromValue, 3);
+            Assert.Equal(wall.GetBoundingBox().Max.Z, top.ToValue, 6);  // record matches the ACTUAL move
+            Assert.Equal(3.05, top.ToValue, 3);                        // cap z=3 + 0.05 overshoot
+            Assert.False(top.MaxExtendCapped);                         // vertical reach is uncapped
+            Assert.NotNull(top.PreviewSegment3D());
+
+            ExtendRecord bottomSkip = Assert.Single(records, x => x.Outcome == ExtendOutcome.Skipped);
+            Assert.Equal(ExtendOperationKind.Bottom, bottomSkip.Kind);
+            Assert.Equal(ExtendSkipReason.NoTargetWithinReach, bottomSkip.SkipReason);
+        }
+
+        [Fact]
+        public void Extend_WallAboveCap_RecordsSkipsForBothDirectionsNeverSilent()
+        {
+            // Wall already taller than the only cap: no covering cap above it (nor below), so nothing moves -
+            // but P3 §5.4 makes that a recorded SKIP at each real decision point, never a silent no-op call.
+            List<SnappedPanel> panels = new List<SnappedPanel> { E3ShortWall(topZ: 4.0), E3FlatCap(z: 3.0) };
+            List<ExtendRecord> records = new List<ExtendRecord>();
+
+            Panel3DSnapSolver.Extend(panels, E3VerticalAngle, 0.05, 1e-6, 0.5, true, records);
+
+            Assert.Equal(2, records.Count);
+            Assert.All(records, x => Assert.Equal(ExtendOutcome.Skipped, x.Outcome));
+            Assert.All(records, x => Assert.Equal(ExtendSkipReason.NoTargetWithinReach, x.SkipReason));
+            Assert.Contains(records, x => x.Kind == ExtendOperationKind.Top);
+            Assert.Contains(records, x => x.Kind == ExtendOperationKind.Bottom);
+        }
+
+        [Fact]
+        public void Extend_NullRecorder_GeometryIdenticalToRecordedRun()
+        {
+            // The recorder is pure observation: the conditioned geometry must be byte-identical with a null
+            // recorder and with a live one (the E3 acceptance gate - this phase moves nothing).
+            SnappedPanel wallNull = E3ShortWall();
+            SnappedPanel wallRecorded = E3ShortWall();
+
+            Panel3DSnapSolver.Extend(new List<SnappedPanel> { wallNull, E3FlatCap() }, E3VerticalAngle, 0.05, 1e-6, 0.5, true, null);
+            Panel3DSnapSolver.Extend(new List<SnappedPanel> { wallRecorded, E3FlatCap() }, E3VerticalAngle, 0.05, 1e-6, 0.5, true, new List<ExtendRecord>());
+
+            Assert.Equal(wallNull.GetBoundingBox().Max.Z, wallRecorded.GetBoundingBox().Max.Z, 9);
+            Assert.Equal(wallNull.GetArea(), wallRecorded.GetArea(), 9);
+        }
+
+        [Fact]
+        public void Fill_LoneCap_RecordsCapGrowMatchingArea()
+        {
+            // A cap with no walls in reach falls back to the fixed-margin grow; the record captures the area
+            // before -> after and reports the fixed-margin target. A cap grow has no single moved edge.
+            SnappedPanel cap = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(4, 0, 0), new Point3D(4, 4, 0), new Point3D(0, 4, 0)), 1, 0.3, 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel> { cap };
+            List<ExtendRecord> records = new List<ExtendRecord>();
+            double areaBefore = cap.GetArea();
+
+            Panel3DSnapSolver.Fill(panels, E3VerticalAngle, 0.5, 1e-6, 0.05, records);
+
+            ExtendRecord grow = Assert.Single(records);
+            Assert.Equal(ExtendOperationKind.CapGrow, grow.Kind);
+            Assert.Equal("fixed-margin", grow.TargetKind);
+            Assert.Equal(areaBefore, grow.FromValue, 6);
+            Assert.Equal(cap.GetArea(), grow.ToValue, 6);   // matches the ACTUAL grown area
+            Assert.True(grow.ToValue > grow.FromValue);
+            Assert.Null(grow.PreviewSegment3D());            // in-plane offset, no single edge
         }
     }
 }

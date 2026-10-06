@@ -20,7 +20,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("d6950fec-cea4-4b48-9099-8943a7765e81");
 
-        public override string LatestComponentVersion => "0.6.0";
+        public override string LatestComponentVersion => "0.6.1";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
 
@@ -39,7 +39,13 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 shells.DataMapping = GH_DataMapping.Flatten;
                 result.Add(new GH_SAMParam(shells, ParamVisibility.Binding));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number elevationGround = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "elevationGround_", NickName = "elevationGround_", Description = "Ground elevation", Access = GH_ParamAccess.item };
+                GooSpaceParam spaces = new () { Name = "spaces_", NickName = "spaces_", Description = "Optional existing Spaces to match into shell cells. If supplied, matching spaces preserve metadata and names.", Access = GH_ParamAccess.list, Optional = true };
+                spaces.DataMapping = GH_DataMapping.Flatten;
+                result.Add(new GH_SAMParam(spaces, ParamVisibility.Binding));
+
+                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "names_", NickName = "names_", Description = "Optional names for shell-derived seed spaces, used when spaces_ is not supplied or not matched.", Access = GH_ParamAccess.list, Optional = true }, ParamVisibility.Binding));
+
+                global::Grasshopper.Kernel.Parameters.Param_Number elevationGround = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "elevationGround_", NickName = "elevationGround_", Description = "Ground elevation [m]", Access = GH_ParamAccess.item };
                 elevationGround.SetPersistentData(0.0);
                 result.Add(new GH_SAMParam(elevationGround, ParamVisibility.Voluntary));
 
@@ -47,11 +53,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 maxDistance.SetPersistentData(0.01);
                 result.Add(new GH_SAMParam(maxDistance, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number maxAngle = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "maxAngle_", NickName = "maxAngle_", Description = "Advanced SAM rebuild panel matching angle", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number maxAngle = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "maxAngle_", NickName = "maxAngle_", Description = "Advanced SAM rebuild panel matching angle [rad]", Access = GH_ParamAccess.item };
                 maxAngle.SetPersistentData(0.0872664626);
                 result.Add(new GH_SAMParam(maxAngle, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number fuzzyTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "fuzzyTolerance_", NickName = "fuzzyTolerance_", Description = "OCCT fuzzy tolerance. Also used as SAM silver spacing for seed space and shell checks.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number fuzzyTolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "fuzzyTolerance_", NickName = "fuzzyTolerance_", Description = "OCCT fuzzy tolerance [m]. Also used as SAM silver spacing for seed space and shell checks.", Access = GH_ParamAccess.item };
                 fuzzyTolerance.SetPersistentData(Tolerance.MacroDistance);
                 result.Add(new GH_SAMParam(fuzzyTolerance, ParamVisibility.Voluntary));
 
@@ -62,17 +68,9 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 minArea.SetPersistentData(0.01);
                 result.Add(new GH_SAMParam(minArea, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT and SAM model tolerance", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "OCCT and SAM model tolerance [m]", Access = GH_ParamAccess.item };
                 tolerance.SetPersistentData(Tolerance.Distance);
                 result.Add(new GH_SAMParam(tolerance, ParamVisibility.Voluntary));
-
-                // Sewing heals a triangulated / near-touching face soup into shared topology BEFORE
-                // MakerVolume, instead of relying on MakerVolume's fuzzy-tolerance guesswork. It is
-                // always applied to mesh-derived shells (a mesh is exactly such a soup); this toggle
-                // additionally forces it on for SAM Shell / closed Brep input.
-                global::Grasshopper.Kernel.Parameters.Param_Boolean sew = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "sew_", NickName = "sew_", Description = "Sew-and-heal faces before the OCCT volume build. Mesh input is always sewn (it is a triangle soup); set this true to also sew SAM Shell / closed Brep input. Default false.", Access = GH_ParamAccess.item };
-                sew.SetPersistentData(false);
-                result.Add(new GH_SAMParam(sew, ParamVisibility.Voluntary));
 
                 // meshInput_ tessellates Brep/surface input with Rhino's mesher before building,
                 // instead of converting the Brep straight to a SAM Shell. A curved (NURBS) Brep face
@@ -80,7 +78,18 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 // cannot close (MakerVolume status 40); a clean planar mesh of the same Brep closes.
                 global::Grasshopper.Kernel.Parameters.Param_Boolean meshInput = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "meshInput_", NickName = "meshInput_", Description = "Mesh Brep/surface input (Rhino BRepMesh) into a planar triangle soup before the OCCT build, rather than converting the Brep directly to a SAM Shell. Turn this on when Breps with curved/NURBS faces fail to build a watertight volume. Rhino Meshes and SAM Shells/Mesh3Ds are unaffected. Default false.", Access = GH_ParamAccess.item };
                 meshInput.SetPersistentData(false);
-                result.Add(new GH_SAMParam(meshInput, ParamVisibility.Binding));
+                result.Add(new GH_SAMParam(meshInput, ParamVisibility.Voluntary));
+
+                // Sewing heals a triangulated / near-touching face soup into shared topology BEFORE
+                // MakerVolume, instead of relying on MakerVolume's fuzzy-tolerance guesswork. It is
+                // always applied to mesh-derived shells (a mesh is exactly such a soup); this toggle
+                // additionally forces it on for SAM Shell / closed Brep input. Bugfix (P1): default
+                // flipped to true so the default build recipe matches the solver's own validated
+                // options (AvoidInternalShapes=false, SewBeforeBuild=true, SewingTolerance=0.01) - see
+                // docs/CELLCOMPLEX_FIRST_HANDOVER.md §A "Diagnosed seam". Still overridable per-run.
+                global::Grasshopper.Kernel.Parameters.Param_Boolean sew = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "sew_", NickName = "sew_", Description = "Sew-and-heal faces before the OCCT volume build. Mesh input is always sewn (it is a triangle soup). Default true, matching the solver's own validated build recipe; set false to disable for SAM Shell / closed Brep input that is already watertight.", Access = GH_ParamAccess.item };
+                sew.SetPersistentData(true);
+                result.Add(new GH_SAMParam(sew, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Number meshDeflection = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "meshDeflection_", NickName = "meshDeflection_", Description = "Max chord deviation (model units) for meshInput_: how far a planar mesh triangle may deviate from the true curved surface. Smaller hugs curvature with more triangles; larger is coarser. Flat faces are unaffected (kept coarse). Default 0.1.", Access = GH_ParamAccess.item };
                 meshDeflection.SetPersistentData(0.1);
@@ -94,11 +103,6 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 weldMesh.SetPersistentData(true);
                 result.Add(new GH_SAMParam(weldMesh, ParamVisibility.Voluntary));
 
-                GooSpaceParam spaces = new GooSpaceParam() { Name = "spaces_", NickName = "spaces_", Description = "Optional existing Spaces to match into shell cells. If supplied, matching spaces preserve metadata and names.", Access = GH_ParamAccess.list, Optional = true };
-                spaces.DataMapping = GH_DataMapping.Flatten;
-                result.Add(new GH_SAMParam(spaces, ParamVisibility.Voluntary));
-
-                result.Add(new GH_SAMParam(new global::Grasshopper.Kernel.Parameters.Param_String() { Name = "names_", NickName = "names_", Description = "Optional names for shell-derived seed spaces, used when spaces_ is not supplied or not matched.", Access = GH_ParamAccess.list, Optional = true }, ParamVisibility.Voluntary));
 
                 global::Grasshopper.Kernel.Parameters.Param_Boolean run = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "_run", NickName = "_run", Description = "Run", Access = GH_ParamAccess.item };
                 run.SetPersistentData(false);
@@ -163,7 +167,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref tolerance);
             }
 
-            bool sew = false;
+            bool sew = true;
             index = Params.IndexOfInputParam("sew_");
             if (index != -1)
             {
@@ -192,8 +196,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
             }
 
             // OcctBuildOptions reused for the watertightness pre-check (tolerance = welding distance)
-            // and the cell build below, so both agree on tolerance.
-            OcctBuildOptions buildOptions = new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance };
+            // and the cell build below, so both agree on tolerance. Bugfix (P1): AvoidInternalShapes
+            // and SewingTolerance now match the solver's own validated build recipe instead of
+            // OcctBuildOptions' defaults (true / 0.0) - see docs/CELLCOMPLEX_FIRST_HANDOVER.md §A
+            // "Diagnosed seam". SewBeforeBuild is still resolved below from sew_/mesh-input detection.
+            OcctBuildOptions buildOptions = new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, AvoidInternalShapes = false, SewingTolerance = 0.01 };
 
             List<string> diagnostics = new List<string>();
 

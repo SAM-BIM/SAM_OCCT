@@ -4,6 +4,7 @@
 using SAM.Analytical.Solver;
 using SAM.Core;
 using SAM.Core.OCCT;
+using SAM.Geometry.OCCT;
 using SAM.Geometry.OCCT.Solver;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
@@ -29,6 +30,11 @@ namespace SAM.Analytical.OCCT.Solver
         /// <param name="minBucketSize">Lower bound on the capture half-width, in metres.</param>
         /// <param name="thicknessFactor">Fraction of construction thickness used as the capture half-width.</param>
         /// <param name="options">OCCT build options (distance/fuzzy/glue tolerances).</param>
+        /// <param name="forceManagedPipeline">Diagnostic-only: skip the raw-first attempt and always run the
+        /// managed clean/extend/resolve pipeline, even on input the raw solve would otherwise adopt watertight.
+        /// Lets golden-master tests capture the managed-pipeline signature on well-modelled fixtures (see
+        /// <see cref="Geometry.OCCT.Solver.Panel3DSnapSolver.ForceManagedPipeline"/>). Default false preserves
+        /// the existing raw-first-then-managed-fallback behaviour.</param>
         /// <returns>The resolved panels, or null when no usable panels were supplied.</returns>
         public static List<Panel> Solve3D(
             this IEnumerable<Panel> panels,
@@ -40,14 +46,91 @@ namespace SAM.Analytical.OCCT.Solver
             double thicknessFactor = 0.6,
             double alignColinearOffset = 0.3,
             double normalizeCapOffset = 0.3,
-            OcctBuildOptions options = null)
+            OcctBuildOptions options = null,
+            bool forceManagedPipeline = false,
+            double bucketBetweenLevels = 0.0,
+            double doubleWallGap = 0.0)
+        {
+            return Solve3D(panels, out nakedPoint3Ds, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, forceManagedPipeline, bucketBetweenLevels: bucketBetweenLevels, doubleWallGap: doubleWallGap);
+        }
+
+        /// <summary>
+        /// Phase 4 overload: as <see cref="Solve3D(IEnumerable{Panel}, out List{Point3D}, out List{string}, IEnumerable{double}, IEnumerable{double}, double, double, double, double, OcctBuildOptions, bool)"/>,
+        /// additionally reporting apertures that could not be re-hosted on any resolved panel (the
+        /// orphan policy: docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md Phase 4). Solved panels
+        /// preserve the source's Guid/parameters/construction on a clean 1:1 mapping, get a fresh Guid
+        /// stamped with the original source's Guid on a split, and keep the dominant (largest-area)
+        /// source's Guid (with the others stamped) on a merge - see <see cref="PanelReconstruction"/>.
+        /// </summary>
+        /// <param name="orphanedApertures">Apertures whose source panel contributed to the solve but no
+        /// resolved output face came within <paramref name="maxApertureDistance"/> of them - original
+        /// world-space geometry and source Guid, for manual re-hosting. Never silently dropped.</param>
+        /// <param name="minApertureArea">Minimum aperture area to re-host onto a resolved panel (the Panel ctor's own gate).</param>
+        /// <param name="maxApertureDistance">Max distance between a resolved panel and an aperture for it to be re-hosted there.</param>
+        public static List<Panel> Solve3D(
+            this IEnumerable<Panel> panels,
+            out List<Point3D> nakedPoint3Ds,
+            out List<string> diagnostics,
+            out List<OrphanedAperture> orphanedApertures,
+            IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
+            double minBucketSize = 0.4,
+            double thicknessFactor = 0.6,
+            double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3,
+            OcctBuildOptions options = null,
+            bool forceManagedPipeline = false,
+            double minApertureArea = Tolerance.MacroDistance,
+            double maxApertureDistance = Tolerance.MacroDistance,
+            double bucketBetweenLevels = 0.0,
+            double doubleWallGap = 0.0)
+        {
+            return Solve3D(panels, out nakedPoint3Ds, out diagnostics, out orphanedApertures, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, options, forceManagedPipeline, minApertureArea, maxApertureDistance, bucketBetweenLevels: bucketBetweenLevels, doubleWallGap: doubleWallGap);
+        }
+
+        /// <summary>
+        /// Phase 8 overload: as <see cref="Solve3D(IEnumerable{Panel}, out List{Point3D}, out List{string}, out List{OrphanedAperture}, IEnumerable{double}, IEnumerable{double}, double, double, double, double, OcctBuildOptions, bool, double, double)"/>,
+        /// additionally returning a <see cref="Solve3DReport"/> bundling every staged/diagnostic field the
+        /// solver already produces (closure signatures, diagnostics, source map, cells, naked wires, Stage A
+        /// clean faces, level frames) for Grasshopper inspection
+        /// (docs/TRUE_3D_PANEL_SOLVER_IMPLEMENTATION_PLAN.md Phase 8). Solves geometry identically to the
+        /// other overloads; this only adds reporting.
+        /// </summary>
+        /// <param name="report">The staged solve snapshot; never null, even when the solve produced no result.</param>
+        /// <param name="classifyCells">When true, runs the additive Phase 7b cell classification
+        /// (<see cref="CellClassifier.ClassifyCells"/>) - one extra native envelope decode - and populates
+        /// <see cref="Solve3DReport.CellRoles"/>. Default false (no extra native cost unless requested).</param>
+        /// <param name="minCellVolume">Minimum cell volume (m3) below which a cell classifies <see cref="CellRole.Sliver"/>; only used when <paramref name="classifyCells"/> is true.</param>
+        public static List<Panel> Solve3D(
+            this IEnumerable<Panel> panels,
+            out List<Point3D> nakedPoint3Ds,
+            out List<string> diagnostics,
+            out List<OrphanedAperture> orphanedApertures,
+            out Solve3DReport report,
+            IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
+            double minBucketSize = 0.4,
+            double thicknessFactor = 0.6,
+            double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3,
+            OcctBuildOptions options = null,
+            bool forceManagedPipeline = false,
+            double minApertureArea = Tolerance.MacroDistance,
+            double maxApertureDistance = Tolerance.MacroDistance,
+            bool classifyCells = false,
+            double minCellVolume = 0.05,
+            double bucketBetweenLevels = 0.0,
+            double doubleWallGap = 0.0)
         {
             nakedPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
+            orphanedApertures = new List<OrphanedAperture>();
+            report = null;
 
             if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
             {
                 diagnostics.Add("SAM_OCCT_SOLVE3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.");
+                report = new Solve3DReport(false, null, null, null, null, sources, null, null, null, null, null, false, 0);
                 return null;
             }
 
@@ -58,7 +141,11 @@ namespace SAM.Analytical.OCCT.Solver
             {
                 Up = ResolveUp(sources),
                 AlignColinearOffset = alignColinearOffset,
-                NormalizeCapOffset = normalizeCapOffset
+                NormalizeCapOffset = normalizeCapOffset,
+                ForceManagedPipeline = forceManagedPipeline,
+                BucketBetweenLevels = bucketBetweenLevels,
+                DoubleWallGap = doubleWallGap,
+                ConsolidationRanges = ResolveConsolidationRanges(sources)
             };
             solver.Execute(options);
 
@@ -68,11 +155,27 @@ namespace SAM.Analytical.OCCT.Solver
             if (resolved == null || resolved.Count == 0)
             {
                 diagnostics.Add("SAM_OCCT_SOLVE3D_NO_RESULT: The solver produced no resolved faces.");
+                report = BuildReport(solver, sources, options, classifyCells, minCellVolume);
                 return new List<Panel>();
             }
 
             double tolerance = options?.Tolerance ?? Tolerance.Distance;
-            List<Panel> result = BuildPanels(resolved, sources, bucketSizes, effectiveWeights, effectiveMaxExtends, tolerance);
+
+            // Phase 4: rebuild via the source-set-aware policy (1:1 keeps the source's Guid, a split gets
+            // fresh Guids stamped back to the source, a merge keeps the dominant source's Guid) instead of
+            // the single-winner BuildPanels/NearestSourceIndex path. solver.SourceMap is always populated
+            // (exact via composed native history when Phase 3 provided it, geometric fallback otherwise),
+            // so every resolved face still gets a Panel even where history is unavailable.
+            List<Panel> result = PanelReconstruction.Build(resolved, sources, solver.SourceMap, bucketSizes, effectiveWeights, effectiveMaxExtends, tolerance, out orphanedApertures, minApertureArea, maxApertureDistance);
+
+            foreach (OrphanedAperture orphan in orphanedApertures)
+            {
+                diagnostics.Add(string.Format(
+                    "SAM_OCCT_SOLVE3D_APERTURE_ORPHANED: Aperture {0} from source panel {1} did not land within {2} m of any resolved panel; returned for manual re-hosting.",
+                    orphan.Aperture?.Guid,
+                    orphan.SourceGuid,
+                    maxApertureDistance));
+            }
 
             // Step-2 gap-fill faces (residual naked-boundary loops) become air panels: each is emitted as a
             // PanelType.Air panel (null construction), a virtual boundary rather than solid wall. Sliver
@@ -90,6 +193,9 @@ namespace SAM.Analytical.OCCT.Solver
                 Panel airPanel = global::SAM.Analytical.Create.Panel(null, PanelType.Air, holeFace3D);
                 if (airPanel != null)
                 {
+                    // Provenance-stamped so a gap-fill air panel is distinguishable from a "real" opening
+                    // an analytical model might otherwise carry (docs plan Phase 4).
+                    airPanel.SetValue(PanelProvenanceParameter.Provenance, "GapFill");
                     result.Add(airPanel);
                     airCount++;
                 }
@@ -106,7 +212,53 @@ namespace SAM.Analytical.OCCT.Solver
                 solver.ResolvedCellCount,
                 nakedPoint3Ds.Count));
 
+            // Surface the structured solver diagnostics (gate rejections, adopted level, ...) alongside the
+            // existing SAM_OCCT_* summary lines, so every rejection's reason is visible without changing this
+            // method's List<string> diagnostics contract.
+            diagnostics.AddRange(SolverReportFormat.FormatDiagnostics(solver.Diagnostics, "SAM_OCCT_SOLVE3D"));
+
+            // E3 observability: one SAM_OCCT_EXTEND3D_PANEL line per applied managed extend/fill op (empty on a
+            // raw-adopted solve), plus any SAM_OCCT_EXTEND3D_HOLE_DROPPED a footprint trim recorded (E1/R6).
+            diagnostics.AddRange(SolverReportFormat.FormatExtendRecords(solver.ExtendRecords, sources));
+            diagnostics.AddRange(SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels));
+
+            AppendInputEffectDiagnostics(diagnostics, sources, inputAlreadyClean: false, "SAM_OCCT_SOLVE3D");
+
+            report = BuildReport(solver, sources, options, classifyCells, minCellVolume);
+
             return result;
+        }
+
+        /// <summary>Assembles a <see cref="Solve3DReport"/> from a solver that has already run <c>Execute</c>,
+        /// optionally running the additive Phase 7b cell classification.</summary>
+        private static Solve3DReport BuildReport(Panel3DSnapSolver solver, List<Panel> sources, OcctBuildOptions options, bool classifyCells, double minCellVolume, List<string> cleanReportLines = null)
+        {
+            IReadOnlyList<CellRole> cellRoles = null;
+            if (classifyCells && solver.Cells != null && solver.Cells.Count != 0)
+            {
+                cellRoles = CellClassifier.ClassifyCells(solver.Cells, solver.ResolvedFace3Ds, minCellVolume, options, solver.Diagnostics);
+            }
+
+            return new Solve3DReport(
+                solver.RawAdopted,
+                solver.Signature,
+                solver.RawAttemptSignature,
+                solver.Diagnostics,
+                solver.SourceMap,
+                sources,
+                solver.Cells,
+                cellRoles,
+                solver.NakedWires,
+                solver.CleanFace3Ds,
+                solver.LevelFrames,
+                solver.NativeResolved,
+                solver.ResolvedCellCount,
+                resolvedCellComplex: solver.ResolvedCellComplex,
+                extendRecords: solver.ExtendRecords,
+                extendPanelDiagnostics: SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels),
+                levelGroups: solver.LevelGroups,
+                cleanRecords: solver.CleanRecords,
+                cleanReportLines: cleanReportLines);
         }
 
         /// <summary>
@@ -131,26 +283,61 @@ namespace SAM.Analytical.OCCT.Solver
             double minBucketSize = 0.4,
             double thicknessFactor = 0.6,
             double alignColinearOffset = 0.3,
-            double normalizeCapOffset = 0.3)
+            double normalizeCapOffset = 0.3,
+            double bucketBetweenLevels = 0.0,
+            double doubleWallGap = 0.0)
+        {
+            return Clean3D(panels, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, alignColinearOffset, normalizeCapOffset, bucketBetweenLevels, doubleWallGap);
+        }
+
+        /// <summary>
+        /// Phase 8 overload: as <see cref="Clean3D(IEnumerable{Panel}, out List{string}, IEnumerable{double}, IEnumerable{double}, double, double, double, double)"/>,
+        /// additionally returning a <see cref="Solve3DReport"/> for Grasshopper inspection of Stage A
+        /// (diagnostics, source map, level frames). No native resolve happens on this path, so
+        /// <see cref="Solve3DReport.Signature"/>/<see cref="Solve3DReport.Cells"/>/<see cref="Solve3DReport.NakedWires"/>
+        /// stay null/empty - honestly reported, not fabricated.
+        /// </summary>
+        /// <param name="report">The staged Stage A snapshot; never null, even when the clean pass produced no result.</param>
+        public static List<Panel> Clean3D(
+            this IEnumerable<Panel> panels,
+            out List<string> diagnostics,
+            out Solve3DReport report,
+            IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
+            double minBucketSize = 0.4,
+            double thicknessFactor = 0.6,
+            double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3,
+            double bucketBetweenLevels = 0.0,
+            double doubleWallGap = 0.0)
         {
             diagnostics = new List<string>();
+            report = null;
 
             if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
             {
                 diagnostics.Add("SAM_OCCT_CLEAN3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.");
+                report = new Solve3DReport(false, null, null, null, null, sources, null, null, null, null, null, false, 0);
                 return null;
             }
 
-            List<double> effectiveWeights = ResolveWeights(weights, sources);
-            List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources);
+            List<double> effectiveWeights = ResolveWeights(weights, sources, out List<ParameterProvenance> weightProvenance);
+            List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources, out List<ParameterProvenance> maxExtendProvenance);
+            List<ParameterProvenance> bucketProvenance = BucketProvenances(sources, minBucketSize, thicknessFactor);
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true, AlignColinearOffset = alignColinearOffset, NormalizeCapOffset = normalizeCapOffset };
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true, AlignColinearOffset = alignColinearOffset, NormalizeCapOffset = normalizeCapOffset, BucketBetweenLevels = bucketBetweenLevels, DoubleWallGap = doubleWallGap, ConsolidationRanges = ResolveConsolidationRanges(sources) };
             solver.Execute(null);
+
+            List<string> cleanReportLines = SolverReportFormat.FormatCleanReport(
+                solver.CleanRecords, solver.LevelGroups, solver.LevelFrames, sources,
+                bucketSizes, bucketProvenance, effectiveWeights, weightProvenance, effectiveMaxExtends, maxExtendProvenance,
+                bucketBetweenLevels);
 
             List<Face3D> clean = solver.CleanFace3Ds;
             if (clean == null || clean.Count == 0)
             {
                 diagnostics.Add("SAM_OCCT_CLEAN3D_NO_RESULT: The clean bucket produced no panels.");
+                report = BuildStageReport(solver, sources, cleanReportLines);
                 return new List<Panel>();
             }
 
@@ -161,6 +348,15 @@ namespace SAM.Analytical.OCCT.Solver
                 face3Ds.Count,
                 result.Count));
 
+            diagnostics.AddRange(SolverReportFormat.FormatDiagnostics(solver.Diagnostics, "SAM_OCCT_CLEAN3D"));
+
+            // CleanReport (P2 §4): SAM_OCCT_CLEAN3D_LEVELS/_LEVELGROUP + per-panel _PANEL observability lines.
+            diagnostics.AddRange(cleanReportLines);
+
+            AppendInputEffectDiagnostics(diagnostics, sources, inputAlreadyClean: false, "SAM_OCCT_CLEAN3D");
+
+            report = BuildStageReport(solver, sources, cleanReportLines);
+
             return result;
         }
 
@@ -168,7 +364,7 @@ namespace SAM.Analytical.OCCT.Solver
         /// Step 1 + Step 2 managed fill/extend, WITHOUT the native resolve (the split). Cleans the panels, grows
         /// floors/roofs out to the surrounding walls, and extends walls up to the cap above / down to the floor
         /// below (overshooting their caps). Returns those filled/extended panels so the pre-resolve geometry can
-        /// be reviewed before <see cref="Solve3D"/> runs the native MakerVolume split - no cells are formed and
+        /// be reviewed before <see cref="Modify.Solve3D(IEnumerable{Panel}, out List{Point3D}, out List{string}, IEnumerable{double}, IEnumerable{double}, double, double, double, double, OcctBuildOptions, bool)"/> runs the native MakerVolume split - no cells are formed and
         /// no walls are trimmed here. Output panels carry the bucket/weight/max-extend stamps for
         /// <c>SAMAnalytical.Visualize</c>, so the extend assumptions can be seen (and the per-panel
         /// <c>SolverParameter.MaxExtend</c> adjusted) before solving.
@@ -181,6 +377,12 @@ namespace SAM.Analytical.OCCT.Solver
         /// <param name="minBucketSize">Lower bound on the capture half-width, in metres.</param>
         /// <param name="thicknessFactor">Fraction of construction thickness used as the capture half-width.</param>
         /// <param name="fillMargin">How far floors/roofs are grown outward past the walls (and walls past their caps), in metres.</param>
+        /// <param name="doubleWallGap">EXPLICIT double-wall merge gap (metres), default 0 = off. When set, chains of
+        /// overlapping (anti)parallel walls whose planes sit within this gap consolidate onto one plane after the
+        /// bucket/align snap (<see cref="Panel3DSnapSolver.ConsolidateWallStacks"/>) - including pairs wider than
+        /// the 0.3 m void guard that <paramref name="minBucketSize"/>/<paramref name="alignColinearOffset"/> can
+        /// never merge. Gaps up to this width are treated as modeling artifacts, so a REAL corridor/shaft narrower
+        /// than the value is closed too - raise deliberately.</param>
         /// <returns>The filled/extended panels, or null when no usable panels were supplied.</returns>
         public static List<Panel> Extend3D(
             this IEnumerable<Panel> panels,
@@ -191,36 +393,83 @@ namespace SAM.Analytical.OCCT.Solver
             double thicknessFactor = 0.6,
             double fillMargin = 0.5,
             double alignColinearOffset = 0.3,
-            double normalizeCapOffset = 0.3)
+            double normalizeCapOffset = 0.3,
+            double bucketBetweenLevels = 0.0,
+            bool inputAlreadyClean = false,
+            bool directionalCapGrow = false,
+            double doubleWallGap = 0.0)
+        {
+            return Extend3D(panels, out diagnostics, out _, weights, maxExtends, minBucketSize, thicknessFactor, fillMargin, alignColinearOffset, normalizeCapOffset, bucketBetweenLevels, inputAlreadyClean, directionalCapGrow, doubleWallGap);
+        }
+
+        /// <summary>
+        /// Phase 8 overload: as <see cref="Extend3D(IEnumerable{Panel}, out List{string}, IEnumerable{double}, IEnumerable{double}, double, double, double, double, double)"/>,
+        /// additionally returning a <see cref="Solve3DReport"/> for Grasshopper inspection of the pre-resolve
+        /// conditioned state (diagnostics, source map, level frames). No native resolve happens on this path,
+        /// so <see cref="Solve3DReport.Signature"/>/<see cref="Solve3DReport.Cells"/>/<see cref="Solve3DReport.NakedWires"/>
+        /// stay null/empty - honestly reported, not fabricated.
+        /// </summary>
+        /// <param name="report">The staged pre-resolve snapshot; never null, even when the pass produced no result.</param>
+        public static List<Panel> Extend3D(
+            this IEnumerable<Panel> panels,
+            out List<string> diagnostics,
+            out Solve3DReport report,
+            IEnumerable<double> weights = null,
+            IEnumerable<double> maxExtends = null,
+            double minBucketSize = 0.4,
+            double thicknessFactor = 0.6,
+            double fillMargin = 0.5,
+            double alignColinearOffset = 0.3,
+            double normalizeCapOffset = 0.3,
+            double bucketBetweenLevels = 0.0,
+            bool inputAlreadyClean = false,
+            bool directionalCapGrow = false,
+            double doubleWallGap = 0.0)
         {
             diagnostics = new List<string>();
+            report = null;
 
             if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
             {
                 diagnostics.Add("SAM_OCCT_EXTEND3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.");
+                report = new Solve3DReport(false, null, null, null, null, sources, null, null, null, null, null, false, 0);
                 return null;
             }
 
-            List<double> effectiveWeights = ResolveWeights(weights, sources);
-            List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources);
+            List<double> effectiveWeights = ResolveWeights(weights, sources, out List<ParameterProvenance> weightProvenance);
+            List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources, out List<ParameterProvenance> maxExtendProvenance);
+            List<ParameterProvenance> bucketProvenance = BucketProvenances(sources, minBucketSize, thicknessFactor);
 
             // StopAfterExtend keeps the pass managed (native-free, like Clean3D): clean bucket -> extend walls
             // to the next wall (close the plan loop) -> extend walls to caps -> fill caps to walls, then stop
-            // before the native MakerVolume split (Solve3D's job).
+            // before the native MakerVolume split (Solve3D's job). inputAlreadyClean (P2 §2) makes it
+            // condition-only: the supplied panels are treated as the exact clean result (no second clean), for
+            // the exact Clean3D -> Extend3D handoff.
             Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends)
             {
                 StopAfterExtend = true,
                 FillMargin = fillMargin,
                 Up = ResolveUp(sources),
                 AlignColinearOffset = alignColinearOffset,
-                NormalizeCapOffset = normalizeCapOffset
+                NormalizeCapOffset = normalizeCapOffset,
+                BucketBetweenLevels = bucketBetweenLevels,
+                InputAlreadyClean = inputAlreadyClean,
+                DirectionalCapGrow = directionalCapGrow,
+                DoubleWallGap = doubleWallGap,
+                ConsolidationRanges = ResolveConsolidationRanges(sources)
             };
             solver.Execute(null);
+
+            List<string> cleanReportLines = SolverReportFormat.FormatCleanReport(
+                solver.CleanRecords, solver.LevelGroups, solver.LevelFrames, sources,
+                bucketSizes, bucketProvenance, effectiveWeights, weightProvenance, effectiveMaxExtends, maxExtendProvenance,
+                bucketBetweenLevels);
 
             List<Face3D> extended = solver.ResolvedFace3Ds;
             if (extended == null || extended.Count == 0)
             {
                 diagnostics.Add("SAM_OCCT_EXTEND3D_NO_RESULT: The fill/extend pass produced no panels.");
+                report = BuildStageReport(solver, sources, cleanReportLines);
                 return new List<Panel>();
             }
 
@@ -231,6 +480,10 @@ namespace SAM.Analytical.OCCT.Solver
                 face3Ds.Count,
                 result.Count));
 
+            // Truthful input-effect notes: which changed inputs had no geometric effect this run and why (so a
+            // re-run with a different value that produces identical geometry is explained, never silent).
+            AppendInputEffectDiagnostics(diagnostics, sources, inputAlreadyClean, "SAM_OCCT_EXTEND3D");
+
             // Plan-closure check: how many wall ends are still open after the managed extend. Non-zero means
             // the wall loops do not close there, so floors/roofs cannot fill a closed polysurface - raise
             // MaxExtend or bucket size on the OpenPanels3D panels at those corners.
@@ -240,7 +493,47 @@ namespace SAM.Analytical.OCCT.Solver
                 openWallEndCount,
                 solver.OpenWallFace3Ds?.Count ?? 0));
 
+            diagnostics.AddRange(SolverReportFormat.FormatDiagnostics(solver.Diagnostics, "SAM_OCCT_EXTEND3D"));
+
+            // CleanReport (P2 §4): the level-group summary + per-panel clean observability (also empty on the
+            // inputAlreadyClean path, where Stage A was skipped - only the CLEAN-SKIPPED diagnostic appears above).
+            diagnostics.AddRange(cleanReportLines);
+
+            // E3 observability: per-panel extend summary (which edge moved, from -> to, toward what) plus any
+            // SAM_OCCT_EXTEND3D_HOLE_DROPPED a footprint trim recorded (E1/R6, previously not surfaced).
+            diagnostics.AddRange(SolverReportFormat.FormatExtendRecords(solver.ExtendRecords, sources));
+            diagnostics.AddRange(SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels));
+
+            report = BuildStageReport(solver, sources, cleanReportLines);
+
             return result;
+        }
+
+        /// <summary>Assembles a <see cref="Solve3DReport"/> from a solver run through a pre-resolve stage
+        /// (<c>StopAfterClean</c>/<c>StopAfterExtend</c>) - no native resolve happens, so
+        /// <see cref="Panel3DSnapSolver.Signature"/>/<see cref="Panel3DSnapSolver.Cells"/>/<see cref="Panel3DSnapSolver.NakedWires"/>
+        /// stay null/empty on the solver itself; this reports that state honestly rather than fabricating it.</summary>
+        private static Solve3DReport BuildStageReport(Panel3DSnapSolver solver, List<Panel> sources, List<string> cleanReportLines = null)
+        {
+            return new Solve3DReport(
+                solver.RawAdopted,
+                solver.Signature,
+                solver.RawAttemptSignature,
+                solver.Diagnostics,
+                solver.SourceMap,
+                sources,
+                solver.Cells,
+                null,
+                solver.NakedWires,
+                solver.CleanFace3Ds,
+                solver.LevelFrames,
+                solver.NativeResolved,
+                solver.ResolvedCellCount,
+                extendRecords: solver.ExtendRecords,
+                extendPanelDiagnostics: SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels),
+                levelGroups: solver.LevelGroups,
+                cleanRecords: solver.CleanRecords,
+                cleanReportLines: cleanReportLines);
         }
 
         /// <summary>
@@ -270,7 +563,11 @@ namespace SAM.Analytical.OCCT.Solver
             double thicknessFactor = 0.6,
             double connectionTolerance = 0.1,
             double alignColinearOffset = 0.3,
-            double normalizeCapOffset = 0.3)
+            double normalizeCapOffset = 0.3,
+            double bucketBetweenLevels = 0.0,
+            bool inputAlreadyClean = false,
+            bool directionalCapGrow = false,
+            double doubleWallGap = 0.0)
         {
             openEndPoint3Ds = new List<Point3D>();
             diagnostics = new List<string>();
@@ -290,7 +587,12 @@ namespace SAM.Analytical.OCCT.Solver
                 ConnectionTolerance = connectionTolerance,
                 Up = ResolveUp(sources),
                 AlignColinearOffset = alignColinearOffset,
-                NormalizeCapOffset = normalizeCapOffset
+                NormalizeCapOffset = normalizeCapOffset,
+                BucketBetweenLevels = bucketBetweenLevels,
+                InputAlreadyClean = inputAlreadyClean,
+                DirectionalCapGrow = directionalCapGrow,
+                DoubleWallGap = doubleWallGap,
+                ConsolidationRanges = ResolveConsolidationRanges(sources)
             };
             solver.Execute(null);
 
@@ -303,6 +605,13 @@ namespace SAM.Analytical.OCCT.Solver
                 "SAM_OCCT_OPENPANELS3D_RESULT: {0} wall(s) still open in plan ({1} open end(s)); raise MaxExtend or bucket size on these and re-run.",
                 result.Count,
                 openEndPoint3Ds.Count));
+
+            AppendInputEffectDiagnostics(diagnostics, sources, inputAlreadyClean, "SAM_OCCT_OPENPANELS3D");
+
+            // E3 observability: the same per-panel extend summary + hole-drop lines Extend3D surfaces, so the
+            // open-ends diagnostic run shows how far each wall was extended (and toward what) before measuring.
+            diagnostics.AddRange(SolverReportFormat.FormatExtendRecords(solver.ExtendRecords, sources));
+            diagnostics.AddRange(SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels));
 
             return result;
         }
@@ -399,12 +708,21 @@ namespace SAM.Analytical.OCCT.Solver
         /// source used, so the output feeds <c>SAMAnalytical.Visualize</c> (which reads those
         /// <see cref="SolverParameter"/>s) - letting the extend assumptions be seen and adjusted.
         /// </summary>
-        private static List<Panel> BuildPanels(List<Face3D> face3Ds, List<Panel> sources, List<double> bucketSizes, List<double> weights, List<double> maxExtends, double tolerance)
+        private static List<Panel> BuildPanels(List<Face3D> face3Ds, List<Panel> sources, List<double> bucketSizes, List<double> weights, List<double> maxExtends, double tolerance, SAM.Geometry.OCCT.Solver.SourceMap sourceMap = null)
         {
             List<Panel> result = new List<Panel>();
-            foreach (Face3D face3D in face3Ds)
+            for (int faceIndex = 0; faceIndex < face3Ds.Count; faceIndex++)
             {
-                int index = NearestSourceIndex(face3D, sources, tolerance);
+                Face3D face3D = face3Ds[faceIndex];
+
+                // Phase 3: the exact native-history source for this output face, when available;
+                // otherwise the geometric NearestSourceIndex heuristic (the demoted fallback).
+                int index = DominantSourceIndex(sourceMap, faceIndex, sources);
+                if (index < 0)
+                {
+                    index = NearestSourceIndex(face3D, sources, tolerance);
+                }
+
                 if (index < 0)
                 {
                     continue;
@@ -449,22 +767,66 @@ namespace SAM.Analytical.OCCT.Solver
         /// </summary>
         private static List<double> ResolveWeights(IEnumerable<double> weights, List<Panel> sources)
         {
+            return ResolveWeights(weights, sources, out _);
+        }
+
+        /// <summary>
+        /// As <see cref="ResolveWeights(IEnumerable{double}, List{Panel})"/>, additionally reporting the
+        /// provenance of each resolved value (<see cref="ParameterProvenance"/>) for the CleanReport
+        /// (docs/CONTROLLED_WORKFLOW_PLAN.md §3).
+        /// <para>
+        /// <b>Precedence fix (D6):</b> a valid per-panel <c>SolverParameter.Weight</c> stamp now always wins.
+        /// The derivation runs <c>SetWeights</c> on throwaway clones with <c>@override: false</c> so a stamped
+        /// weight is never recomputed/clobbered (the pre-P2 default <c>@override: true</c> overwrote every
+        /// stamp), and the stamp is read straight off the SOURCE so it wins regardless of clone-copy semantics.
+        /// A model with no stamps derives identically to before (every clone is unstamped, so
+        /// <c>@override: false</c> sets all - byte-identical to the old <c>@override: true</c>).
+        /// </para>
+        /// </summary>
+        internal static List<double> ResolveWeights(IEnumerable<double> weights, List<Panel> sources, out List<ParameterProvenance> provenance)
+        {
+            provenance = new List<ParameterProvenance>();
             List<double> supplied = weights?.ToList();
             if (supplied != null && supplied.Count != 0)
             {
+                for (int i = 0; i < supplied.Count; i++)
+                {
+                    provenance.Add(ParameterProvenance.Stamped); // a caller-supplied override list is an explicit stamp
+                }
+
                 return supplied;
             }
 
             // Keep clones index-aligned 1:1 with sources so the weights line up with bucketSizes/sources.
+            // @override:false so a stamped Weight on a clone is left untouched (the precedence fix); the length
+            // remap is unchanged for the unstamped panels (they all get set, exactly as before).
             List<Panel> clones = sources.Select(x => global::SAM.Analytical.Create.Panel(x)).ToList();
-            clones.SetWeights();
+            clones.SetWeights(false);
 
-            List<double> result = new List<double>(clones.Count);
-            foreach (Panel clone in clones)
+            List<double> result = new List<double>(sources.Count);
+            for (int i = 0; i < sources.Count; i++)
             {
-                result.Add(clone != null && clone.TryGetValue(SolverParameter.Weight, out double weight) && !double.IsNaN(weight)
-                    ? weight
-                    : Panel3DSnapSolver.DEFAULT_Weight);
+                Panel source = sources[i];
+
+                // A valid stamp on the SOURCE wins (read directly, independent of whether the clone copied it).
+                if (source != null && source.TryGetValue(SolverParameter.Weight, out double stamped) && !double.IsNaN(stamped))
+                {
+                    result.Add(stamped);
+                    provenance.Add(ParameterProvenance.Stamped);
+                    continue;
+                }
+
+                Panel clone = i < clones.Count ? clones[i] : null;
+                if (clone != null && clone.TryGetValue(SolverParameter.Weight, out double weight) && !double.IsNaN(weight))
+                {
+                    result.Add(weight);
+                    provenance.Add(ParameterProvenance.DerivedLength);
+                }
+                else
+                {
+                    result.Add(Panel3DSnapSolver.DEFAULT_Weight);
+                    provenance.Add(ParameterProvenance.Default);
+                }
             }
 
             return result;
@@ -472,26 +834,63 @@ namespace SAM.Analytical.OCCT.Solver
 
         /// <summary>
         /// Resolves the per-panel lateral extend reach (<c>SolverParameter.MaxExtend</c>): the caller's list
-        /// when supplied, otherwise the value already stamped on each panel by the Solver's
-        /// <c>SetMaxExtends</c> workflow, falling back to <see cref="Panel3DSnapSolver.DEFAULT_MaxExtension"/>
-        /// (0.4 m) when a panel carries none. Reads the panels read-only; nothing is mutated. Using the same
-        /// <see cref="SolverParameter.MaxExtend"/> the 2D Solver uses lets the reach be tuned (and seen via
-        /// <c>SAMAnalytical.Visualize</c>) exactly as in the Solver.
+        /// when supplied, otherwise a valid stamp on the panel, otherwise the flat solver default
+        /// <see cref="Panel3DSnapSolver.DEFAULT_MaxExtension"/> (0.4 m). Reads the panels read-only; nothing is
+        /// mutated. Using the same <see cref="SolverParameter.MaxExtend"/> the 2D Solver uses lets the reach be
+        /// tuned (and seen via <c>SAMAnalytical.Visualize</c>) exactly as in the Solver.
         /// </summary>
         private static List<double> ResolveMaxExtends(IEnumerable<double> maxExtends, List<Panel> sources)
         {
+            return ResolveMaxExtends(maxExtends, sources, out _);
+        }
+
+        /// <summary>
+        /// As <see cref="ResolveMaxExtends(IEnumerable{double}, List{Panel})"/>, additionally reporting the
+        /// provenance of each resolved value for the CleanReport (§3). A valid per-panel
+        /// <c>SolverParameter.MaxExtend</c> stamp wins (<see cref="ParameterProvenance.Stamped"/>), read straight
+        /// off the SOURCE; otherwise the flat solver default 0.4 m (<see cref="ParameterProvenance.Default"/>).
+        /// <para>
+        /// <b>P3 decision (docs/CONTROLLED_WORKFLOW_PLAN.md §5.6, revised):</b> the plan's first wording asked the
+        /// unstamped fallback to derive via <c>SetMaxExtends</c> (mirroring <see cref="ResolveWeights(IEnumerable{double}, List{Panel}, out List{ParameterProvenance})"/>).
+        /// That derivation pre-caps the reach at 0.49x each panel's own in-plane length (the
+        /// <c>EXTENSION_LIMIT_LENGTH_RATIO</c>, measured on a horizontal slice), which crushes short/segmented wall
+        /// panels to ~0.1 m and REGRESSED managed-pipeline closure on the golden masters (whole-level-tilted
+        /// 22 -&gt; 16 cells, new naked edges). Per the plan's own step-5 rule (regression -&gt; keep the default)
+        /// and the "do not change defaults" directive, the unstamped fallback stays the flat 0.4 m default -
+        /// byte-identical to pre-P3 - so MaxExtend is a per-panel tuning knob (<c>SolverParameter.MaxExtend</c> via
+        /// SolverProperties), and the 0.49x length-ratio cap applies only at the lateral extension operation itself
+        /// (its intended home, not the derivation). The <c>EXTEND3D_SKIP</c>/<c>_RISKY</c> records
+        /// (<c>CappedByLengthRatio</c>/<c>MaxExtendLimited</c>/<c>LengthRatioLimited</c>) surface whether a stamped
+        /// reach is the binding limit, so the tuning is never a guess.
+        /// </para>
+        /// </summary>
+        internal static List<double> ResolveMaxExtends(IEnumerable<double> maxExtends, List<Panel> sources, out List<ParameterProvenance> provenance)
+        {
+            provenance = new List<ParameterProvenance>();
             List<double> supplied = maxExtends?.ToList();
             if (supplied != null && supplied.Count != 0)
             {
+                for (int i = 0; i < supplied.Count; i++)
+                {
+                    provenance.Add(ParameterProvenance.Stamped);
+                }
+
                 return supplied;
             }
 
             List<double> result = new List<double>(sources.Count);
             foreach (Panel source in sources)
             {
-                result.Add(source != null && source.TryGetValue(SolverParameter.MaxExtend, out double maxExtend) && !double.IsNaN(maxExtend) && maxExtend > 0
-                    ? maxExtend
-                    : Panel3DSnapSolver.DEFAULT_MaxExtension);
+                if (source != null && source.TryGetValue(SolverParameter.MaxExtend, out double maxExtend) && !double.IsNaN(maxExtend) && maxExtend > 0)
+                {
+                    result.Add(maxExtend);
+                    provenance.Add(ParameterProvenance.Stamped);
+                }
+                else
+                {
+                    result.Add(Panel3DSnapSolver.DEFAULT_MaxExtension);
+                    provenance.Add(ParameterProvenance.Default);
+                }
             }
 
             return result;
@@ -503,9 +902,9 @@ namespace SAM.Analytical.OCCT.Solver
         /// and max-extend), so a hand-set bucket is honoured. Otherwise derives it from construction
         /// thickness: thickness * factor, floored at a minimum.
         /// </summary>
-        private static double BucketSize(Panel panel, double minBucketSize, double thicknessFactor)
+        internal static double BucketSize(Panel panel, double minBucketSize, double thicknessFactor)
         {
-            if (panel != null && panel.TryGetValue(SolverParameter.BucketSize, out double bucketSize) && !double.IsNaN(bucketSize) && bucketSize > 0)
+            if (TryGetStampedBucket(panel, out double bucketSize))
             {
                 return bucketSize;
             }
@@ -519,13 +918,158 @@ namespace SAM.Analytical.OCCT.Solver
             return System.Math.Max(minBucketSize, thickness * thicknessFactor);
         }
 
+        /// <summary>The <see cref="ParameterProvenance"/> of each source panel's resolved BucketSize, mirroring
+        /// <see cref="BucketSize"/>'s stamp -&gt; thickness-derived -&gt; min-floor precedence, for the CleanReport
+        /// (§3). Index-aligned to <paramref name="sources"/>.</summary>
+        internal static List<ParameterProvenance> BucketProvenances(List<Panel> sources, double minBucketSize, double thicknessFactor)
+        {
+            List<ParameterProvenance> result = new List<ParameterProvenance>();
+            foreach (Panel panel in sources ?? new List<Panel>())
+            {
+                if (TryGetStampedBucket(panel, out _))
+                {
+                    result.Add(ParameterProvenance.Stamped);
+                    continue;
+                }
+
+                double thickness = panel?.Construction?.GetThickness() ?? double.NaN;
+                result.Add(!double.IsNaN(thickness) && thickness > 0 && thickness * thicknessFactor >= minBucketSize
+                    ? ParameterProvenance.DerivedThickness
+                    : ParameterProvenance.MinFloor);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Probe <see cref="SolverParameter.BucketSize"/> stamped on a panel. Duplicated across
+        /// <see cref="BucketSize"/>/<see cref="BucketProvenances"/>/<see cref="AppendInputEffectDiagnostics"/> —
+        /// extracted so callers that need the raw stamped value do not repeat the probe.
+        /// </summary>
+        /// <returns>True when a valid stamp was read.</returns>
+        internal static bool TryGetStampedBucket(Panel panel, out double bucketSize)
+        {
+            if (panel != null && panel.TryGetValue(SolverParameter.BucketSize, out bucketSize) && !double.IsNaN(bucketSize) && bucketSize > 0)
+            {
+                return true;
+            }
+            bucketSize = 0;
+            return false;
+        }
+
+        /// <summary>
+        /// Per-panel consolidation ranges: the stamped <see cref="SolverParameter.BucketSize"/> doubles
+        /// as that panel's consolidation range when set, else 0 (the global <c>doubleWallGap</c>
+        /// applies for unstamped walls; caps only participate when stamped).
+        /// Index-aligned to <paramref name="sources"/>.
+        /// </summary>
+        internal static List<double> ResolveConsolidationRanges(List<Panel> sources)
+        {
+            List<double> result = new List<double>();
+            foreach (Panel panel in sources ?? new List<Panel>())
+            {
+                double range = 0;
+                if (TryGetStampedBucket(panel, out double stamped) && stamped > 0)
+                {
+                    range = stamped;
+                }
+                result.Add(range);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Honest input-effect notes for the extend/open passes (docs/CONTROLLED_WORKFLOW_PLAN.md §5, the
+        /// "generic solution - each input's effect must be visible" review item). A GH input a user changed but
+        /// that had NO geometric effect on THIS run is reported rather than silently ignored, so re-running with
+        /// a different value and seeing the same geometry is explained, never a mystery. Both cases are provable
+        /// from the pipeline, not guessed:
+        /// <list type="bullet">
+        /// <item><c>inputAlreadyClean = true</c> skips Stage A entirely (<see cref="Geometry.OCCT.Solver.Panel3DSnapSolver.InputAlreadyClean"/>),
+        /// so every clean-stage input - <c>minBucketSize_</c>, <c>thicknessFactor_</c>, <c>alignColinearOffset_</c>,
+        /// <c>normalizeCapOffset_</c> - is geometry-inert, and <c>bucketBetweenLevels_</c> only clusters the
+        /// level groups for reporting (no cap normalization moves). Only <c>fillMargin_</c> and
+        /// <c>directionalCapGrow_</c> change the fill/extend geometry on that path.</item>
+        /// <item>a panel carrying a <see cref="SolverParameter.BucketSize"/> stamp overrides
+        /// <c>minBucketSize_</c>/<c>thicknessFactor_</c> for itself (the stamp wins in <see cref="BucketSize"/>),
+        /// so those two inputs move only the UNSTAMPED panels.</item>
+        /// </list>
+        /// Emits nothing on the plain path (no stamps, <c>inputAlreadyClean=false</c>) where every input is live.
+        /// </summary>
+        private static void AppendInputEffectDiagnostics(List<string> diagnostics, List<Panel> sources, bool inputAlreadyClean, string prefix)
+        {
+            if (diagnostics == null)
+            {
+                return;
+            }
+
+            if (inputAlreadyClean)
+            {
+                diagnostics.Add(prefix + "_INPUT_INERT: inputAlreadyClean=true -> Stage A (clean bucket) skipped; minBucketSize_, thicknessFactor_, alignColinearOffset_, normalizeCapOffset_, doubleWallGap_ had NO geometric effect this run, and bucketBetweenLevels_ affected LevelGroups reporting only (caps were normalized upstream by Clean3D). Stamped BucketSize ranges (per-panel consolidation) are also inert on this path. Only fillMargin_ and directionalCapGrow_ change the fill/extend geometry on the inputAlreadyClean path.");
+                return;
+            }
+
+            int total = sources?.Count ?? 0;
+            int stampedBuckets = 0;
+            foreach (Panel panel in sources ?? new List<Panel>())
+            {
+                if (TryGetStampedBucket(panel, out _))
+                {
+                    stampedBuckets++;
+                }
+            }
+
+            if (stampedBuckets > 0)
+            {
+                diagnostics.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    prefix + "_INPUT_OVERRIDDEN: {0} of {1} panel(s) carry a SolverParameter.BucketSize stamp -> minBucketSize_/thicknessFactor_ are overridden for those panel(s) (the per-panel stamp wins; tune it via SAM_Solver SolverProperties). The stamp also acts as that panel's consolidation range in double-wall merges (one side suffices; walls AND floors/roofs). They still move the {2} unstamped panel(s).",
+                    stampedBuckets, total, total - stampedBuckets));
+            }
+        }
+
+        /// <summary>
+        /// The dominant source panel for the resolved output face at <paramref name="faceIndex"/> per the
+        /// exact native-history <paramref name="sourceMap"/> (Phase 3): the recorded source whose panel has
+        /// the largest face area (the backer that most explains a merged/split output). Returns -1 when the
+        /// map is null, has no source for this face, or the sources are fabricated only - the caller then
+        /// falls back to the geometric <see cref="NearestSourceIndex"/> heuristic.
+        /// </summary>
+        private static int DominantSourceIndex(SAM.Geometry.OCCT.Solver.SourceMap sourceMap, int faceIndex, List<Panel> sources)
+        {
+            if (sourceMap == null || sources == null || sources.Count == 0)
+            {
+                return -1;
+            }
+
+            int best = -1;
+            double bestArea = double.NegativeInfinity;
+            foreach (int source in sourceMap.SourcesOf(new SAM.Geometry.OCCT.Solver.FaceKey(faceIndex)))
+            {
+                if (source < 0 || source >= sources.Count)
+                {
+                    continue; // fabricated (-1) or out-of-range source: no panel to carry forward.
+                }
+
+                double area = sources[source]?.GetFace3D()?.GetArea() ?? 0;
+                if (area > bestArea)
+                {
+                    bestArea = area;
+                    best = source;
+                }
+            }
+
+            return best;
+        }
+
         /// <summary>
         /// Index of the source panel that best explains a resolved face: parallel supporting planes,
         /// then the source whose centroid sits inside the resolved face's bounding box. Used to carry
         /// construction/type (and the bucket/weight stamps) forward, since native boolean resolution
         /// loses the 1:1 source mapping. Returns -1 only when there are no sources.
         /// </summary>
-        private static int NearestSourceIndex(Face3D face3D, List<Panel> sources, double tolerance)
+        /// <summary>Visible to <see cref="PanelReconstruction"/> as the last-resort fallback when a
+        /// face has no <see cref="SAM.Geometry.OCCT.Solver.SourceMap"/> attribution at all.</summary>
+        internal static int NearestSourceIndex(Face3D face3D, List<Panel> sources, double tolerance)
         {
             if (sources == null || sources.Count == 0)
             {

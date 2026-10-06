@@ -41,6 +41,27 @@
     <!-- Pathological models kept out of the top-level scan (which asserts a clean
          build) - exercised explicitly by robustness tests that only require no crash. -->
     <None Update="Fixtures\Robustness\*.sam" CopyToOutputDirectory="PreserveNewest" />
+    <!-- PR #49 sample models (the original "walls disappear after Extend3D" bug reports) - kept
+         out of the top-level scan for the same reason as Robustness above: these panels are
+         deliberately gappy/disconnected and will NOT raw-build watertight without the managed
+         conditioning pipeline. Exercised by Extend3DRegressionIntegrationTests. -->
+    <None Update="Fixtures\Extend3D-Regression\*.sam" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Controlled-workflow 9-space fixture (docs/CONTROLLED_WORKFLOW_PLAN.md §7) - kept out of the
+         top-level scan: the panels model is not raw-watertight before conditioning (the folder is
+         named MissingWalls for a reason). Exercised by ControlledWorkflowBaselineTests. -->
+    <None Update="Fixtures\ControlledWorkflow\*.sam" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- P1 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): disables xUnit's default cross-class test-collection
+       parallelism. This assembly mixes native-heap-heavy tests (WorkflowParityIntegrationTests now
+       runs ~27 OCCT builds per fixture across 9 fixtures) with a memory-growth threshold test
+       (HistoryExportIntegrationTests.Build_FiftySuccessiveBuildsWithHistory_NoLeakOrCrash); run
+       concurrently they contend for the same process heap and the threshold test flakes on GC
+       jitter from unrelated tests, not a real leak (passes cleanly alone or on the pre-P1 suite).
+       Serializing collections trades some wall-clock time for a suite that is not flaky by
+       construction - the standard fix for this class of native-interop test flake. -->
+  <ItemGroup>
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

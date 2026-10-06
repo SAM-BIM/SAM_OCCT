@@ -36,6 +36,17 @@ namespace SAM.Geometry.OCCT
         public OcctTopology Topology { get; internal set; }
 
         /// <summary>
+        /// Observational native history (<c>BRepTools_History</c>) for the op that
+        /// produced this result, or null when the native build predates ABI v4, the
+        /// op does not capture history (only <c>build_cell_complex</c> and
+        /// <c>merge_coplanar</c> do), or history was unavailable. A pure managed
+        /// snapshot - nothing to dispose. Consumed by the solver's
+        /// <c>SourceMap</c> composition (Phase 3); callers degrade to the geometric
+        /// heuristic when it is null.
+        /// </summary>
+        public OcctHistory History { get; internal set; }
+
+        /// <summary>
         /// Set by operations that legitimately produce no cells (e.g. the
         /// distance/proximity query, issue #28) to report success without a
         /// decoded cell complex. Cell-producing operations leave this false and

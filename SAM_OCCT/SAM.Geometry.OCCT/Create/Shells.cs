@@ -23,7 +23,23 @@ namespace SAM.Geometry.OCCT
 
             options = options == null ? new OcctBuildOptions() : new OcctBuildOptions(options);
 
-            if (!Native.OcctCellComplexBuilder.TryBuild(face3Ds, options, result))
+            // Coplanar pre-merge before the native volume build (mirrors ResolveStage).
+            // After fill/extend, caps and walls may overlap coplanar neighbours; collapsing
+            // those overlaps lets the kernel form a zoned cell complex instead of a single
+            // envelope cell. Skipped by default (MergeCoplanarBeforeBuild=false).
+            IEnumerable<Face3D> buildFace3Ds = face3Ds;
+            if (options.MergeCoplanarBeforeBuild)
+            {
+                List<Face3D> merged = Query.MergeCoplanarFace3Ds(face3Ds, out OcctCellComplexResult mergeResult, global::SAM.Core.Tolerance.Angle, options);
+                mergeResult?.Dispose();
+                if (merged != null && merged.Count != 0)
+                {
+                    buildFace3Ds = merged;
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_MERGE_COPLANAR", string.Format("Merged coplanar faces before build: {0} -> {1} face(s).", (face3Ds as ICollection<Face3D>)?.Count ?? 0, merged.Count));
+                }
+            }
+
+            if (!Native.OcctCellComplexBuilder.TryBuild(buildFace3Ds, options, result))
             {
                 return null;
             }

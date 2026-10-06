@@ -42,7 +42,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 minVolume.SetPersistentData(0.5);
                 result.Add(new GH_SAMParam(minVolume, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "Distance tolerance for geometry and level comparisons", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Number tolerance = new global::Grasshopper.Kernel.Parameters.Param_Number() { Name = "tolerance_", NickName = "tolerance_", Description = "Distance tolerance [m] for geometry and level comparisons", Access = GH_ParamAccess.item };
                 tolerance.SetPersistentData(Tolerance.Distance);
                 result.Add(new GH_SAMParam(tolerance, ParamVisibility.Voluntary));
 
