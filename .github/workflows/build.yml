@@ -91,22 +91,29 @@ jobs:
             'SAM_Solver'
           )
 
-          # Match the SAM dependency to this repo's line of development. The
-          # sow/2026-Q4 SAM branch carries the System.Text.Json migration, so its
-          # public API no longer leaks Newtonsoft.Json types into SAM_OCCT (the
-          # default branch still does, which breaks the compile with CS0012).
-          # Falls back to the default branch if that branch does not exist yet.
-          $depBranch = 'sow/2026-Q4'
+          # Build against the newest quarterly branch (sow/YYYY-Qn) of each dependency, so
+          # the active quarter is followed without a per-quarter edit here. The quarterly
+          # branch carries the System.Text.Json migration, so its public API does not leak
+          # Newtonsoft.Json types into SAM_OCCT (a CS0012 compile break on an older default
+          # branch). Falls back to the default branch if the dependency has no such branch.
 
           foreach ($r in $deps) {
             if (Test-Path $r) { continue }
             # Token URL so private deps (e.g. SAM_Solver) don't prompt for credentials;
             # SAM is public so the bare URL would also work for it.
             $url = if ($token) { "https://$token@github.com/$org/$r.git" } else { "https://github.com/$org/$r.git" }
-            Write-Host "Cloning $r @ $depBranch"
-            git clone --depth 1 --branch $depBranch $url $r
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host "::warning::Branch '$depBranch' not found for $r; falling back to default branch."
+            $depBranch = git ls-remote --heads $url 'sow/*' 2>$null |
+              ForEach-Object { ($_ -split '\s+')[1] -replace '^refs/heads/', '' } |
+              Where-Object { $_ -match '^sow/\d{4}-Q\d$' } |
+              Sort-Object -Descending | Select-Object -First 1
+            $cloned = $false
+            if ($depBranch) {
+              Write-Host "Cloning $r @ $depBranch"
+              git clone --depth 1 --branch $depBranch $url $r
+              $cloned = ($LASTEXITCODE -eq 0)
+            }
+            if (-not $cloned) {
+              Write-Host "::warning::No quarterly sow branch found for $r; falling back to default branch."
               git clone --depth 1 $url $r
             }
           }
