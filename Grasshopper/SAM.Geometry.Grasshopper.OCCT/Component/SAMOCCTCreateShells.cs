@@ -20,7 +20,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.3.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellPluralCreate;
 
         public SAMOCCTCreateShells()
           : base("SAMOCCT.CreateShells", "SAMOCCT.CreateShells", "Create closed SAM Shell volumes from Face3D/surface boundary geometry using OCCT", "SAM", "OCCT")

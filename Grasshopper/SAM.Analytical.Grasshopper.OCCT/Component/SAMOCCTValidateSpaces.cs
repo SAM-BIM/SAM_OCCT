@@ -26,7 +26,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "1.0.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_SpacePluralValidate;
 
         public SAMOCCTValidateSpaces()
           : base("SAMOCCT.ValidateSpaces", "SAMOCCT.ValidateSpaces", "Validate an OCCT-built AdjacencyCluster against an expected set of Spaces (GUID-matched: missing/merged/split/extra cells, double-height, orphan/unused panels)", "SAM", "OCCT")

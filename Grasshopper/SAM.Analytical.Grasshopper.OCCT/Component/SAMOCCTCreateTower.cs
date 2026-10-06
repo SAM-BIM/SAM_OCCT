@@ -20,7 +20,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ClusterCreate;
 
         public SAMOCCTCreateTower()
           : base("SAMOCCT.CreateTower", "SAMOCCT.CreateTower", "Create a watertight, zoned, multi-level tower AdjacencyCluster using OCCT cell building (issue #12 test component). Each floor is split into four perimeter zones plus a central core; floors are rotated progressively to form the twist. Spaces are named Floor_{level}_Zone_{NORTH|EAST|SOUTH|WEST|CORE}.", "SAM", "OCCT")
