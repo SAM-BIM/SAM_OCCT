@@ -20,7 +20,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellOffset;
 
         public SAMOCCTShellsOffset()
           : base("SAMOCCT.ShellsOffset", "SAMOCCT.ShellsOffset", "Offset each closed shell's skin outward (positive) or inward (negative) by a distance using OCCT - the centre-line-to-physical-face move for energy models. Offsetting is failure-prone; check Diagnostics.", "SAM", "OCCT")

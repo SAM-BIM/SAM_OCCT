@@ -20,7 +20,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_FaceTriangulate;
 
         public SAMOCCTTriangulateSurface()
           : base("SAMOCCT.TriangulateSurface", "SAMOCCT.TriangulateSurface", "Triangulate possibly non-planar surfaces into planar SAM Face3Ds with OCCT, ready for panelling. OCCT meshes coplanar faces as planes and spans non-planar (warped) boundaries with a filling surface; every output triangle is guaranteed planar. Deflection and area controls keep panels from getting too tiny.", "SAM", "OCCT")

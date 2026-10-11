@@ -27,7 +27,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.7.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ClusterRun;
 
         public SAMOCCTSolve3D()
           : base("SAMOCCT.Solve3D", "SAMOCCT.Solve3D", "The full 3D panel solver: clean bucket (Step 1) then fill floors/roofs to walls + extend walls between floors and to roofs + native resolve (Step 2). Returns resolved panels and naked-edge locations.", "SAM", "OCCT")

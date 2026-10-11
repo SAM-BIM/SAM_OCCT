@@ -20,7 +20,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellCalculate;
 
         public SAMOCCTShellsDistance()
           : base("SAMOCCT.ShellsDistance", "SAMOCCT.ShellsDistance", "Minimum distance between two sets of closed shells using OCCT (BRepExtrema), with the closest point on each side. Use for tolerance-true adjacency/gap detection and clash reporting. A distance of 0 means they touch or overlap.", "SAM", "OCCT")

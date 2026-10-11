@@ -20,7 +20,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellIntersect;
 
         public SAMOCCTShellsIntersection()
           : base("SAMOCCT.ShellsIntersection", "SAMOCCT.ShellsIntersection", "Keep only the volume where target shells overlap tool shells using OCCT", "SAM", "OCCT")

@@ -19,7 +19,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.2.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_PanelPluralCreate;
 
         public SAMOCCTPanelsFromShells()
           : base("SAMOCCT.PanelsFromShells", "SAMOCCT.PanelsFromShells", "Create analytical SAM Panels from closed shell faces", "SAM", "OCCT")

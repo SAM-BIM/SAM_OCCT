@@ -26,7 +26,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.6.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_PanelPluralModify;
 
         public SAMOCCTClean3D()
           : base("SAMOCCT.Clean3D", "SAMOCCT.Clean3D", "Step 1 of the 3D panel solver: clean bucket. Strips internal openings, snaps within-bucket near-parallel panels onto one backer, and merges contained/overlapping coplanar panels into single clean panels. No extend/resolve - use to tune the bucket and review the clean panels before SAMOCCT.Solve3D.", "SAM", "OCCT")

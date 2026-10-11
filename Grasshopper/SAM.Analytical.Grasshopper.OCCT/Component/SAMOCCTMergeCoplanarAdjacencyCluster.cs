@@ -17,7 +17,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ClusterMerge;
 
         public SAMOCCTMergeCoplanarAdjacencyCluster()
           : base("SAMOCCT.MergeCoplanarAdjacencyCluster", "SAMOCCT.MergeCoplanarAdjacencyCluster", "Merge adjacent coplanar panels of a SAM AdjacencyCluster into fewer, larger panels using the OCCT engine. Only panels sharing the same type, construction, and space adjacency merge, so the analytical topology is preserved; apertures are re-hosted.", "SAM", "OCCT")

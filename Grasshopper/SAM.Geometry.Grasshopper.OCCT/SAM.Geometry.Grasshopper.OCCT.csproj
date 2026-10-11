@@ -43,6 +43,7 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Resources\SAM_OCCT24.png" />
+    <EmbeddedResource Include="Resources\Icons\SAM_GH_*.png" />
   </ItemGroup>
   <Target Name="BuildNativeOcct" BeforeTargets="Build" Condition="'$(SAM_OCCT_SKIP_NATIVE_BUILD)' != 'true'">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\build-native.ps1&quot; -Configuration $(Configuration) -SkipVcpkgInstall" />

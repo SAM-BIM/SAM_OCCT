@@ -19,7 +19,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_SpacePluralMerge;
 
         public SAMOCCTMergeSmallSpaces()
           : base("SAMOCCT.MergeSmallSpaces", "SAMOCCT.MergeSmallSpaces", "Merge unwanted tiny spaces/cells of a SAM AdjacencyCluster into the best adjacent larger space", "SAM", "OCCT")

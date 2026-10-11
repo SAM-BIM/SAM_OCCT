@@ -27,7 +27,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.10.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_PanelPluralExtend;
 
         public SAMOCCTExtend3D()
           : base("SAMOCCT.Extend3D", "SAMOCCT.Extend3D", "Step 2 (managed) of the 3D panel solver, before the split: clean bucket then fill floors/roofs out to the walls and extend walls up to the cap above / down to the floor below. Walls overshoot their caps on purpose - the native split that trims them runs in SAMOCCT.Solve3D. Use to review the fill/extend geometry before resolving.", "SAM", "OCCT")

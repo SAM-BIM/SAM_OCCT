@@ -20,7 +20,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellPluralCreate;
 
         public SAMOCCTExtrudeFootprints()
           : base("SAMOCCT.ExtrudeFootprints", "SAMOCCT.ExtrudeFootprints", "Extrude planar footprint Face3Ds vertically into closed SAM Shell volumes using OCCT. Built for the draw-floor-outline-plus-storey-height workflow; the shells feed straight into SAMOCCT.CreateShells / MergeSmallShells / CreateAdjacencyCluster.", "SAM", "OCCT")

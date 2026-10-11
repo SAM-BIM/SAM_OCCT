@@ -21,7 +21,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
 
         public override string LatestComponentVersion => "0.1.0";
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellPluralMerge;
 
         public SAMOCCTMergeSmallShells()
           : base("SAMOCCT.MergeSmallShells", "SAMOCCT.MergeSmallShells", "Merge unwanted tiny closed shells/cells into the best adjacent larger shell using OCCT union", "SAM", "OCCT")

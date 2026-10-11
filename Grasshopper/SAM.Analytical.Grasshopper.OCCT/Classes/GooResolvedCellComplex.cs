@@ -62,7 +62,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("6b3f9e21-4d7c-4a1b-9e5f-2c8a6d1b3f74");
 
-        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_OCCT24;
+        protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_CellComplex;
 
         public GooResolvedCellComplexParam()
             : base("CellComplex", "CellComplex", "SAM OCCT Resolved CellComplex", "Params", "SAM")
