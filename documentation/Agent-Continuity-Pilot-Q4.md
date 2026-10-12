@@ -4,7 +4,7 @@ Status: implemented on `docs/agent-continuity-pilot-q4`; owner review required.
 Base: `sow/2026-Q4` at `e27242931e7007224c567933827f96ef137e0807`.
 PR: [SAM_OCCT#74](https://github.com/SAM-BIM/SAM_OCCT/pull/74).
 Companion: [SAM#191](https://github.com/SAM-BIM/SAM/pull/191) (independent; see below).
-Locally validated instruction/content head: `CONTENT_SHA`.
+Locally validated instruction/content head: `53a19b4bbb92dd98d3b57490cd601fad298fc329`.
 Superseded validated content head: `8cb1d37cdb6ca165e84ccaee1d044e0534bc4aa4`.
 The final PR head is recorded in the live PR description because committing that
 SHA into this file would create another head. This record contains the immutable
@@ -67,7 +67,7 @@ Run from a checkout of this PR at its final head (PowerShell; Git and Python 3 o
 
 ```powershell
 $baseRevision = 'e27242931e7007224c567933827f96ef137e0807'
-$testedRevision = 'CONTENT_SHA'
+$testedRevision = '53a19b4bbb92dd98d3b57490cd601fad298fc329'
 $finalRevision = git rev-parse HEAD   # must equal the final head in the PR description
 foreach ($revision in $testedRevision, $finalRevision) {
   git diff --check $baseRevision $revision; "check $revision exit=$LASTEXITCODE"
@@ -82,7 +82,7 @@ Bash equivalent (run the same `python` line as `python3`):
 
 ```bash
 base=e27242931e7007224c567933827f96ef137e0807
-tested=CONTENT_SHA
+tested=53a19b4bbb92dd98d3b57490cd601fad298fc329
 final=$(git rev-parse HEAD)   # must equal the final head in the PR description
 for revision in "$tested" "$final"; do
   git diff --check "$base" "$revision"; echo "check $revision exit=$?"
@@ -97,7 +97,9 @@ CLAUDE.md and this record; the tested-to-final list contains only this record;
 the measurement prints `16547 2317`. These are local documentation checks, not
 product test or CI results.
 
-Results (2026-10-12, Linux cloud checkout, Bash block): RESULTS_PENDING
+Results (2026-10-12, Linux cloud checkout, Bash block): at `53a19b4` and at the
+final head every `exit=` is 0; both full-PR lists are exactly the three files;
+tested-to-final lists only this record; the measurement prints `16547 2317`.
 The PowerShell block was not run on Windows in this session. Hosted checks
 (`build` on windows-2022, `spdx`) are tracked by the live PR at its final head.
 
