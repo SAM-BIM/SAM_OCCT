@@ -1,5 +1,25 @@
 # Project Progress - SAM_OCCT (2026-Q4)
 
+## Q4 agent continuity pilot closeout — 2026-10-12
+
+- [SAM_OCCT#74](https://github.com/SAM-BIM/SAM_OCCT/pull/74) merged as `3d0a4725ba92ba65f2253501bf3866e12c783b76` (base `sow/2026-Q4` @ `e2724293`), reviewed head `9957f9acc42f17ca7474a59ca5482a047c0181ba` (validated content head `53a19b4bbb92dd98d3b57490cd601fad298fc329`). Merge commit; branch preserved. Owner-authorized; ZiolkowskiJakub's review is required only for merges to `master` (owner decision), and that review request remains open.
+- Docs only, three files:
+  - `AGENTS.md`: heading-first, task-specific progress reads; section position is not a period marker; SAM-BIM-only operations; quarter transition with the release-promotion closeout on the outgoing `sow` branch, never `master`; handoff evidence rules; `[skip ci]` closeouts.
+  - `CLAUDE.md`: adds the `@AGENTS.md` import. The legacy text is unchanged, and master's `CLAUDE.md` (blob `14a41e6`) must be preserved without the import at promotion.
+  - Record: `documentation/Agent-Continuity-Pilot-Q4.md`.
+- Validation:
+  - Local Linux cloud run of the record's Bash block passes at the content and final heads: only the three files changed; `PROJECT_PROGRESS.md` untouched on the PR; footprint measurement `16547 2317`. The PowerShell block was not run on Windows.
+  - GitHub on the exact head: `build` (windows-2022) run `38246819673` and `spdx` run `38246819521` green.
+  - No product build or native tests were run (docs-only change), and there is no agent-client token benchmark.
+  - The machine-local organisation audit stays on the owner's workstation and is not committed.
+- Review:
+  - The Copilot re-review failed before reviewing (HTTP 402 quota); Claude acted as reviewer at the owner's direction and found no substantive findings.
+  - Kimi's review was supplied externally by the owner and is not on GitHub.
+  - Copilot thread `discussion_r4246653284` is answered and left unresolved for its reviewer.
+- Owner-authorized layout label in this commit: `## Current status` is marked as superseded bootstrap text, and `## Last updated` adds this entry. Verified that no Q4 entry sits beneath the frozen Q3 heading, so nothing was moved. No entry text was rewritten.
+- Remaining: companion SAM#191 is independent (merged `02bbafb8`, SAM closeout `46e96b72`).
+- Exact next step: on each installed agent client (Claude/Codex/Cursor/Hermes), start a fresh Q4 session and verify that it follows `AGENTS.md` without reading the full history, recording input/cache tokens and handoff correctness before any wider rollout. Quarter-transition steps happen only on owner instruction.
+
 ## Icon migration closeout — 2026-10-11
 
 - [SAM_OCCT#73](https://github.com/SAM-BIM/SAM_OCCT/pull/73) merged as `422f65b69732c06e5b9dc4422d5a2681fa42dd94`; owner authorized merging after green/safe validation. Feature branch preserved.
@@ -16,9 +36,11 @@
 
 ## Last updated
 
-2026-10-06 (Q4 icon-redesign migration).
+2026-10-12 (agent continuity pilot closeout, SAM_OCCT#74). Earlier: 2026-10-06 (Q4 icon-redesign migration).
 
 ## Current status
+
+Superseded bootstrap status (2026-10-06), kept verbatim: this section through `## Next step` describes the bootstrap state. Current state is in the dated closeout sections.
 
 Q4 branch cut from `master` `25801568`, which is the exact commit pinned in SAM_Deploy's frozen Q3 baseline (`v20261006.1`). Bootstrap added only internal docs (this file, `AGENTS.md`) and a narrow CI branch-reference update (see Decisions). No product source changed. No Q4 product work has started.
 
