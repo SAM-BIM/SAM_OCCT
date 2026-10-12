@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+@AGENTS.md
+
 Guidance for Claude Code (and other AI assistants) when working in this repository.
 
 ## Conventions

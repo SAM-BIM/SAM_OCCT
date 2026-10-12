@@ -19,14 +19,29 @@ Do not rely on previous conversation memory.
 Before making significant changes:
 
 1. Read this `AGENTS.md`.
-2. Read `PROJECT_PROGRESS.md`, and the PR record document and
-   PR description of any open PR you are continuing.
+2. Inspect the headings in `PROJECT_PROGRESS.md`, then read the latest
+   dated Q4 closeout and the sections relevant to this task. Read the
+   record document and live description of any PR you are continuing.
 3. Understand the relevant existing code, architecture, tests, and conventions.
 4. Review the current Git branch and working tree.
 5. Continue from the documented current state.
 
 Prefer small, safe, targeted changes consistent with existing conventions.
 Avoid unrelated refactoring unless it is required for the task.
+
+## Repository operations and context
+
+- Validate fetch and push URLs before network operations; target only
+  `github.com/SAM-BIM/<repository>`. Use explicit SAM-BIM repository/API
+  targets; avoid automatic fork-parent discovery. Do not contact HoareLea
+  repositories or request their access/SAML authorization.
+- Preserve historical attribution, legacy records and external integration
+  references; changes to integrations require a separate migration decision.
+- Treat dated bootstrap/Q2/Q3 entries as historical evidence. Check Git and
+  live PR metadata before acting on old status/next-step text. Read earlier
+  evidence when the task depends on it; do not load whole histories by default.
+- These instructions and `CLAUDE.md` belong on Q4/feature branches only;
+  never promote internal agent files to `master`.
 
 ## Project continuity
 
@@ -42,7 +57,8 @@ The order of work is:
 code + tests + evidence → final PR CI → merge →
 `PROJECT_PROGRESS.md` closeout commit on the base branch.
 
-Never change `PROJECT_PROGRESS.md` on a PR branch.
+Never change `PROJECT_PROGRESS.md` on a PR branch. Use `[skip ci]` for
+the post-merge docs-only closeout after the merge SHA is known.
 
 The closeout is written only after the merge SHA is known, so it cannot be
 part of the reviewed PR; putting it in the PR would force another review/CI
@@ -69,6 +85,11 @@ the `PROJECT_PROGRESS.md` closeout entry must contain:
 - tests, builds, checks, or validation performed and results;
 - unresolved issues, risks, or blockers;
 - exact recommended next step.
+
+Identify the PR, base branch and tested head SHA. Distinguish local results
+from GitHub checks, including failures/skips and required dependency order.
+Give reproducible commands and committed evidence paths; label machine-local
+evidence and prerequisites that must be copied or provisioned elsewhere.
 
 When updating `PROJECT_PROGRESS.md`, preserve still-relevant information
 from previous sessions. Remove or replace information only when it is
