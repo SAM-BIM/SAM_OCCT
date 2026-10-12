@@ -40,20 +40,25 @@ Avoid unrelated refactoring unless it is required for the task.
 - Treat dated bootstrap/Q2/Q3 entries as historical evidence. Check Git and
   live PR metadata before acting on old status/next-step text. Read earlier
   evidence when the task depends on it; do not load whole histories by default.
+- Section position is not a period marker: active-quarter closeouts may appear
+  beneath a historical heading. Scan all dated headings and classify each entry
+  by its date, PR and base branch, not by the heading it sits under.
 - Quarterly instructions and the `@AGENTS.md` import belong on `sow/*` and
-  their feature branches. Preserve the pre-existing general `master/CLAUDE.md`
-  guidance; do not promote Q4-specific rules or imports into that legacy file.
+  their feature branches. Preserve the pre-existing general `CLAUDE.md` guidance
+  on `master`; do not promote Q4-specific rules or imports into that legacy file.
 
 ## Quarter transition (owner-approved release work)
 
 - Promote approved Q4 product changes through a reviewed release PR. A normal
   merge includes internal files: prepare and verify the promotion tree excludes
-  `AGENTS.md`, `PROJECT_PROGRESS.md` and this internal pilot record
+  `AGENTS.md`, `PROJECT_PROGRESS.md` and the internal pilot record
   (`documentation/Agent-Continuity-Pilot-Q4.md`). Preserve `CLAUDE.md` from the
-  approved master baseline, excluding this pilot's Q4 import. Classify other
+  approved master baseline, excluding the Q4 `@AGENTS.md` import. Classify other
   documentation separately; retain product documentation selected for release.
-- Complete known-SHA Q4 closeouts before freezing `sow/2026-Q4`. Preserve the
-  frozen branch as the quarter's record: no commits, rebase, rename, archive or deletion.
+- Complete known-SHA Q4 closeouts before freezing `sow/2026-Q4`. The release-promotion
+  PR's closeout belongs on the outgoing `sow/2026-Q4`, never on `master`, although
+  `master` is that PR's base. Preserve the frozen branch as the quarter's record:
+  no commits, rebase, rename, archive or deletion.
 - Create `sow/2027-Q1` from the owner-approved promoted product baseline. Carry
   forward useful shared instructions and the Claude import onto Q1 only; update
   the active/frozen quarter references and carry unresolved work with evidence.
@@ -68,8 +73,9 @@ Avoid unrelated refactoring unless it is required for the task.
 During implementation, keep status/evidence on the PR branch in the
 PR record document and PR description. After merge, fetch the base
 branch and add the closeout entry, including the merge SHA, as a
-direct docs-only commit on the base branch. Do not modify unrelated
-stream entries.
+direct docs-only commit on the base branch (for a release-promotion
+PR into `master`, on the outgoing `sow` branch instead). Do not modify
+unrelated stream entries.
 
 The order of work is:
 
