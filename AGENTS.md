@@ -40,16 +40,18 @@ Avoid unrelated refactoring unless it is required for the task.
 - Treat dated bootstrap/Q2/Q3 entries as historical evidence. Check Git and
   live PR metadata before acting on old status/next-step text. Read earlier
   evidence when the task depends on it; do not load whole histories by default.
-- These instructions and `CLAUDE.md` belong on `sow/*` and their feature branches;
-  never promote internal agent files to `master`.
+- Quarterly instructions and the `@AGENTS.md` import belong on `sow/*` and
+  their feature branches. Preserve the pre-existing general `master/CLAUDE.md`
+  guidance; do not promote Q4-specific rules or imports into that legacy file.
 
 ## Quarter transition (owner-approved release work)
 
 - Promote approved Q4 product changes through a reviewed release PR. A normal
   merge includes internal files: prepare and verify the promotion tree excludes
-  `AGENTS.md`, `PROJECT_PROGRESS.md`, `CLAUDE.md` and this internal pilot record
-  (`documentation/Agent-Continuity-Pilot-Q4.md`). Classify other documentation
-  separately; retain product documentation selected for release.
+  `AGENTS.md`, `PROJECT_PROGRESS.md` and this internal pilot record
+  (`documentation/Agent-Continuity-Pilot-Q4.md`). Preserve `CLAUDE.md` from the
+  approved master baseline, excluding this pilot's Q4 import. Classify other
+  documentation separately; retain product documentation selected for release.
 - Complete known-SHA Q4 closeouts before freezing `sow/2026-Q4`. Preserve the
   frozen branch as the quarter's record: no commits, rebase, rename, archive or deletion.
 - Create `sow/2027-Q1` from the owner-approved promoted product baseline. Carry
@@ -107,6 +109,10 @@ Identify the PR, base branch and tested head SHA. Distinguish local results
 from GitHub checks, including failures/skips and required dependency order.
 Give reproducible commands and committed evidence paths; label machine-local
 evidence and prerequisites that must be copied or provisioned elsewhere.
+Record the validated content SHA in the committed PR record. If a record-only
+commit follows, keep that tested SHA and its commands in the record, validate
+the final docs diff, and identify the final PR head/checks in the PR description.
+The post-merge closeout records the immutable merge SHA.
 
 When updating `PROJECT_PROGRESS.md`, preserve still-relevant information
 from previous sessions. Remove or replace information only when it is
