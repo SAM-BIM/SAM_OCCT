@@ -1,5 +1,14 @@
 # Project Progress - SAM_OCCT (2026-Q4)
 
+## Q4 agent instructions rollout closeout - 2026-10-12
+
+- SAM-BIM/SAM_OCCT#75 merged as `17e27cbf796c0ea3431977cd52dbe5add31b549c` (merge commit pinned to approved head `e8b39284ed0afc3731a7a704bd108f569606a3c8`; base `sow/2026-Q4` `c825a406606d2ac0a456431268eeaae538014951`; validated content `d7abc9be9ab2f5864335448f28d53cd81ff3b0ca`). Owner-authorized 2026-10-12 after an independent review (`AGENT_ROLLOUT_REVIEW_2026-10-12.md`, local to the owner's workspace, not committed).
+- Docs only: AGENTS.md, plus the rollout record `documentation/Agent-Continuity-Rollout-Q4.md`. OCCT `CLAUDE.md` content untouched (already imports `AGENTS.md`). No product code, build, workflow, dependency pin or tool changed; this closeout is the only `PROJECT_PROGRESS.md` change.
+- Validation: local documentation checks and commands are in `documentation/Agent-Continuity-Rollout-Q4.md` (`git diff --check`, file scope, UTF-8/LF/no BOM, import). Hosted checks at the approved head: build success (run 38257684835); spdx success (run 38257684679). Dependency selection: the build log shows no sibling dependency clones.
+- Cleanup: remote docs/agent-instructions-rollout-q4 deleted with an expected-SHA lease on e8b39284ed0afc3731a7a704bd108f569606a3c8 after confirming it is contained in sow/2026-Q4 and no open PR uses it as head or base; the local branch and its worktree are preserved (worktree in use). Other branches, worktrees and the frozen quarters were not touched.
+- Remaining gaps: no agent-client behaviour or token benchmark has been run.
+- Exact next step: Continue from the shared `AGENTS.md`. Open item carried from the pilots: verify on each installed agent client, in a fresh Q4 session, that it follows the instructions without loading the full progress history, and record the result.
+
 ## Q4 agent continuity pilot closeout — 2026-10-12
 
 - [SAM_OCCT#74](https://github.com/SAM-BIM/SAM_OCCT/pull/74) merged as `3d0a4725ba92ba65f2253501bf3866e12c783b76` (base `sow/2026-Q4` @ `e2724293`), reviewed head `9957f9acc42f17ca7474a59ca5482a047c0181ba` (validated content head `53a19b4bbb92dd98d3b57490cd601fad298fc329`). Merge commit; branch preserved. Owner-authorized; ZiolkowskiJakub's review is required only for merges to `master` (owner decision), and that review request remains open.
