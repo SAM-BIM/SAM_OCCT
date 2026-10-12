@@ -40,8 +40,25 @@ Avoid unrelated refactoring unless it is required for the task.
 - Treat dated bootstrap/Q2/Q3 entries as historical evidence. Check Git and
   live PR metadata before acting on old status/next-step text. Read earlier
   evidence when the task depends on it; do not load whole histories by default.
-- These instructions and `CLAUDE.md` belong on Q4/feature branches only;
+- These instructions and `CLAUDE.md` belong on `sow/*` and their feature branches;
   never promote internal agent files to `master`.
+
+## Quarter transition (owner-approved release work)
+
+- Promote approved Q4 product changes through a reviewed release PR. A normal
+  merge includes internal files: prepare and verify the promotion tree excludes
+  `AGENTS.md`, `PROJECT_PROGRESS.md`, `CLAUDE.md` and this internal pilot record
+  (`documentation/Agent-Continuity-Pilot-Q4.md`). Classify other documentation
+  separately; retain product documentation selected for release.
+- Complete known-SHA Q4 closeouts before freezing `sow/2026-Q4`. Preserve the
+  frozen branch as the quarter's record: no commits, rebase, rename, archive or deletion.
+- Create `sow/2027-Q1` from the owner-approved promoted product baseline. Carry
+  forward useful shared instructions and the Claude import onto Q1 only; update
+  the active/frozen quarter references and carry unresolved work with evidence.
+- Initialize a concise Q1 progress record only as an explicitly authorized
+  quarter-bootstrap operation, referencing the frozen Q4 commit for history.
+  This does not widen the ordinary post-merge-only progress-closeout exception.
+  These steps describe future release work; merging this pilot performs none of it.
 
 ## Project continuity
 

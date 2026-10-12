@@ -4,8 +4,8 @@ Status: implemented on `docs/agent-continuity-pilot-q4`; owner review required.
 Base: `sow/2026-Q4` at `e272429`. No merge authorized by this task.
 PR: [SAM_OCCT#74](https://github.com/SAM-BIM/SAM_OCCT/pull/74).
 Companion: [SAM#191](https://github.com/SAM-BIM/SAM/pull/191).
-Initial locally validated/published head: `dc4ae3257ecf0a388356d4262aa8c740bc1f316d`;
-this follow-up adds PR identities only. The PR description identifies the final head.
+Initial locally validated/published head: `dc4ae3257ecf0a388356d4262aa8c740bc1f316d`.
+The PR description identifies the final head after subsequent documentation updates.
 
 ## Problem and implementation
 
@@ -48,6 +48,13 @@ default. Check actual installed-client context; imports do not imply that Cursor
 or Hermes preprocess Claude syntax (they already support AGENTS.md).
 
 ## Risks and next step
+
+Owner-requested follow-up: AGENTS.md now specifies reviewed product promotion
+excluding internal agent files/this pilot record, Q4 closeouts before freezing,
+and an explicitly authorized Q1 bootstrap carrying useful instructions/evidence.
+No release, freeze or Q1 branch creation happens in this pilot. Follow-up changes
+only AGENTS.md and this record; whitespace/scope checks pass, with progress and
+existing Claude-specific instructions unchanged.
 
 The stale bootstrap status remains historical text until an authorized post-merge
 closeout labels it; no progress edits on this PR branch. Extra stable instruction
