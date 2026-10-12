@@ -19,8 +19,9 @@ Do not rely on previous conversation memory.
 Before making significant changes:
 
 1. Read this `AGENTS.md`.
-2. Read `PROJECT_PROGRESS.md`, and the PR record document and
-   PR description of any open PR you are continuing.
+2. Inspect the headings in `PROJECT_PROGRESS.md`, then read the latest
+   dated Q4 closeout and the sections relevant to this task. Read the
+   record document and live description of any PR you are continuing.
 3. Understand the relevant existing code, architecture, tests, and conventions.
 4. Review the current Git branch and working tree.
 5. Continue from the documented current state.
@@ -28,21 +29,61 @@ Before making significant changes:
 Prefer small, safe, targeted changes consistent with existing conventions.
 Avoid unrelated refactoring unless it is required for the task.
 
+## Repository operations and context
+
+- Validate fetch and push URLs before network operations; target only
+  `github.com/SAM-BIM/<repository>`. Use explicit SAM-BIM repository/API
+  targets; avoid automatic fork-parent discovery. Do not contact HoareLea
+  repositories or request their access/SAML authorization.
+- Preserve historical attribution, legacy records and external integration
+  references; changes to integrations require a separate migration decision.
+- Treat dated bootstrap/Q2/Q3 entries as historical evidence. Check Git and
+  live PR metadata before acting on old status/next-step text. Read earlier
+  evidence when the task depends on it; do not load whole histories by default.
+- Section position is not a period marker: active-quarter closeouts may appear
+  beneath a historical heading. Scan all dated headings and classify each entry
+  by its date, PR and base branch, not by the heading it sits under.
+- Quarterly instructions and the `@AGENTS.md` import belong on `sow/*` and
+  their feature branches. Preserve the pre-existing general `CLAUDE.md` guidance
+  on `master`; do not promote Q4-specific rules or imports into that legacy file.
+
+## Quarter transition (owner-approved release work)
+
+- Promote approved Q4 product changes through a reviewed release PR. A normal
+  merge includes internal files: prepare and verify the promotion tree excludes
+  `AGENTS.md`, `PROJECT_PROGRESS.md` and the internal pilot record
+  (`documentation/Agent-Continuity-Pilot-Q4.md`). Preserve `CLAUDE.md` from the
+  approved master baseline, excluding the Q4 `@AGENTS.md` import. Classify other
+  documentation separately; retain product documentation selected for release.
+- Complete known-SHA Q4 closeouts before freezing `sow/2026-Q4`. The release-promotion
+  PR's closeout belongs on the outgoing `sow/2026-Q4`, never on `master`, although
+  `master` is that PR's base. Preserve the frozen branch as the quarter's record:
+  no commits, rebase, rename, archive or deletion.
+- Create `sow/2027-Q1` from the owner-approved promoted product baseline. Carry
+  forward useful shared instructions and the Claude import onto Q1 only; update
+  the active/frozen quarter references and carry unresolved work with evidence.
+- Initialize a concise Q1 progress record only as an explicitly authorized
+  quarter-bootstrap operation, referencing the frozen Q4 commit for history.
+  This does not widen the ordinary post-merge-only progress-closeout exception.
+  These steps describe future release work; merging this pilot performs none of it.
+
 ## Project continuity
 
 `PROJECT_PROGRESS.md` is updated only after a PR has merged.
 During implementation, keep status/evidence on the PR branch in the
 PR record document and PR description. After merge, fetch the base
 branch and add the closeout entry, including the merge SHA, as a
-direct docs-only commit on the base branch. Do not modify unrelated
-stream entries.
+direct docs-only commit on the base branch (for a release-promotion
+PR into `master`, on the outgoing `sow` branch instead). Do not modify
+unrelated stream entries.
 
 The order of work is:
 
 code + tests + evidence → final PR CI → merge →
 `PROJECT_PROGRESS.md` closeout commit on the base branch.
 
-Never change `PROJECT_PROGRESS.md` on a PR branch.
+Never change `PROJECT_PROGRESS.md` on a PR branch. Use `[skip ci]` for
+the post-merge docs-only closeout after the merge SHA is known.
 
 The closeout is written only after the merge SHA is known, so it cannot be
 part of the reviewed PR; putting it in the PR would force another review/CI
@@ -69,6 +110,15 @@ the `PROJECT_PROGRESS.md` closeout entry must contain:
 - tests, builds, checks, or validation performed and results;
 - unresolved issues, risks, or blockers;
 - exact recommended next step.
+
+Identify the PR, base branch and tested head SHA. Distinguish local results
+from GitHub checks, including failures/skips and required dependency order.
+Give reproducible commands and committed evidence paths; label machine-local
+evidence and prerequisites that must be copied or provisioned elsewhere.
+Record the validated content SHA in the committed PR record. If a record-only
+commit follows, keep that tested SHA and its commands in the record, validate
+the final docs diff, and identify the final PR head/checks in the PR description.
+The post-merge closeout records the immutable merge SHA.
 
 When updating `PROJECT_PROGRESS.md`, preserve still-relevant information
 from previous sessions. Remove or replace information only when it is
