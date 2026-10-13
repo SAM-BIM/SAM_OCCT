@@ -256,10 +256,22 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 resolvedCellComplex = resolvedCellComplex.WithPanelGuids(resolvedPanels.Where(x => x != null).Select(x => x.Guid));
             }
 
+            // Input Air panels (open boundaries such as stair voids) are not solved, and the core solve drops them.
+            // Pass them through unchanged so they reach SAMOCCT.CreateAdjacencyCluster. They carry no SolveId
+            // and are not in the complex's roster, so the direct handoff is refused and the rebuild runs with the
+            // Air faces in the cell build - which is what keeps the spaces either side separate.
+            List<Panel> outputPanels = resolvedPanels == null ? null : new List<Panel>(resolvedPanels);
+            List<Panel> inputAirPanels = panels.Where(x => x != null && x.PanelType == PanelType.Air && x.GetFace3D() != null).ToList();
+            if (outputPanels != null && inputAirPanels.Count != 0)
+            {
+                outputPanels.AddRange(inputAirPanels);
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, string.Format("Passed {0} input Air panel(s) through unchanged. SAMOCCT.CreateAdjacencyCluster rebuilds (instead of using the CellComplex) so they take part in the cell build.", inputAirPanels.Count));
+            }
+
             index = Params.IndexOfOutputParam("Panels");
             if (index != -1)
             {
-                dataAccess.SetDataList(index, resolvedPanels?.Select(x => new GooPanel(x)));
+                dataAccess.SetDataList(index, outputPanels?.Select(x => new GooPanel(x)));
             }
 
             index = Params.IndexOfOutputParam("NakedPoints");

@@ -246,6 +246,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
             "SAM_OCCT_BUILD_FALLBACK_DIRECT",
             "SAM_OCCT_BUILD_UNRELIABLE",
             "SAM_OCCT_COVERAGE_UNAVAILABLE",
+            "SAM_OCCT_ANALYTICAL_AIR_DIRECT_BUILD",
+            "SAM_OCCT_ANALYTICAL_AIR_NOT_REPRESENTED",
         };
 
         private static bool IsWarning(string diagnostic)
