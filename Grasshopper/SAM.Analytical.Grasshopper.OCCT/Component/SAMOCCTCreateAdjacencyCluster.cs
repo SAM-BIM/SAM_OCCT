@@ -195,7 +195,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 // defaults (AvoidInternalShapes=true, SewBeforeBuild=false, SewingTolerance=0.0). Production
                 // previously diverged from every test/solver call site, which built with these solver-matched
                 // options - see docs/CELLCOMPLEX_FIRST_HANDOVER.md §A "Diagnosed seam".
-                adjacencyCluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(spaces, panels, out OcctCellComplexResult result, log, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01, MergeCoplanarBeforeBuild = mergeCoplanarBeforeBuild });
+                adjacencyCluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(spaces, panels, out OcctCellComplexResult result, log, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01, MergeCoplanarBeforeBuild = mergeCoplanarBeforeBuild, ValidateSewCoverage = true });
                 diagnostics.Add(string.Format("SAM_OCCT_TIMING_OCCT_AND_ADJACENCY: {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
 
                 if (result?.Diagnostics != null)
@@ -234,8 +234,23 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
             foreach (string diagnostic in diagnostics)
             {
-                AddRuntimeMessage(adjacencyCluster == null ? GH_RuntimeMessageLevel.Warning : GH_RuntimeMessageLevel.Remark, diagnostic);
+                AddRuntimeMessage(adjacencyCluster == null || IsWarning(diagnostic) ? GH_RuntimeMessageLevel.Warning : GH_RuntimeMessageLevel.Remark, diagnostic);
             }
+        }
+
+        // Diagnostics that must stay visible even when a cluster was produced: a cluster built from an
+        // under-split (merged rooms) is not a success the user can trust without looking.
+        private static readonly string[] WarningCodes = new[]
+        {
+            "SAM_OCCT_SEW_UNDER_SPLIT_SUSPECTED",
+            "SAM_OCCT_BUILD_FALLBACK_DIRECT",
+            "SAM_OCCT_BUILD_UNRELIABLE",
+            "SAM_OCCT_COVERAGE_UNAVAILABLE",
+        };
+
+        private static bool IsWarning(string diagnostic)
+        {
+            return diagnostic != null && WarningCodes.Any(x => diagnostic.Contains(x));
         }
     }
 }

@@ -72,6 +72,16 @@ namespace SAM.Core.OCCT
         /// </summary>
         public bool MergeCoplanarBeforeBuild { get; set; } = false;
 
+        /// <summary>
+        /// When true together with <see cref="SewBeforeBuild"/>, the sew build's input-face coverage is
+        /// checked after it succeeds. Manifold sewing can drop T-junction partitions and silently merge
+        /// adjacent spaces (an under-split). When input faces cut through a cell, or go unused, a direct
+        /// MakerVolume build is evaluated in isolation and adopted only if it is a valid, strictly better
+        /// refinement. Otherwise the sew build is kept with an explicit Warning. Default false keeps the
+        /// solver's sew path exactly as before.
+        /// </summary>
+        public bool ValidateSewCoverage { get; set; } = false;
+
         public OcctBuildOptions()
         {
         }
@@ -94,6 +104,7 @@ namespace SAM.Core.OCCT
             MaxSewFaceCount = occtBuildOptions.MaxSewFaceCount;
             GlueMode = occtBuildOptions.GlueMode;
             MergeCoplanarBeforeBuild = occtBuildOptions.MergeCoplanarBeforeBuild;
+            ValidateSewCoverage = occtBuildOptions.ValidateSewCoverage;
         }
 
         /// <summary>

@@ -100,6 +100,41 @@ namespace SAM.Geometry.OCCT
             Topology?.Dispose();
         }
 
+        /// <summary>
+        /// Moves a fully built candidate (cells, diagnostics, native flags, history and any retained topology)
+        /// into this result and rebuilds the face adjacencies. The candidate gives up ownership of its topology.
+        /// </summary>
+        internal void AdoptFrom(OcctCellComplexResult candidate)
+        {
+            if (candidate == null)
+            {
+                return;
+            }
+
+            NativeAvailable = candidate.NativeAvailable;
+            NativeVersion = candidate.NativeVersion;
+            foreach (OcctCell cell in candidate.cells)
+            {
+                AddCell(cell);
+            }
+
+            diagnostics.AddRange(candidate.diagnostics);
+
+            if (candidate.Topology != null)
+            {
+                Topology?.Dispose();
+                Topology = candidate.Topology;
+                candidate.Topology = null;
+            }
+
+            if (candidate.History != null)
+            {
+                History = candidate.History;
+            }
+
+            BuildFaceAdjacencies();
+        }
+
         public void BuildFaceAdjacencies()
         {
             faceAdjacencies.Clear();

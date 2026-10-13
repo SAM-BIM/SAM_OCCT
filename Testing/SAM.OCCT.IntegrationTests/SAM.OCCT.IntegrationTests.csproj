@@ -50,6 +50,9 @@
          top-level scan: the panels model is not raw-watertight before conditioning (the folder is
          named MissingWalls for a reason). Exercised by ControlledWorkflowBaselineTests. -->
     <None Update="Fixtures\ControlledWorkflow\*.sam" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Two-storey house mid-surface panels (23 panels, metres) plus 11 seed spaces (10 labelled rooms and
+         the attic) - the sew-before-build under-split regression. Exercised by HouseUnderSplitIntegrationTests. -->
+    <None Update="Fixtures\House-Regression\*.sam" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- P1 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): disables xUnit's default cross-class test-collection
