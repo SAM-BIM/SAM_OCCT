@@ -65,3 +65,38 @@ Related: SAM-BIM/SAM#194 (`CreatePanelsBySolids`). That PR creates the Air panel
 - Manual GH test: see the morning handover in the PR description.
 - Aperture hosting through the GH component is still to be confirmed manually (set `maxDistance_` to 0.1).
 - Solve3D over-splits the attic for snapped `PanelsBySolid` input (13 cells), so it is not used in that workflow.
+
+## Addition (2026-10-14): source parameters survive the rebuild
+
+Status: follow-up commit on the same branch; owner review required. Not merged.
+
+### Why
+
+The rebuild path classifies every cell face and gives it a default construction. Each physical panel therefore lost what it was made from:
+- on the real house, 0 of 55 physical panels kept `PanelSourceParameter` (source name, id, layer);
+- they also lost the new **physical thickness** of SAM-BIM/SAM#194, which the direct T3D export now uses as the element width (SAM-BIM/SAM_Tas, branch `feature/panels-by-solid-q4`).
+
+### Change
+
+- New internal `SourceParameterCarrier`, used by both the rebuild path (`CreatePanels`) and the `ResolvedCellComplex` handoff path:
+  - **Sources:** every supplied **non-Air** panel coplanar with the cell face that overlaps it by area. A shared edge or a parallel plane is not a source.
+  - **One source:** its parameter sets are copied.
+  - **Several (a face spanning two coplanar elements):**
+    - agreeing values are kept;
+    - differing texts are joined with "; ";
+    - a differing non-text value (two physical thicknesses) is **not carried**, with Warning `SAM_OCCT_ANALYTICAL_SOURCE_PARAMETER_CONFLICT` (a GH warning). Nothing is picked arbitrarily.
+  - **Never carried:** `PanelParameter` values (adiabatic, colour, U-value, ...). Classification and construction stay the rebuild's, exactly as before.
+  - **Air:** Air faces keep inheriting their Air source wholesale (unchanged). Air sources never feed a physical face.
+  - Info diagnostic `SAM_OCCT_ANALYTICAL_SOURCE_PARAMETERS` with the counts.
+- Generic by design: it reads parameter sets and names, not SAM#194's enum, so this PR still builds against `sow/2026-Q4`.
+- `InternalsVisibleTo("SAM.OCCT.UnitTests")` on `SAM.Analytical.OCCT`.
+
+### Validation (local)
+
+- Unit: **654 / 0** (+6 `SourceParameterCarrierTests`).
+- House integration (`~House`): **16 / 0**. New: `AdjacencyCluster_HouseSourceParameters_SurviveTheRebuild` — 55 rebuilt panels kept their stamp, 0 merged, no conflict; 11 spaces; the Air panel took nothing from the slab.
+- Full integration: **258 passed / 19 failed / 2 skipped** (279). The 19 failures are identical by name to a run of the same six classes on this branch's previous head `f901807` with these changes stashed (38 tests: 19 / 19), so none is new.
+- Grasshopper contract suite (`SAM.OCCT.GrasshopperTests`): **15 / 0**. It completed normally this time, without the earlier start-up hang.
+- Real house (machine-local Rhino 8 harness, the test3.gh chain, SAM#194 + this branch):
+  - 11 spaces, 56 panels, 1 Air panel;
+  - all 55 physical panels carry source name, layer and `PhysicalThickness` (walls 0.25, partitions 0.10, slabs 0.20, UF ceiling 0.15, roof 0.20 m).

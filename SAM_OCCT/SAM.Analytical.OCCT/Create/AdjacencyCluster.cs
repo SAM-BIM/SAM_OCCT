@@ -324,6 +324,9 @@ namespace SAM.Analytical.OCCT
             // SAM's own classification below once the normals are space-relative.
             HashSet<System.Guid> defaultedGuids = new HashSet<System.Guid>();
             int inheritedCount = 0, defaultedCount = 0, ambiguousCount = 0, freshGuidCount = 0, smallFaceCount = 0;
+            // Construction/type/Guid are inherited above by an interior-point match; instance parameters (source
+            // traceability, physical thickness) by area overlap with the supplied panels - see SourceParameterCarrier.
+            SourceParameterCarrier carrier = new SourceParameterCarrier(panels_Temp, tolerance);
             foreach (ResolvedCellFace cellFace in resolvedCellComplex.Faces)
             {
                 if (cellFace?.Face3D == null || panelsByKey.ContainsKey(cellFace.TopologyKey))
@@ -401,8 +404,18 @@ namespace SAM.Analytical.OCCT
 
                 if (panel != null)
                 {
+                    if (panel.PanelType != PanelType.Air)
+                    {
+                        carrier.Carry(panel, cellFace.Face3D);
+                    }
+
                     panelsByKey[cellFace.TopologyKey] = panel;
                 }
+            }
+
+            foreach ((OcctDiagnosticSeverity _, string code, string message) in carrier.Diagnostics())
+            {
+                diagnostics.Add(code + ": " + message);
             }
 
             AdjacencyCluster result = new AdjacencyCluster();
@@ -1130,6 +1143,10 @@ namespace SAM.Analytical.OCCT
                 : null;
             HashSet<System.Guid> claimedGuids = new HashSet<System.Guid>();
 
+            // Physical panels are re-typed and given default constructions below, but they keep the instance
+            // parameters (source traceability, physical thickness) of the supplied panels they are pieces of.
+            SourceParameterCarrier carrier = new SourceParameterCarrier(sourcePanels, matchTolerance);
+
             Dictionary<int, Panel> result = new Dictionary<int, Panel>();
             foreach (OcctCell cell in cellComplexResult.Cells)
             {
@@ -1176,11 +1193,13 @@ namespace SAM.Analytical.OCCT
                     Panel panel = global::SAM.Analytical.Create.Panel(construction, panelType, cellFace.Face3D);
                     if (panel != null)
                     {
+                        carrier.Carry(panel, cellFace.Face3D);
                         result[cellFace.TopologyKey] = panel;
                     }
                 }
             }
 
+            carrier.AddDiagnostics(cellComplexResult);
             return result;
         }
     }

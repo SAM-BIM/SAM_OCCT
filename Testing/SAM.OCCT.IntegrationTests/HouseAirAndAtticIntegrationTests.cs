@@ -230,5 +230,47 @@ namespace SAM.OCCT.IntegrationTests
             string Signature(AdjacencyCluster adjacencyCluster) => string.Join(";", adjacencyCluster.GetPanels().Select(x => string.Format("{0}:{1:0.######}", x.PanelType, x.GetArea())).OrderBy(x => x));
             Assert.Equal(Signature(first), Signature(second));
         }
+
+        [SkippableFact]
+        public void AdjacencyCluster_HouseSourceParameters_SurviveTheRebuild()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange: every supplied element carries its own source stamp, as CreatePanelsBySolids gives it.
+            (List<Panel> panels, List<Space> seeds) = LoadHouseWithStairAir();
+            HashSet<string> names = new HashSet<string>();
+            for (int i = 0; i < panels.Count; i++)
+            {
+                if (panels[i].PanelType == PanelType.Air)
+                {
+                    continue;
+                }
+
+                ParameterSet parameterSet = new ParameterSet("Rhino Source");
+                parameterSet.Add("Source Name", "Element " + i);
+                parameterSet.Add("Physical Thickness", 0.3);
+                panels[i].Add(parameterSet);
+                names.Add("Element " + i);
+            }
+
+            // Act
+            AdjacencyCluster adjacencyCluster = AnalyticalOcctCreate.AdjacencyCluster(seeds, panels, out OcctCellComplexResult result, null, GrasshopperRecipe());
+
+            // Assert: every physical panel still says what it was made from; the Air panel takes nothing from the slab.
+            List<Panel> physical = adjacencyCluster.GetPanels().Where(x => x.PanelType != PanelType.Air).ToList();
+            Assert.Equal(11, adjacencyCluster.GetSpaces().Count);
+            Assert.All(physical, x =>
+            {
+                ParameterSet parameterSet = x.GetParameterSets()?.Find(y => y.Name == "Rhino Source");
+                Assert.NotNull(parameterSet);
+                Assert.All(parameterSet.ToString("Source Name").Split("; "), name => Assert.Contains(name, names));
+                Assert.Equal(0.3, parameterSet.ToDouble("Physical Thickness"), 9);
+            });
+            Panel air = Assert.Single(adjacencyCluster.GetPanels(), x => x.PanelType == PanelType.Air);
+            Assert.Null(air.GetParameterSets()?.Find(y => y.Name == "Rhino Source"));
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_ANALYTICAL_SOURCE_PARAMETERS");
+            Assert.DoesNotContain(result.Diagnostics, x => x.Code == "SAM_OCCT_ANALYTICAL_SOURCE_PARAMETER_CONFLICT");
+            output.WriteLine(result.Diagnostics.Single(x => x.Code == "SAM_OCCT_ANALYTICAL_SOURCE_PARAMETERS").ToString());
+        }
     }
 }
