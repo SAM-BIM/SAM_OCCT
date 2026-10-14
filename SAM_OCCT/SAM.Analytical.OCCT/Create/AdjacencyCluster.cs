@@ -30,6 +30,7 @@ namespace SAM.Analytical.OCCT
 
             Stopwatch stopwatch = Stopwatch.StartNew();
             List<Shell> shells = Geometry.OCCT.Create.CellComplexByPanels(panels_Temp, out cellComplexResult, options);
+            shells = EnsureAirRepresented(panels_Temp, shells, ref cellComplexResult, options);
             cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_NATIVE_CELL_BUILD", string.Format("OCCT cell build and decode took {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
             if (shells == null || shells.Count == 0)
             {
@@ -58,7 +59,7 @@ namespace SAM.Analytical.OCCT
             }
 
             stopwatch.Restart();
-            AdjacencyCluster adjacencyCluster = DirectAdjacencyCluster(cellComplexResult, spaces_Temp, options, minArea, maxAngle);
+            AdjacencyCluster adjacencyCluster = DirectAdjacencyCluster(cellComplexResult, spaces_Temp, options, minArea, maxAngle, null, panels_Temp);
             if (adjacencyCluster != null)
             {
                 cellComplexResult?.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_REBUILD", string.Format("Direct SAM topology rebuild took {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
@@ -323,6 +324,9 @@ namespace SAM.Analytical.OCCT
             // SAM's own classification below once the normals are space-relative.
             HashSet<System.Guid> defaultedGuids = new HashSet<System.Guid>();
             int inheritedCount = 0, defaultedCount = 0, ambiguousCount = 0, freshGuidCount = 0, smallFaceCount = 0;
+            // Construction/type/Guid are inherited above by an interior-point match; instance parameters (source
+            // traceability, physical thickness) by area overlap with the supplied panels - see SourceParameterCarrier.
+            SourceParameterCarrier carrier = new SourceParameterCarrier(panels_Temp, tolerance);
             foreach (ResolvedCellFace cellFace in resolvedCellComplex.Faces)
             {
                 if (cellFace?.Face3D == null || panelsByKey.ContainsKey(cellFace.TopologyKey))
@@ -400,8 +404,18 @@ namespace SAM.Analytical.OCCT
 
                 if (panel != null)
                 {
+                    if (panel.PanelType != PanelType.Air)
+                    {
+                        carrier.Carry(panel, cellFace.Face3D);
+                    }
+
                     panelsByKey[cellFace.TopologyKey] = panel;
                 }
+            }
+
+            foreach ((OcctDiagnosticSeverity _, string code, string message) in carrier.Diagnostics())
+            {
+                diagnostics.Add(code + ": " + message);
             }
 
             AdjacencyCluster result = new AdjacencyCluster();
@@ -478,6 +492,100 @@ namespace SAM.Analytical.OCCT
             return result;
         }
 
+        /// <summary>
+        /// Supplied Air panels (openings such as stair voids) must come out of the cell build as faces of their
+        /// own so they can separate the spaces either side. The sew path's same-domain unification can merge an
+        /// Air face into the coplanar solid face around it. When that happens, rebuild with the direct
+        /// MakerVolume path. Adopt it only if it represents more Air and yields at least as many cells; otherwise
+        /// keep the sew build and say so. A no-op without Air panels or without SewBeforeBuild.
+        /// </summary>
+        private static List<Shell> EnsureAirRepresented(List<Panel> panels, List<Shell> shells, ref OcctCellComplexResult cellComplexResult, OcctBuildOptions options)
+        {
+            List<Panel> airPanels = panels.Where(x => x.PanelType == PanelType.Air && x.GetFace3D() != null).ToList();
+            if (airPanels.Count == 0 || !options.SewBeforeBuild || shells == null || shells.Count == 0 || cellComplexResult == null)
+            {
+                return shells;
+            }
+
+            double tolerance = System.Math.Max(options.Tolerance, options.FuzzyTolerance);
+            int unrepresented = UnrepresentedAirCount(airPanels, cellComplexResult, tolerance);
+            if (unrepresented == 0)
+            {
+                return shells;
+            }
+
+            OcctBuildOptions directOptions = new OcctBuildOptions(options) { SewBeforeBuild = false };
+            List<Shell> shells_Direct = Geometry.OCCT.Create.CellComplexByPanels(panels, out OcctCellComplexResult directResult, directOptions);
+            int unrepresented_Direct = shells_Direct == null || shells_Direct.Count == 0 ? int.MaxValue : UnrepresentedAirCount(airPanels, directResult, tolerance);
+            if (unrepresented_Direct < unrepresented && shells_Direct.Count >= shells.Count)
+            {
+                directResult.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_AIR_DIRECT_BUILD", string.Format(
+                    "The sew build merged {0} of {1} supplied Air panel(s) into coplanar solid faces; rebuilt with the direct MakerVolume path so they stay separate boundaries ({2} cell(s) instead of {3}).",
+                    unrepresented, airPanels.Count, shells_Direct.Count, shells.Count));
+                cellComplexResult.Dispose();
+                cellComplexResult = directResult;
+                return shells_Direct;
+            }
+
+            directResult?.Dispose();
+            cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_ANALYTICAL_AIR_NOT_REPRESENTED", string.Format(
+                "{0} of {1} supplied Air panel(s) are not separate faces of the built cells, so the spaces either side may be merged or separated by a solid face instead.",
+                unrepresented, airPanels.Count));
+            return shells;
+        }
+
+        /// <summary>
+        /// Air panels not represented by cell faces of their own: coplanar faces whose interior point lies on the
+        /// Air panel and that fit inside it must add up to (almost) its whole area.
+        /// </summary>
+        private static int UnrepresentedAirCount(List<Panel> airPanels, OcctCellComplexResult cellComplexResult, double tolerance)
+        {
+            List<Face3D> cellFaces = new List<Face3D>();
+            HashSet<int> keys = new HashSet<int>();
+            foreach (OcctCell cell in cellComplexResult?.Cells ?? new List<OcctCell>())
+            {
+                foreach (OcctCellFace cellFace in cell?.Faces ?? new List<OcctCellFace>())
+                {
+                    if (cellFace?.Face3D != null && (cellFace.TopologyKey == 0 || keys.Add(cellFace.TopologyKey)))
+                    {
+                        cellFaces.Add(cellFace.Face3D);
+                    }
+                }
+            }
+
+            int result = 0;
+            foreach (Panel airPanel in airPanels)
+            {
+                Face3D airFace3D = airPanel.GetFace3D();
+                Plane airPlane = airFace3D.GetPlane();
+                double airArea = airFace3D.GetArea();
+                double slack = 1e-3 * airArea + tolerance;
+                double represented = 0;
+                foreach (Face3D cellFace3D in cellFaces)
+                {
+                    Plane plane = cellFace3D.GetPlane();
+                    Point3D internalPoint = cellFace3D.GetInternalPoint3D(tolerance);
+                    double area = cellFace3D.GetArea();
+                    if (plane == null || internalPoint == null || area > airArea + slack || !plane.Coplanar(airPlane, tolerance) || airPlane.Distance(internalPoint) > tolerance)
+                    {
+                        continue;
+                    }
+
+                    if (airFace3D.On(internalPoint, tolerance))
+                    {
+                        represented += area;
+                    }
+                }
+
+                if (represented < airArea - slack)
+                {
+                    result++;
+                }
+            }
+
+            return result;
+        }
+
         /// <summary>The bounding-box centre of the faces a cell owns in the complex, a fallback space location
         /// when the native cell centre is absent.</summary>
         private static Point3D OwnedFacesCentre(ResolvedCellComplex resolvedCellComplex, int cellIndex)
@@ -536,7 +644,9 @@ namespace SAM.Analytical.OCCT
             }
 
             Panel matched = null;
-            int candidateCount = 0;
+            Panel matchedAir = null;
+            int candidateCount = 0, airCandidateCount = 0;
+            double minSolidArea = double.MaxValue;
             foreach (Panel panel in panels)
             {
                 Face3D panelFace3D = panel.GetFace3D();
@@ -550,12 +660,37 @@ namespace SAM.Analytical.OCCT
                 {
                     candidateCount++;
                     matched = panel;
+                    if (panel.PanelType == PanelType.Air)
+                    {
+                        airCandidateCount++;
+                        matchedAir = panel;
+                    }
+                    else
+                    {
+                        minSolidArea = System.Math.Min(minSolidArea, panelFace3D.GetArea());
+                    }
                 }
             }
 
             if (candidateCount == 1)
             {
                 return matched;
+            }
+
+            // An Air panel lying inside a larger solid one marks an opening cut from it (e.g. a stair void that
+            // a solver filled). The opening wins, so the void stays a virtual boundary instead of solid floor, but
+            // only when the Air panel is smaller than every solid candidate and the cell face fits inside it. An
+            // Air panel coinciding with a same-size solid one (e.g. a gap fill duplicating a wall) never overrides
+            // the solid.
+            if (airCandidateCount == 1)
+            {
+                double airArea = matchedAir.GetFace3D().GetArea();
+                double faceArea = face3D.GetArea();
+                double slack = 1e-3 * airArea + tolerance;
+                if (airArea < minSolidArea - slack && faceArea <= airArea + slack)
+                {
+                    return matchedAir;
+                }
             }
 
             ambiguous = candidateCount > 1;
@@ -680,7 +815,7 @@ namespace SAM.Analytical.OCCT
             }
         }
 
-        private static AdjacencyCluster DirectAdjacencyCluster(OcctCellComplexResult cellComplexResult, List<Space> seedSpaces, OcctBuildOptions options, double minArea, double toleranceAngle, List<string> names = null)
+        private static AdjacencyCluster DirectAdjacencyCluster(OcctCellComplexResult cellComplexResult, List<Space> seedSpaces, OcctBuildOptions options, double minArea, double toleranceAngle, List<string> names = null, List<Panel> sourcePanels = null)
         {
             if (cellComplexResult?.Cells == null || cellComplexResult.Cells.Count == 0)
             {
@@ -705,7 +840,7 @@ namespace SAM.Analytical.OCCT
             cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_ADD_SPACES", string.Format("Direct rebuild added {0} space object(s) to the adjacency cluster in {1:0.000}s.", spaces.Count, stopwatch.Elapsed.TotalSeconds));
 
             stopwatch.Restart();
-            Dictionary<int, Panel> panels = CreatePanels(cellComplexResult, minArea, toleranceAngle);
+            Dictionary<int, Panel> panels = CreatePanels(cellComplexResult, minArea, toleranceAngle, sourcePanels, System.Math.Max(options.Tolerance, options.FuzzyTolerance), out HashSet<System.Guid> airGuids);
             if (panels == null || panels.Count == 0)
             {
                 return null;
@@ -800,8 +935,20 @@ namespace SAM.Analytical.OCCT
             stopwatch.Restart();
             result = result.UpdateNormals(false, true, false, options.FuzzyTolerance, options.Tolerance);
             result.Normalize(false);
-            result.UpdatePanelTypes(0);
-            result.SetDefaultConstructionByPanelType();
+            if (airGuids.Count == 0)
+            {
+                result.UpdatePanelTypes(0);
+                result.SetDefaultConstructionByPanelType();
+            }
+            else
+            {
+                // Air panels inherited from supplied Air panels are virtual boundaries: never re-type them or give
+                // them a physical construction. Everything else is classified exactly as before.
+                List<System.Guid> physicalGuids = result.GetPanels().Select(x => x.Guid).Where(x => !airGuids.Contains(x)).ToList();
+                result.UpdatePanelTypes(0, physicalGuids);
+                result.SetDefaultConstructionByPanelType(physicalGuids);
+                cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_AIR_PANELS", string.Format("{0} panel(s) took Air identity from supplied Air panels (open boundaries such as stair voids) and were kept as Air.", airGuids.Count));
+            }
             cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_TIMING_DIRECT_FINALIZE", string.Format("Direct rebuild finalized normals, panel types, and constructions in {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
 
             // Space area is deliberately NOT derived here from the native cell geometry: an OCCT-created space
@@ -984,8 +1131,22 @@ namespace SAM.Analytical.OCCT
             return null;
         }
 
-        private static Dictionary<int, Panel> CreatePanels(OcctCellComplexResult cellComplexResult, double minArea, double toleranceAngle)
+        private static Dictionary<int, Panel> CreatePanels(OcctCellComplexResult cellComplexResult, double minArea, double toleranceAngle, List<Panel> sourcePanels, double matchTolerance, out HashSet<System.Guid> airGuids)
         {
+            airGuids = new HashSet<System.Guid>();
+
+            // Only Air identity is inherited here: an Air panel the caller supplied (an opening such as a stair
+            // void) must stay Air rather than be re-typed from its normal. Physical panels keep the existing
+            // default-by-normal behaviour. Skipped entirely when no Air panel was supplied.
+            List<Panel> matchPanels = sourcePanels != null && sourcePanels.Any(x => x?.PanelType == PanelType.Air)
+                ? sourcePanels.Where(x => x != null && x.GetFace3D() != null).ToList()
+                : null;
+            HashSet<System.Guid> claimedGuids = new HashSet<System.Guid>();
+
+            // Physical panels are re-typed and given default constructions below, but they keep the instance
+            // parameters (source traceability, physical thickness) of the supplied panels they are pieces of.
+            SourceParameterCarrier carrier = new SourceParameterCarrier(sourcePanels, matchTolerance);
+
             Dictionary<int, Panel> result = new Dictionary<int, Panel>();
             foreach (OcctCell cell in cellComplexResult.Cells)
             {
@@ -1008,6 +1169,20 @@ namespace SAM.Analytical.OCCT
                         continue;
                     }
 
+                    Panel matchedAir = matchPanels == null ? null : MatchPanelByGeometry(cellFace.Face3D, matchPanels, matchTolerance, out _);
+                    if (matchedAir != null && matchedAir.PanelType == PanelType.Air)
+                    {
+                        // Same Guid as the supplied Air panel for its first piece; later pieces get fresh Guids.
+                        System.Guid guid = claimedGuids.Add(matchedAir.Guid) ? matchedAir.Guid : System.Guid.NewGuid();
+                        Panel airPanel = global::SAM.Analytical.Create.Panel(guid, matchedAir, cellFace.Face3D, null, false);
+                        if (airPanel != null)
+                        {
+                            result[cellFace.TopologyKey] = airPanel;
+                            airGuids.Add(airPanel.Guid);
+                            continue;
+                        }
+                    }
+
                     PanelType panelType = Query.PanelType(cellFace.Face3D.GetPlane()?.Normal, toleranceAngle);
                     if (panelType == PanelType.Undefined)
                     {
@@ -1018,11 +1193,13 @@ namespace SAM.Analytical.OCCT
                     Panel panel = global::SAM.Analytical.Create.Panel(construction, panelType, cellFace.Face3D);
                     if (panel != null)
                     {
+                        carrier.Carry(panel, cellFace.Face3D);
                         result[cellFace.TopologyKey] = panel;
                     }
                 }
             }
 
+            carrier.AddDiagnostics(cellComplexResult);
             return result;
         }
     }
