@@ -55,6 +55,20 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void ValidateSewCoverage_DefaultAndCopy_IsOffAndCopied()
+        {
+            // Arrange
+            OcctBuildOptions source = new OcctBuildOptions { ValidateSewCoverage = true };
+
+            // Act
+            OcctBuildOptions copy = new OcctBuildOptions(source);
+
+            // Assert - opt-in only, so the solver's sew builds are unchanged unless a caller asks.
+            Assert.False(new OcctBuildOptions().ValidateSewCoverage);
+            Assert.True(copy.ValidateSewCoverage);
+        }
+
+        [Fact]
         public void CopyConstructor_WithSource_CopiesSewOptions()
         {
             // Arrange

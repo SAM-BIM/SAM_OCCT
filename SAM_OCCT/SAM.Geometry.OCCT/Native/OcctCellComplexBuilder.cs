@@ -311,33 +311,25 @@ namespace SAM.Geometry.OCCT.Native
             // issue #37: optionally heal the face soup into a watertight shell
             // BEFORE MakerVolume, so triangulated / near-touching faces close
             // first instead of relying on MakerVolume's fuzzy-tolerance guesswork.
-            if (options.SewBeforeBuild
-                && CanAttemptSew(face3DList, options, result)
-                && TrySewThenMakeVolume(face3DList, options, result))
+            if (options.SewBeforeBuild && CanAttemptSew(face3DList, options, result))
             {
-                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", "Built the cell complex via native sew-and-heal before MakerVolume (SewBeforeBuild).");
-                return true;
+                // Build the sew candidate in isolation so its coverage can be checked before it is adopted:
+                // manifold sewing can drop T-junction partitions without any error (an under-split).
+                OcctCellComplexResult sewCandidate = new OcctCellComplexResult();
+                if (TrySewThenMakeVolume(face3DList, options, sewCandidate))
+                {
+                    AdoptSewCandidate(face3DList, input, options, sewCandidate, result);
+                    return true;
+                }
+
+                result.NativeAvailable = sewCandidate.NativeAvailable;
+                result.NativeVersion = sewCandidate.NativeVersion;
+                sewCandidate.Dispose();
             }
 
-            IntPtr resultHandle = IntPtr.Zero;
             try
             {
-                int status = OcctNativeMethods.sam_occt_build_cell_complex(
-                    input.Coordinates,
-                    input.Coordinates.Length / 3,
-                    input.LoopPointCounts,
-                    input.LoopPointCounts.Length,
-                    input.FaceLoopCounts,
-                    input.FaceCount,
-                    options.Tolerance,
-                    options.FuzzyTolerance,
-                    options.RunParallel ? 1 : 0,
-                    options.AvoidInternalShapes ? 1 : 0,
-                    out resultHandle);
-
-                result.NativeAvailable = true;
-                result.NativeVersion = OcctNativeMethods.AbiVersionString;
-
+                int status = TryDirectBuild(input, options, result, out bool decoded);
                 if (status != 0)
                 {
                     // issue #37: on a hard close failure (MakerVolume reported
@@ -362,17 +354,6 @@ namespace SAM.Geometry.OCCT.Native
                     return false;
                 }
 
-                bool decoded = DecodeResult(resultHandle, result);
-
-                // ABI v4 (observational): snapshot the MakerVolume BRepTools_History
-                // while the handle is alive, so the solver can compose an exact
-                // source->output map instead of the geometric NearestSourceIndex
-                // heuristic. Null on a pre-v4 native or when history is unavailable.
-                if (decoded)
-                {
-                    result.History = OcctHistory.Capture(resultHandle);
-                }
-
                 return decoded;
             }
             catch (DllNotFoundException exception)
@@ -387,6 +368,52 @@ namespace SAM.Geometry.OCCT.Native
                 result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_NATIVE_ENTRYPOINT_MISSING", exception.Message);
                 return false;
             }
+        }
+
+        /// <summary>
+        /// The plain native MakerVolume build: returns the native status and, when it is 0, decodes the cells
+        /// (and the ABI v4 history) into <paramref name="result"/>. Native-missing exceptions propagate.
+        /// </summary>
+        private static int TryDirectBuild(OcctNativeInput input, OcctBuildOptions options, OcctCellComplexResult result, out bool decoded)
+        {
+            decoded = false;
+            IntPtr resultHandle = IntPtr.Zero;
+            try
+            {
+                int status = OcctNativeMethods.sam_occt_build_cell_complex(
+                    input.Coordinates,
+                    input.Coordinates.Length / 3,
+                    input.LoopPointCounts,
+                    input.LoopPointCounts.Length,
+                    input.FaceLoopCounts,
+                    input.FaceCount,
+                    options.Tolerance,
+                    options.FuzzyTolerance,
+                    options.RunParallel ? 1 : 0,
+                    options.AvoidInternalShapes ? 1 : 0,
+                    out resultHandle);
+
+                result.NativeAvailable = true;
+                result.NativeVersion = OcctNativeMethods.AbiVersionString;
+
+                if (status != 0)
+                {
+                    return status;
+                }
+
+                decoded = DecodeResult(resultHandle, result);
+
+                // ABI v4 (observational): snapshot the MakerVolume BRepTools_History
+                // while the handle is alive, so the solver can compose an exact
+                // source->output map instead of the geometric NearestSourceIndex
+                // heuristic. Null on a pre-v4 native or when history is unavailable.
+                if (decoded)
+                {
+                    result.History = OcctHistory.Capture(resultHandle);
+                }
+
+                return status;
+            }
             finally
             {
                 if (resultHandle != IntPtr.Zero)
@@ -399,6 +426,115 @@ namespace SAM.Geometry.OCCT.Native
                     {
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Adopts a successful sew-then-MakerVolume candidate, unless its input-face coverage shows faces cutting
+        /// through a cell (an under-split) or unused entirely. In that case a direct MakerVolume build is tried in
+        /// isolation and adopted only when <see cref="OcctUnderSplitGuard"/> proves it a valid, strictly better
+        /// refinement. Every outcome other than a clean sew build leaves an explicit Warning.
+        /// </summary>
+        private static void AdoptSewCandidate(List<Face3D> face3Ds, OcctNativeInput input, OcctBuildOptions options, OcctCellComplexResult sewCandidate, OcctCellComplexResult result)
+        {
+            const string sewSuccess = "Built the cell complex via native sew-and-heal before MakerVolume (SewBeforeBuild).";
+            double minArea = global::SAM.Core.Tolerance.MacroDistance;
+
+            if (!options.ValidateSewCoverage)
+            {
+                result.AdoptFrom(sewCandidate);
+                sewCandidate.Dispose();
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
+                return;
+            }
+
+            FaceCoverageReport sewCoverage = null;
+            try
+            {
+                sewCoverage = Query.FaceCoverage(face3Ds, sewCandidate.Cells.Select(x => x?.Shell), minArea, options.Tolerance, options.FuzzyTolerance);
+            }
+            catch (Exception exception)
+            {
+                result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_COVERAGE_UNAVAILABLE", string.Format("Input-face coverage of the sew build could not be measured ({0}); the sew build was kept unchecked.", exception.Message));
+            }
+
+            if (!OcctUnderSplitGuard.IsSuspect(sewCoverage))
+            {
+                result.AdoptFrom(sewCandidate);
+                sewCandidate.Dispose();
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
+                return;
+            }
+
+            if (sewCoverage.InteriorArea > 0)
+            {
+                List<FaceCoverageEntry> suspects = sewCoverage.Entries.Where(x => x.InteriorArea > 0).OrderByDescending(x => x.InteriorArea).ToList();
+                result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_SEW_UNDER_SPLIT_SUSPECTED", string.Format(
+                    "The sew build left {0} input face(s) ({1:0.###} area) cutting through a cell instead of bounding it - a likely under-split (merged spaces). Faces: {2}{3}. Coverage: {4}.",
+                    suspects.Count, sewCoverage.InteriorArea, string.Join("; ", suspects.Take(10).Select(x => x.ToString())), suspects.Count > 10 ? "; ..." : string.Empty, sewCoverage.Summary()));
+            }
+
+            // RetainTopology needs the sew path's live handle (the direct build frees its handle), so the
+            // alternative cannot be adopted there: keep the sew build, flagged.
+            if (options.RetainTopology)
+            {
+                result.AdoptFrom(sewCandidate);
+                sewCandidate.Dispose();
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
+                if (sewCoverage.InteriorArea > 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_BUILD_UNRELIABLE", "The sew build is suspected of under-splitting, but RetainTopology requires the sew path, so no direct alternative was tried. Cell count may be too low.");
+                }
+
+                return;
+            }
+
+            OcctCellComplexResult directCandidate = new OcctCellComplexResult();
+            try
+            {
+                int status = TryDirectBuild(input, options, directCandidate, out bool decoded);
+                OcctUnderSplitGuard.Evaluation evaluation = status == 0 && decoded
+                    ? OcctUnderSplitGuard.Evaluate(face3Ds, sewCandidate.Cells, directCandidate.Cells, options, minArea, sewCoverage)
+                    : new OcctUnderSplitGuard.Evaluation(false, new List<string> { string.Format("direct build returned status {0} ({1})", status, OcctOpenShellAnalysis.DescribeBuildStatus(status)) }, sewCoverage, null);
+
+                if (evaluation.Adopt)
+                {
+                    result.AdoptFrom(directCandidate);
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_BUILD_FALLBACK_DIRECT", string.Format(
+                        "Adopted the direct MakerVolume build instead of the sew build: {0} cell(s) instead of {1}, and it passed the closure, overlap, refinement and coverage checks. Sew coverage: {2}. Direct coverage: {3}.",
+                        directCandidate.Cells.Count, sewCandidate.Cells.Count, sewCoverage.Summary(), evaluation.DirectCoverage?.Summary()));
+                    return;
+                }
+
+                result.AdoptFrom(sewCandidate);
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
+                if (sewCoverage.InteriorArea > 0)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_BUILD_UNRELIABLE", string.Format(
+                        "The sew build is suspected of under-splitting and the direct alternative was rejected ({0}). The sew build was kept; check the space count against the expected rooms.",
+                        string.Join("; ", evaluation.Failures.Take(8))));
+                }
+                else
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_UNUSED_FACES", string.Format(
+                        "{0:0.###} area of input faces bounds no cell and lies outside every cell; a direct build did not use them either ({1}). Coverage: {2}.",
+                        sewCoverage.UnusedArea, string.Join("; ", evaluation.Failures.Take(4)), sewCoverage.Summary()));
+                }
+            }
+            catch (DllNotFoundException)
+            {
+                result.AdoptFrom(sewCandidate);
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
+            }
+            catch (EntryPointNotFoundException)
+            {
+                result.AdoptFrom(sewCandidate);
+                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
+            }
+            finally
+            {
+                sewCandidate.Dispose();
+                directCandidate.Dispose();
             }
         }
 
