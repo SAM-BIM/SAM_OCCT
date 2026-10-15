@@ -20,7 +20,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("c104f272-9b10-454f-9825-16e2d41adfa6");
 
-        public override string LatestComponentVersion => "0.2.0";
+        public override string LatestComponentVersion => "0.2.1";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ClusterCreate;
 
@@ -66,6 +66,10 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Boolean mergeCoplanarBeforeBuild = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "mergeCoplanarBeforeBuild_", NickName = "mergeCoplanarBeforeBuild_", Description = "Run a managed coplanar pre-merge on faces before the native MakerVolume build. Mirrors Solve3D's ResolveStage pre-merge. Recommended for the controlled workflow chain.", Access = GH_ParamAccess.item, Optional = true };
                 mergeCoplanarBeforeBuild.SetPersistentData(false);
                 result.Add(new GH_SAMParam(mergeCoplanarBeforeBuild, ParamVisibility.Voluntary));
+
+                global::Grasshopper.Kernel.Parameters.Param_Integer diagnosticDetail = new global::Grasshopper.Kernel.Parameters.Param_Integer() { Name = "diagnosticDetail_", NickName = "diagnosticDetail_", Description = "How much Info the Diagnostics output gives: 0 = Summary (default), 1 = Standard, 2 = Detailed. Summary is the outcome lines, Standard adds timing and notes, Detailed adds per-panel and metadata lines. Warnings and Errors are always given in full, and the AdjacencyCluster does not depend on this setting. Any other value is reported and Summary is used. Hidden by default: zoom in on the component and click + to show it.", Access = GH_ParamAccess.item, Optional = true };
+                diagnosticDetail.SetPersistentData(0);
+                result.Add(new GH_SAMParam(diagnosticDetail, ParamVisibility.Voluntary));
 
                 return result.ToArray();
             }
@@ -146,7 +150,17 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref resolvedCellComplex);
             }
 
-            List<string> diagnostics = new List<string>();
+            // Detail level only filters Info lines of the Diagnostics output; the build below never reads it.
+            DiagnosticDetail diagnosticDetail = global::SAM.Core.Grasshopper.OCCT.OcctDiagnosticReporter.ReadDetail(this, dataAccess, out DiagnosticRecord invalidDetail);
+
+            // Each line is created where it is produced, so its severity is the producer's own (never read back from
+            // the text). Direct-handoff lines from the List<string> overload carry no severity: they are Info.
+            List<DiagnosticRecord> diagnostics = new List<DiagnosticRecord>();
+            if (invalidDetail != null)
+            {
+                diagnostics.Add(invalidDetail);
+            }
+
             Stopwatch stopwatch_Total = Stopwatch.StartNew();
             Stopwatch stopwatch = Stopwatch.StartNew();
 
@@ -165,7 +179,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
 
             if (directConsumeAttempted && spacesSupplied)
             {
-                diagnostics.Add("SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD: supplied cellComplex_ was not consumed directly (spaces_ was also supplied, and the direct handoff has no way to match panels to existing spaces); falling back to the native rebuild.");
+                diagnostics.Add(Line("SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD: supplied cellComplex_ was not consumed directly (spaces_ was also supplied, and the direct handoff has no way to match panels to existing spaces); falling back to the native rebuild.", DiagnosticSeverity.Warning));
             }
             else
             {
@@ -173,47 +187,50 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 if (rosterOk)
                 {
                     adjacencyCluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(panels, resolvedCellComplex, out List<string> complexDiagnostics, tolerance: tolerance, fuzzyTolerance: fuzzyTolerance);
-                    diagnostics.AddRange(complexDiagnostics);
+                    diagnostics.AddRange(complexDiagnostics.Select(x => Line(x, DiagnosticSeverity.Info)));
                     directConsumed = adjacencyCluster != null;
 
                     if (!directConsumed)
                     {
-                        diagnostics.Add("SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD: direct handoff was eligible but produced no cluster (see SAM_OCCT_ANALYTICAL_COMPLEX_* diagnostics above); falling back to the native rebuild.");
+                        diagnostics.Add(Line("SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD: direct handoff was eligible but produced no cluster (see SAM_OCCT_ANALYTICAL_COMPLEX_* diagnostics above); falling back to the native rebuild.", DiagnosticSeverity.Warning));
                     }
                 }
                 else if (directConsumeAttempted)
                 {
-                    diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD: supplied cellComplex_ was not consumed directly ({0}); falling back to the native rebuild.", driftReason));
+                    diagnostics.Add(Line(string.Format("SAM_OCCT_ANALYTICAL_COMPLEX_REBUILD: supplied cellComplex_ was not consumed directly ({0}); falling back to the native rebuild.", driftReason), DiagnosticSeverity.Warning));
                 }
             }
 
             if (!directConsumed)
             {
-                diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_PANEL_METADATA: Supplied {0} panel(s) and {1} existing space(s). Panel OCCT path will match supplied spaces after OCCT cell creation and otherwise use auto-generated names.", panels?.Count ?? 0, spaces?.Count ?? 0));
+                diagnostics.Add(Line(string.Format("SAM_OCCT_ANALYTICAL_PANEL_METADATA: Supplied {0} panel(s) and {1} existing space(s). Panel OCCT path will match supplied spaces after OCCT cell creation and otherwise use auto-generated names.", panels?.Count ?? 0, spaces?.Count ?? 0), DiagnosticSeverity.Info));
                 Log log = new Log();
                 // Bugfix (P1): match the solver's own validated build recipe instead of OcctBuildOptions'
                 // defaults (AvoidInternalShapes=true, SewBeforeBuild=false, SewingTolerance=0.0). Production
                 // previously diverged from every test/solver call site, which built with these solver-matched
                 // options - see docs/CELLCOMPLEX_FIRST_HANDOVER.md §A "Diagnosed seam".
                 adjacencyCluster = global::SAM.Analytical.OCCT.Create.AdjacencyCluster(spaces, panels, out OcctCellComplexResult result, log, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01, MergeCoplanarBeforeBuild = mergeCoplanarBeforeBuild, ValidateSewCoverage = true });
-                diagnostics.Add(string.Format("SAM_OCCT_TIMING_OCCT_AND_ADJACENCY: {0:0.000}s.", stopwatch.Elapsed.TotalSeconds));
+                diagnostics.Add(Line(string.Format("SAM_OCCT_TIMING_OCCT_AND_ADJACENCY: {0:0.000}s.", stopwatch.Elapsed.TotalSeconds), DiagnosticSeverity.Info));
 
                 if (result?.Diagnostics != null)
                 {
-                    diagnostics.AddRange(result.Diagnostics.Select(x => x.ToString()));
+                    diagnostics.AddRange(result.Diagnostics.Select(x => x.ToDiagnosticRecord()));
                 }
 
                 if (adjacencyCluster == null)
                 {
-                    diagnostics.Add("SAM_OCCT_ANALYTICAL_PANEL_REBUILD_FAILED: OCCT could not create a valid adjacency cluster from the supplied panels.");
+                    diagnostics.Add(Line("SAM_OCCT_ANALYTICAL_PANEL_REBUILD_FAILED: OCCT could not create a valid adjacency cluster from the supplied panels.", DiagnosticSeverity.Error));
                 }
                 else
                 {
-                    diagnostics.Add(string.Format("SAM_OCCT_ANALYTICAL_PANEL_SUCCESS: Created adjacency cluster with {0} space(s) and {1} panel(s).", adjacencyCluster.GetSpaces()?.Count ?? 0, adjacencyCluster.GetPanels()?.Count ?? 0));
+                    diagnostics.Add(Line(string.Format("SAM_OCCT_ANALYTICAL_PANEL_SUCCESS: Created adjacency cluster with {0} space(s) and {1} panel(s).", adjacencyCluster.GetSpaces()?.Count ?? 0, adjacencyCluster.GetPanels()?.Count ?? 0), DiagnosticSeverity.Info));
                 }
             }
 
-            diagnostics.Add(string.Format("SAM_OCCT_TIMING_TOTAL: {0:0.000}s.", stopwatch_Total.Elapsed.TotalSeconds));
+            diagnostics.Add(Line(string.Format("SAM_OCCT_TIMING_TOTAL: {0:0.000}s.", stopwatch_Total.Elapsed.TotalSeconds), DiagnosticSeverity.Info));
+
+            // Info is log only; Warnings and Errors become the matching runtime messages (grouped), at every detail level.
+            List<string> diagnosticLines = global::SAM.Core.Grasshopper.OCCT.OcctDiagnosticReporter.Report(this, diagnostics, diagnosticDetail);
 
             index = Params.IndexOfOutputParam("AdjacencyCluster");
             if (index != -1)
@@ -224,36 +241,18 @@ namespace SAM.Analytical.Grasshopper.OCCT
             index = Params.IndexOfOutputParam("Diagnostics");
             if (index != -1)
             {
-                dataAccess.SetDataList(index, diagnostics);
+                dataAccess.SetDataList(index, diagnosticLines);
             }
 
             if (index_Successful != -1)
             {
                 dataAccess.SetData(index_Successful, adjacencyCluster != null);
             }
-
-            foreach (string diagnostic in diagnostics)
-            {
-                AddRuntimeMessage(adjacencyCluster == null || IsWarning(diagnostic) ? GH_RuntimeMessageLevel.Warning : GH_RuntimeMessageLevel.Remark, diagnostic);
-            }
         }
 
-        // Diagnostics that must stay visible even when a cluster was produced: a cluster built from an
-        // under-split (merged rooms) is not a success the user can trust without looking.
-        private static readonly string[] WarningCodes = new[]
+        private static DiagnosticRecord Line(string text, DiagnosticSeverity diagnosticSeverity)
         {
-            "SAM_OCCT_SEW_UNDER_SPLIT_SUSPECTED",
-            "SAM_OCCT_BUILD_FALLBACK_DIRECT",
-            "SAM_OCCT_BUILD_UNRELIABLE",
-            "SAM_OCCT_COVERAGE_UNAVAILABLE",
-            "SAM_OCCT_ANALYTICAL_AIR_DIRECT_BUILD",
-            "SAM_OCCT_ANALYTICAL_AIR_NOT_REPRESENTED",
-            "SAM_OCCT_ANALYTICAL_SOURCE_PARAMETER_CONFLICT",
-        };
-
-        private static bool IsWarning(string diagnostic)
-        {
-            return diagnostic != null && WarningCodes.Any(x => diagnostic.Contains(x));
+            return global::SAM.Core.OCCT.Query.CreateDiagnosticRecord(text, diagnosticSeverity);
         }
     }
 }

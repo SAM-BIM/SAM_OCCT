@@ -127,10 +127,14 @@ namespace SAM.Analytical.OCCT.Solver
             orphanedApertures = new List<OrphanedAperture>();
             report = null;
 
+            // Structured twin of `diagnostics`, one record per line, built where each line is produced so the
+            // severity is the producer's own (the text is never parsed). Additive: `diagnostics` is unchanged.
+            List<DiagnosticRecord> diagnosticRecords = new List<DiagnosticRecord>();
+
             if (!PrepareInput(panels, minBucketSize, thicknessFactor, out List<Face3D> face3Ds, out List<double> bucketSizes, out List<Panel> sources))
             {
-                diagnostics.Add("SAM_OCCT_SOLVE3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.");
-                report = new Solve3DReport(false, null, null, null, null, sources, null, null, null, null, null, false, 0);
+                AddDiagnosticLine(diagnostics, diagnosticRecords, "SAM_OCCT_SOLVE3D_INPUT_EMPTY: No valid non-air panel geometry was supplied.", DiagnosticSeverity.Error);
+                report = new Solve3DReport(false, null, null, null, null, sources, null, null, null, null, null, false, 0) { DiagnosticRecords = diagnosticRecords };
                 return null;
             }
 
@@ -154,8 +158,8 @@ namespace SAM.Analytical.OCCT.Solver
             List<Face3D> resolved = solver.ResolvedFace3Ds;
             if (resolved == null || resolved.Count == 0)
             {
-                diagnostics.Add("SAM_OCCT_SOLVE3D_NO_RESULT: The solver produced no resolved faces.");
-                report = BuildReport(solver, sources, options, classifyCells, minCellVolume);
+                AddDiagnosticLine(diagnostics, diagnosticRecords, "SAM_OCCT_SOLVE3D_NO_RESULT: The solver produced no resolved faces.", DiagnosticSeverity.Error);
+                report = BuildReport(solver, sources, options, classifyCells, minCellVolume, diagnosticRecords: diagnosticRecords);
                 return new List<Panel>();
             }
 
@@ -170,11 +174,11 @@ namespace SAM.Analytical.OCCT.Solver
 
             foreach (OrphanedAperture orphan in orphanedApertures)
             {
-                diagnostics.Add(string.Format(
+                AddDiagnosticLine(diagnostics, diagnosticRecords, string.Format(
                     "SAM_OCCT_SOLVE3D_APERTURE_ORPHANED: Aperture {0} from source panel {1} did not land within {2} m of any resolved panel; returned for manual re-hosting.",
                     orphan.Aperture?.Guid,
                     orphan.SourceGuid,
-                    maxApertureDistance));
+                    maxApertureDistance), DiagnosticSeverity.Warning, DiagnosticDetail.Summary);
             }
 
             // Step-2 gap-fill faces (residual naked-boundary loops) become air panels: each is emitted as a
@@ -201,37 +205,46 @@ namespace SAM.Analytical.OCCT.Solver
                 }
             }
 
-            diagnostics.Add(string.Format(
-                "SAM_OCCT_SOLVE3D_AIR: Created {0} air panel(s) from closed gaps.", airCount));
+            AddDiagnosticLine(diagnostics, diagnosticRecords, string.Format(
+                "SAM_OCCT_SOLVE3D_AIR: Created {0} air panel(s) from closed gaps.", airCount), DiagnosticSeverity.Info);
 
-            diagnostics.Add(string.Format(
+            AddDiagnosticLine(diagnostics, diagnosticRecords, string.Format(
                 "SAM_OCCT_SOLVE3D_RESULT: Solved {0} panel(s) into {1} resolved panel(s); nativeResolved={2}; {3} cell(s); {4} naked edge(s).",
                 face3Ds.Count,
                 result.Count,
                 solver.NativeResolved,
                 solver.ResolvedCellCount,
-                nakedPoint3Ds.Count));
+                nakedPoint3Ds.Count), DiagnosticSeverity.Info);
 
             // Surface the structured solver diagnostics (gate rejections, adopted level, ...) alongside the
             // existing SAM_OCCT_* summary lines, so every rejection's reason is visible without changing this
             // method's List<string> diagnostics contract.
-            diagnostics.AddRange(SolverReportFormat.FormatDiagnostics(solver.Diagnostics, "SAM_OCCT_SOLVE3D"));
+            List<DiagnosticRecord> solverDiagnosticRecords = SolverReportFormat.FormatDiagnosticRecords(solver.Diagnostics, "SAM_OCCT_SOLVE3D");
+            diagnostics.AddRange(solverDiagnosticRecords.ConvertAll(x => x.Text));
+            diagnosticRecords.AddRange(solverDiagnosticRecords);
 
             // E3 observability: one SAM_OCCT_EXTEND3D_PANEL line per applied managed extend/fill op (empty on a
             // raw-adopted solve), plus any SAM_OCCT_EXTEND3D_HOLE_DROPPED a footprint trim recorded (E1/R6).
-            diagnostics.AddRange(SolverReportFormat.FormatExtendRecords(solver.ExtendRecords, sources));
-            diagnostics.AddRange(SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels));
+            foreach (string line in SolverReportFormat.FormatExtendRecords(solver.ExtendRecords, sources))
+            {
+                AddDiagnosticLine(diagnostics, diagnosticRecords, line, DiagnosticSeverity.Info);
+            }
 
-            AppendInputEffectDiagnostics(diagnostics, sources, inputAlreadyClean: false, "SAM_OCCT_SOLVE3D");
+            foreach (string line in SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels))
+            {
+                AddDiagnosticLine(diagnostics, diagnosticRecords, line, DiagnosticSeverity.Info);
+            }
 
-            report = BuildReport(solver, sources, options, classifyCells, minCellVolume);
+            AppendInputEffectDiagnostics(diagnostics, sources, inputAlreadyClean: false, "SAM_OCCT_SOLVE3D", diagnosticRecords);
+
+            report = BuildReport(solver, sources, options, classifyCells, minCellVolume, diagnosticRecords: diagnosticRecords);
 
             return result;
         }
 
         /// <summary>Assembles a <see cref="Solve3DReport"/> from a solver that has already run <c>Execute</c>,
         /// optionally running the additive Phase 7b cell classification.</summary>
-        private static Solve3DReport BuildReport(Panel3DSnapSolver solver, List<Panel> sources, OcctBuildOptions options, bool classifyCells, double minCellVolume, List<string> cleanReportLines = null)
+        private static Solve3DReport BuildReport(Panel3DSnapSolver solver, List<Panel> sources, OcctBuildOptions options, bool classifyCells, double minCellVolume, List<string> cleanReportLines = null, List<DiagnosticRecord> diagnosticRecords = null)
         {
             IReadOnlyList<CellRole> cellRoles = null;
             if (classifyCells && solver.Cells != null && solver.Cells.Count != 0)
@@ -258,7 +271,24 @@ namespace SAM.Analytical.OCCT.Solver
                 extendPanelDiagnostics: SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels),
                 levelGroups: solver.LevelGroups,
                 cleanRecords: solver.CleanRecords,
-                cleanReportLines: cleanReportLines);
+                cleanReportLines: cleanReportLines) { DiagnosticRecords = diagnosticRecords ?? new List<DiagnosticRecord>() };
+        }
+
+        /// <summary>
+        /// Adds one coded diagnostic line to the legacy list and its structured twin. The severity is supplied by the
+        /// caller that produces the line; the code is the leading <c>CODE:</c> token and is used only to look up the
+        /// Info detail level, never to decide the severity.
+        /// </summary>
+        private static void AddDiagnosticLine(List<string> diagnostics, List<DiagnosticRecord> diagnosticRecords, string text, DiagnosticSeverity severity, DiagnosticDetail? detail = null)
+        {
+            diagnostics.Add(text);
+
+            if (diagnosticRecords == null)
+            {
+                return;
+            }
+
+            diagnosticRecords.Add(SAM.Core.OCCT.Query.CreateDiagnosticRecord(text, severity, detail));
         }
 
         /// <summary>
@@ -996,7 +1026,7 @@ namespace SAM.Analytical.OCCT.Solver
         /// </list>
         /// Emits nothing on the plain path (no stamps, <c>inputAlreadyClean=false</c>) where every input is live.
         /// </summary>
-        private static void AppendInputEffectDiagnostics(List<string> diagnostics, List<Panel> sources, bool inputAlreadyClean, string prefix)
+        private static void AppendInputEffectDiagnostics(List<string> diagnostics, List<Panel> sources, bool inputAlreadyClean, string prefix, List<DiagnosticRecord> diagnosticRecords = null)
         {
             if (diagnostics == null)
             {
@@ -1005,7 +1035,7 @@ namespace SAM.Analytical.OCCT.Solver
 
             if (inputAlreadyClean)
             {
-                diagnostics.Add(prefix + "_INPUT_INERT: inputAlreadyClean=true -> Stage A (clean bucket) skipped; minBucketSize_, thicknessFactor_, alignColinearOffset_, normalizeCapOffset_, doubleWallGap_ had NO geometric effect this run, and bucketBetweenLevels_ affected LevelGroups reporting only (caps were normalized upstream by Clean3D). Stamped BucketSize ranges (per-panel consolidation) are also inert on this path. Only fillMargin_ and directionalCapGrow_ change the fill/extend geometry on the inputAlreadyClean path.");
+                AddDiagnosticLine(diagnostics, diagnosticRecords, prefix + "_INPUT_INERT: inputAlreadyClean=true -> Stage A (clean bucket) skipped; minBucketSize_, thicknessFactor_, alignColinearOffset_, normalizeCapOffset_, doubleWallGap_ had NO geometric effect this run, and bucketBetweenLevels_ affected LevelGroups reporting only (caps were normalized upstream by Clean3D). Stamped BucketSize ranges (per-panel consolidation) are also inert on this path. Only fillMargin_ and directionalCapGrow_ change the fill/extend geometry on the inputAlreadyClean path.", DiagnosticSeverity.Info);
                 return;
             }
 
@@ -1021,9 +1051,9 @@ namespace SAM.Analytical.OCCT.Solver
 
             if (stampedBuckets > 0)
             {
-                diagnostics.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                AddDiagnosticLine(diagnostics, diagnosticRecords, string.Format(System.Globalization.CultureInfo.InvariantCulture,
                     prefix + "_INPUT_OVERRIDDEN: {0} of {1} panel(s) carry a SolverParameter.BucketSize stamp -> minBucketSize_/thicknessFactor_ are overridden for those panel(s) (the per-panel stamp wins; tune it via SAM_Solver SolverProperties). The stamp also acts as that panel's consolidation range in double-wall merges (one side suffices; walls AND floors/roofs). They still move the {2} unstamped panel(s).",
-                    stampedBuckets, total, total - stampedBuckets));
+                    stampedBuckets, total, total - stampedBuckets), DiagnosticSeverity.Info);
             }
         }
 
