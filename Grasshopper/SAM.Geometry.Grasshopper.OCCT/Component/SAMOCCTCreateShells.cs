@@ -18,7 +18,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("89f9c336-e4dc-4908-bb87-b7b10ee84245");
 
-        public override string LatestComponentVersion => "0.3.0";
+        public override string LatestComponentVersion => "0.3.1";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellPluralCreate;
 
@@ -147,7 +147,16 @@ namespace SAM.Geometry.Grasshopper.OCCT
             }
 
             List<Shell> shells = Geometry.OCCT.Create.Shells(face3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, SewBeforeBuild = sewBeforeBuild, SewingTolerance = sewingTolerance, GlueMode = occtGlueMode });
-            List<string> diagnostics = result?.Diagnostics?.Select(x => x.ToString()).ToList();
+
+            // Structured severity: Info is log only, Warning/Error raise the matching runtime message. The
+            // Diagnostics output keeps every line (Detailed), so its content is unchanged.
+            List<DiagnosticRecord> diagnosticRecords = result?.Diagnostics?.Select(x => x.ToDiagnosticRecord()).ToList();
+            List<string> diagnostics = diagnosticRecords == null ? null : global::SAM.Core.Grasshopper.OCCT.OcctDiagnosticReporter.Report(this, diagnosticRecords, DiagnosticDetail.Detailed);
+
+            if (result == null || (!result.Success && !diagnosticRecords.Any(x => x?.Diagnostic?.Severity == DiagnosticSeverity.Error)))
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "SAMOCCT.CreateShells did not produce shells and reported no error; see Diagnostics.");
+            }
 
             index = Params.IndexOfOutputParam("Shells");
             if (index != -1)
@@ -164,14 +173,6 @@ namespace SAM.Geometry.Grasshopper.OCCT
             if (index_Successful != -1)
             {
                 dataAccess.SetData(index_Successful, result != null && result.Success);
-            }
-
-            if (diagnostics != null)
-            {
-                foreach (string diagnostic in diagnostics)
-                {
-                    AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, diagnostic);
-                }
             }
         }
     }

@@ -7,6 +7,7 @@ using SAM.Analytical.OCCT.Solver;
 using SAM.Analytical.Solver;
 using SAM.Core;
 using SAM.Core.Grasshopper;
+using SAM.Core.OCCT;
 using SAM.Geometry.Grasshopper;
 using SAM.Geometry.OCCT;
 using SAM.Geometry.Spatial;
@@ -25,7 +26,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("3d6b9e02-4a17-4c8d-b5e3-1f9a2c7d4e8b");
 
-        public override string LatestComponentVersion => "0.7.0";
+        public override string LatestComponentVersion => "0.7.1";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ClusterRun;
 
@@ -91,6 +92,12 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 global::Grasshopper.Kernel.Parameters.Param_Boolean run = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "_run", NickName = "_run", Description = "Run", Access = GH_ParamAccess.item };
                 run.SetPersistentData(false);
                 result.Add(new GH_SAMParam(run, ParamVisibility.Binding));
+
+                // Appended last and hidden, like the other optional inputs: an older saved definition has no such
+                // input and reads the Summary default.
+                global::Grasshopper.Kernel.Parameters.Param_Integer diagnosticDetail = new global::Grasshopper.Kernel.Parameters.Param_Integer() { Name = "diagnosticDetail_", NickName = "diagnosticDetail_", Description = "How much Info the Diagnostics output gives: 0 = Summary (default), 1 = Standard, 2 = Detailed. Summary is the outcome lines, Standard adds level and extend notes, Detailed adds the per-panel and naked-geometry lines. Warnings and Errors are always given in full, and the solved Panels do not depend on this setting. Any other value is reported and Summary is used. Hidden by default: zoom in on the component and click + to show it.", Access = GH_ParamAccess.item, Optional = true };
+                diagnosticDetail.SetPersistentData(0);
+                result.Add(new GH_SAMParam(diagnosticDetail, ParamVisibility.Voluntary));
 
                 return result.ToArray();
             }
@@ -241,6 +248,8 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.GetData(index, ref doubleWallGap);
             }
 
+            DiagnosticDetail diagnosticDetail = global::SAM.Core.Grasshopper.OCCT.OcctDiagnosticReporter.ReadDetail(this, dataAccess, out DiagnosticRecord invalidDetail);
+
             // weights/maxExtends null => read SolverParameter.Weight / SolverParameter.MaxExtend off each
             // panel (the same parameters SAMAnalytical.Visualize shows), so they can be tuned per panel.
             List<Panel> resolvedPanels = panels.Solve3D(out List<Point3D> nakedPoint3Ds, out List<string> diagnostics, out _, out Solve3DReport report, weights: null, maxExtends: null, minBucketSize: minBucketSize, thicknessFactor: thicknessFactor, alignColinearOffset: alignColinearOffset, normalizeCapOffset: normalizeCapOffset, classifyCells: classifyCells, minCellVolume: minCellVolume, bucketBetweenLevels: bucketBetweenLevels, doubleWallGap: doubleWallGap);
@@ -295,15 +304,40 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.SetDataList(index, slitPanels?.Where(x => x != null).Select(x => new GooPanel(x)));
             }
 
+            // Severity comes from the records built where each line is produced (Solve3D's structured solver
+            // diagnostics keep their own severity); text is never parsed. Info is log only, Warnings and Errors become
+            // grouped runtime messages at every detail level. If the records ever disagree with the legacy list, the
+            // legacy list is shown unfiltered rather than guessing.
+            List<DiagnosticRecord> diagnosticRecords = report?.DiagnosticRecords?.ToList() ?? new List<DiagnosticRecord>();
+            bool recordsMatch = diagnostics != null && diagnosticRecords.Count == diagnostics.Count && diagnosticRecords.Select(x => x.Text).SequenceEqual(diagnostics);
+            if (!recordsMatch)
+            {
+                diagnosticRecords = (diagnostics ?? new List<string>()).Select(x => global::SAM.Core.OCCT.Query.CreateDiagnosticRecord(x, DiagnosticSeverity.Info, DiagnosticDetail.Summary)).ToList();
+            }
+
+            if (invalidDetail != null)
+            {
+                diagnosticRecords.Insert(0, invalidDetail);
+            }
+
+            if (!(resolvedPanels != null && resolvedPanels.Count != 0) && !diagnosticRecords.Any(x => x.Diagnostic.Severity == DiagnosticSeverity.Error))
+            {
+                diagnosticRecords.Add(global::SAM.Core.OCCT.Query.CreateDiagnosticRecord("SAM_OCCT_SOLVE3D_NO_RESULT: SAMOCCT.Solve3D produced no resolved panels and reported no error.", DiagnosticSeverity.Error));
+            }
+
+            List<string> diagnosticLines = global::SAM.Core.Grasshopper.OCCT.OcctDiagnosticReporter.Report(this, diagnosticRecords, diagnosticDetail);
+
             index = Params.IndexOfOutputParam("Diagnostics");
             if (index != -1)
             {
-                dataAccess.SetDataList(index, diagnostics);
+                dataAccess.SetDataList(index, diagnosticLines);
             }
+
+            bool successful = resolvedPanels != null && resolvedPanels.Count != 0;
 
             if (index_Successful != -1)
             {
-                dataAccess.SetData(index_Successful, resolvedPanels != null && resolvedPanels.Count != 0);
+                dataAccess.SetData(index_Successful, successful);
             }
 
             // Phase 8 staged/diagnostic outputs - all Voluntary, so a definition that never wires them up pays

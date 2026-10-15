@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
+using SAM.Core.OCCT;
 using SAM.Geometry.OCCT;
 using SAM.Geometry.OCCT.Solver;
 using SAM.Geometry.Spatial;
@@ -24,10 +25,20 @@ namespace SAM.Analytical.OCCT.Solver
         /// </summary>
         public static List<string> FormatDiagnostics(SolverDiagnostics diagnostics, string prefix)
         {
-            List<string> result = new List<string>();
+            return FormatDiagnosticRecords(diagnostics, prefix).ConvertAll(x => x.Text);
+        }
+
+        /// <summary>
+        /// The same lines as <see cref="FormatDiagnostics"/>, each paired with the structured shared
+        /// <see cref="Core.Diagnostic"/> built from its own <see cref="SolverDiagnostic"/>, so the severity is the
+        /// solver's and is not read back from the text.
+        /// </summary>
+        public static List<DiagnosticRecord> FormatDiagnosticRecords(SolverDiagnostics diagnostics, string prefix)
+        {
+            List<DiagnosticRecord> result = new List<DiagnosticRecord>();
             foreach (SolverDiagnostic solverDiagnostic in diagnostics?.All ?? new List<SolverDiagnostic>())
             {
-                result.Add(string.Format("{0}_DIAGNOSTIC: {1}", prefix, solverDiagnostic));
+                result.Add(solverDiagnostic.ToDiagnosticRecord(string.Format("{0}_DIAGNOSTIC: {1}", prefix, solverDiagnostic)));
             }
 
             return result;

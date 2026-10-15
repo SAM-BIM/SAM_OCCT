@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
+using SAM.Core.OCCT;
 using SAM.Geometry.OCCT;
 using SAM.Geometry.OCCT.Solver;
 using SAM.Geometry.Spatial;
@@ -103,6 +104,14 @@ namespace SAM.Analytical.OCCT.Solver
         /// list. Empty when no trim dropped a hole.</summary>
         public IReadOnlyList<string> ExtendPanelDiagnostics { get; }
 
+        /// <summary>
+        /// The Solve3D diagnostics as structured records (shared severity + the exact legacy line), in the same order
+        /// as the <c>diagnostics</c> list the solve returned. Empty for Clean3D/Extend3D/AutoTune3D, which do not
+        /// build records. Severity is the producer's own; see <see cref="SolverReportFormat.FormatDiagnosticRecords"/>.
+        /// Set by <c>Modify.Solve3D</c> while it assembles the report (the constructor signature is unchanged).
+        /// </summary>
+        public IReadOnlyList<DiagnosticRecord> DiagnosticRecords { get; internal set; }
+
         public Solve3DReport(
             bool rawAdopted,
             ClosureSignature3D signature,
@@ -140,6 +149,7 @@ namespace SAM.Analytical.OCCT.Solver
             LevelGroups = levelGroups ?? new List<LevelGroup>();
             CleanRecords = cleanRecords ?? new List<CleanRecord>();
             CleanReportLines = cleanReportLines ?? new List<string>();
+            DiagnosticRecords = new List<DiagnosticRecord>();
             NativeResolved = nativeResolved;
             ResolvedCellCount = resolvedCellCount;
             Rounds = rounds;
