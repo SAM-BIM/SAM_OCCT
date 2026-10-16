@@ -29,6 +29,16 @@ Before making significant changes:
 Prefer small, safe, targeted changes consistent with existing conventions.
 Avoid unrelated refactoring unless it is required for the task.
 
+## Engineering Standards
+
+The canonical SAM engineering standards live in the SAM repository on `sow/2026-Q4`. Read the relevant one before
+making a change of that kind; do not copy them into this repository.
+
+- Diagnostics changes (messages, warnings, errors, logging, result reporting): follow [DIAGNOSTICS_STANDARD.md](https://github.com/SAM-BIM/SAM/blob/sow/2026-Q4/docs/DIAGNOSTICS_STANDARD.md).
+- Grasshopper changes: follow [GH_COMPONENT_STANDARDS.md](https://github.com/SAM-BIM/SAM/blob/sow/2026-Q4/docs/GH_COMPONENT_STANDARDS.md) where applicable, i.e. only when a change adds or alters a Grasshopper component or its definition (this repository has no Grasshopper implementation of its own); it does not apply to changes with no Grasshopper surface.
+
+These standards add to, and do not replace, the repository-specific rules in this file.
+
 ## Repository operations and context
 
 - Validate fetch and push URLs before network operations; target only
