@@ -225,19 +225,279 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
-        public void CheckOverlap_PartialOverlapMissedByOwnPoints_FoundByProbe()
+        public void CheckOverlap_PartialOverlapMissedByOwnPoints_ReportedWithoutProbes()
         {
-            // Arrange: neither cell's own centre (x 1.0 and 2.5) lies in the other; a probe at x 1.75 lies in both.
+            // Arrange: neither cell's own centre (x 1.0 and 2.5) lies in the other; they share 0.5 m3. Before the fix
+            // only an outside probe (such as x 1.75) could find this, so it passed without one.
             List<OcctCell> cells = new List<OcctCell> { Cell(0, 2), Cell(1.5, 3.5) };
-            List<Point3D> probes = new List<Point3D> { new Point3D(1.75, 0.5, 0.5) };
 
             // Act
-            List<string> withoutProbes = OcctUnderSplitGuard.CheckOverlap(cells, null, Options(), "sew cells");
-            List<string> withProbes = OcctUnderSplitGuard.CheckOverlap(cells, probes, Options(), "sew cells");
+            List<string> failures = OcctUnderSplitGuard.CheckOverlap(cells, null, Options(), "sew cells");
 
             // Assert
-            Assert.Empty(withoutProbes);
-            Assert.Contains(withProbes, x => x.Contains("sew cells 0 and 1 overlap"));
+            Assert.Contains(failures, x => x.Contains("sew cells 0 and 1 overlap"));
+        }
+
+        // Unit-height L-shaped cell: x 0..2 by y 0..1 plus x 0..1 by y 1..2 (3 m3).
+        private static OcctCell LCell()
+        {
+            Point3D[] footprint = { new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 1, 0), new Point3D(1, 1, 0), new Point3D(1, 2, 0), new Point3D(0, 2, 0) };
+            List<Face3D> faces = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(footprint),
+                TestGeometry.CreatePlanarFace(footprint.Select(x => new Point3D(x.X, x.Y, 1)).ToArray()),
+            };
+            for (int i = 0; i < footprint.Length; i++)
+            {
+                Point3D a = footprint[i];
+                Point3D b = footprint[(i + 1) % footprint.Length];
+                faces.Add(TestGeometry.CreatePlanarFace(a, b, new Point3D(b.X, b.Y, 1), new Point3D(a.X, a.Y, 1)));
+            }
+
+            return new OcctCell(new Shell(faces), 3, center: new Point3D(0.5, 0.5, 0.5));
+        }
+
+        // Unit-height box cell over x0..x1 by y0..y1.
+        private static OcctCell BoxCell(double x0, double x1, double y0, double y1)
+        {
+            Shell shell = new Shell(new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(new Point3D(x0, y0, 0), new Point3D(x1, y0, 0), new Point3D(x1, y1, 0), new Point3D(x0, y1, 0)),
+                TestGeometry.CreatePlanarFace(new Point3D(x0, y0, 1), new Point3D(x1, y0, 1), new Point3D(x1, y1, 1), new Point3D(x0, y1, 1)),
+                TestGeometry.CreatePlanarFace(new Point3D(x0, y0, 0), new Point3D(x1, y0, 0), new Point3D(x1, y0, 1), new Point3D(x0, y0, 1)),
+                TestGeometry.CreatePlanarFace(new Point3D(x0, y1, 0), new Point3D(x1, y1, 0), new Point3D(x1, y1, 1), new Point3D(x0, y1, 1)),
+                TestGeometry.CreatePlanarFace(new Point3D(x0, y0, 0), new Point3D(x0, y1, 0), new Point3D(x0, y1, 1), new Point3D(x0, y0, 1)),
+                TestGeometry.CreatePlanarFace(new Point3D(x1, y0, 0), new Point3D(x1, y1, 0), new Point3D(x1, y1, 1), new Point3D(x1, y0, 1)),
+            });
+            return new OcctCell(shell, (x1 - x0) * (y1 - y0), center: new Point3D((x0 + x1) / 2, (y0 + y1) / 2, 0.5));
+        }
+
+        public static IEnumerable<object[]> OverlapControls()
+        {
+            // Partial overlap, own centres outside each other (0.5 m3).
+            yield return new object[] { 0.0, 2.0, 1.5, 3.5 };
+            // Duplicates.
+            yield return new object[] { 0.0, 1.0, 0.0, 1.0 };
+            // Containment, strictly inside.
+            yield return new object[] { 0.0, 3.0, 1.0, 2.0 };
+            // Containment sharing faces.
+            yield return new object[] { 0.0, 2.0, 0.0, 1.0 };
+            // Overlap thicker than the band only just (0.02 m against a 0.01 m band).
+            yield return new object[] { 0.0, 1.0, 0.98, 2.0 };
+        }
+
+        [Theory]
+        [MemberData(nameof(OverlapControls))]
+        public void CheckDisjoint_OverlappingBoxes_ReportOverlapWithoutExactTest(double a0, double a1, double b0, double b1)
+        {
+            // Arrange
+            List<OcctCell> cells = new List<OcctCell> { Cell(a0, a1), Cell(b0, b1) };
+
+            // Act
+            List<string> failures = OcctUnderSplitGuard.CheckDisjoint(cells, null, Options(), "cells", OcctUnderSplitGuard.NoExactTest);
+
+            // Assert: proven by a sample point inside both, no exact test needed.
+            Assert.Equal("cells 0 and 1 overlap", Assert.Single(failures));
+        }
+
+        [Theory]
+        [InlineData(0.0, 1.0, 2.0, 3.0)]
+        [InlineData(0.0, 1.0, 1.0, 2.0)]
+        [InlineData(0.0, 1.0, 0.995, 2.0)]
+        public void CheckDisjoint_DisjointOrFaceTouchingBoxes_PassWithoutExactTest(double a0, double a1, double b0, double b1)
+        {
+            // Arrange: apart; sharing a face; and overlapping by 0.005 m, within the 0.01 m glue band.
+            List<OcctCell> cells = new List<OcctCell> { Cell(a0, a1), Cell(b0, b1) };
+            int exactCalls = 0;
+
+            // Act
+            List<string> failures = OcctUnderSplitGuard.CheckDisjoint(cells, null, Options(), "cells", (first, second) => { exactCalls++; return null; });
+
+            // Assert
+            Assert.Empty(failures);
+            Assert.Equal(0, exactCalls);
+        }
+
+        [Fact]
+        public void CheckDisjoint_CellInNotchOfLShape_NeedsExactTest()
+        {
+            // Arrange: disjoint, face-touching on two faces, but no face plane separates them and no sample proves
+            // an overlap.
+            List<OcctCell> cells = new List<OcctCell> { LCell(), BoxCell(1, 2, 1, 2) };
+
+            // Act
+            List<string> withoutExact = OcctUnderSplitGuard.CheckDisjoint(cells, null, Options(), "cells", OcctUnderSplitGuard.NoExactTest);
+            List<string> exactThrows = OcctUnderSplitGuard.CheckDisjoint(cells, null, Options(), "cells", (first, second) => throw new InvalidOperationException("kernel"));
+            List<string> exactEmpty = OcctUnderSplitGuard.CheckDisjoint(cells, null, Options(), "cells", (first, second) => 0);
+
+            // Assert: undecidable fails closed; the exact test decides.
+            Assert.Contains("could not be established", Assert.Single(withoutExact));
+            Assert.Contains("could not be established", Assert.Single(exactThrows));
+            Assert.Empty(exactEmpty);
+        }
+
+        [Fact]
+        public void CheckDisjoint_BoxIntrudingIntoLShape_OverlapFoundOnlyByExactTest()
+        {
+            // Arrange: box x,y 0.8..2 shares 0.44 m3 with the L, yet no sample point lies in both.
+            List<OcctCell> cells = new List<OcctCell> { LCell(), BoxCell(0.8, 2, 0.8, 2) };
+
+            // Act
+            List<string> withoutExact = OcctUnderSplitGuard.CheckDisjoint(cells, null, Options(), "cells", OcctUnderSplitGuard.NoExactTest);
+            List<string> withExact = OcctUnderSplitGuard.CheckDisjoint(cells, null, Options(), "cells", (first, second) => 0.44);
+
+            // Assert
+            Assert.Contains("could not be established", Assert.Single(withoutExact));
+            Assert.Contains("cells 0 and 1 overlap (common volume 0.44 m3)", Assert.Single(withExact));
+        }
+
+        [Fact]
+        public void ValidateCells_CellInNotchOfLShape_UsesExactTest()
+        {
+            // Arrange
+            List<OcctCell> cells = new List<OcctCell> { LCell(), BoxCell(1, 2, 1, 2) };
+
+            // Act
+            List<string> withoutExact = OcctUnderSplitGuard.ValidateCells(cells, Options(), null, OcctUnderSplitGuard.NoExactTest);
+            List<string> withExact = OcctUnderSplitGuard.ValidateCells(cells, Options(), null, (first, second) => 0);
+
+            // Assert
+            Assert.Contains(withoutExact, x => x.Contains("could not be established"));
+            Assert.Empty(withExact);
+        }
+
+        [Fact]
+        public void AdoptSewCandidate_DuplicateCellsInBothCandidates_FailsClosed()
+        {
+            // Arrange (R1): both builds hold the same two identical unit cubes. Coverage is clean and the totals
+            // agree (2 m3 each), which used to skip the overlap check and return Success with only SEW_SUCCESS.
+            List<Face3D> faces = Box(0, 1).Face3Ds.ToList();
+            OcctCellComplexResult sew = Candidate(Cell(0, 1), Cell(0, 1));
+            Assert.True(IsCleanSewCoverage(faces, sew));
+            Assert.Null(OcctUnderSplitGuard.CheckVolumeAgreement(sew.Cells, new List<OcctCell> { Cell(0, 1), Cell(0, 1) }, 6, Options()));
+            OcctCellComplexResult result = new OcctCellComplexResult();
+
+            // Act
+            bool adopted = OcctCellComplexBuilder.AdoptSewCandidate(faces, Options(), sew, Direct(0, Cell(0, 1), Cell(0, 1)), result);
+
+            // Assert
+            AssertFailedClosed(adopted, result);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_SEW_BUILD_INVALID" && x.Message.Contains("sew cells 0 and 1 overlap"));
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_BUILD_REJECTED" && x.Message.Contains("cells 0 and 1 overlap"));
+            Assert.DoesNotContain(result.Diagnostics, x => x.Code == "SAM_OCCT_SEW_SUCCESS");
+        }
+
+        [Fact]
+        public void AdoptSewCandidate_DuplicateSewCellsWithValidDirect_AdoptsDirect()
+        {
+            // Arrange: the same duplicated sew build, recovered by an independently acceptable direct build.
+            List<Face3D> faces = Box(0, 1).Face3Ds.ToList();
+            OcctCellComplexResult sew = Candidate(Cell(0, 1), Cell(0, 1));
+            OcctCellComplexResult result = new OcctCellComplexResult();
+
+            // Act
+            bool adopted = OcctCellComplexBuilder.AdoptSewCandidate(faces, Options(), sew, Direct(0, Cell(0, 1)), result);
+
+            // Assert
+            Assert.True(adopted);
+            Assert.True(result.Success);
+            Assert.Equal(1, Assert.Single(result.Cells).Volume, 6);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_SEW_BUILD_INVALID" && x.Message.Contains("overlap"));
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_BUILD_FALLBACK_DIRECT");
+        }
+
+        // Faces of every given box cell (complete coverage for exactly those cells).
+        private static List<Face3D> FacesOf(params OcctCell[] cells)
+        {
+            return cells.SelectMany(x => x.Shell.Face3Ds).ToList();
+        }
+
+        [Fact]
+        public void EvaluateReplacement_PartialOverlapCentresOutside_Rejects()
+        {
+            // Arrange (R2): boxes x 0..2 and 1.5..3.5 overlap by 0.5 m3; their own faces give clean coverage.
+            List<OcctCell> direct = new List<OcctCell> { Cell(0, 2), Cell(1.5, 3.5) };
+
+            // Act
+            OcctUnderSplitGuard.Evaluation evaluation = OcctUnderSplitGuard.EvaluateReplacement(FacesOf(direct.ToArray()), direct, Options(), 0.01);
+
+            // Assert
+            Assert.False(evaluation.Adopt);
+            Assert.True(evaluation.DirectCoverage.IsClean);
+            Assert.Contains(evaluation.Failures, x => x.Contains("cells 0 and 1 overlap"));
+        }
+
+        public static IEnumerable<object[]> OverlappingReplacements()
+        {
+            yield return new object[] { 0.0, 2.0, 1.5, 3.5 };
+            yield return new object[] { 0.0, 1.0, 0.0, 1.0 };
+            yield return new object[] { 0.0, 3.0, 1.0, 2.0 };
+        }
+
+        [Theory]
+        [MemberData(nameof(OverlappingReplacements))]
+        public void AdoptSewCandidate_InvalidSewOverlappingDirect_FailsClosed(double a0, double a1, double b0, double b1)
+        {
+            // Arrange (R2, end to end): an inverted sew envelope, and a direct build whose cells overlap (partial,
+            // duplicate, containment) but cover every input face.
+            OcctCell first = Cell(a0, a1);
+            OcctCell second = Cell(b0, b1);
+            List<Face3D> faces = FacesOf(first, second);
+            double extent = System.Math.Max(a1, b1);
+            OcctCellComplexResult sew = Candidate(Cell(0, extent, -extent));
+            OcctCellComplexResult result = new OcctCellComplexResult();
+
+            // Act
+            bool adopted = OcctCellComplexBuilder.AdoptSewCandidate(faces, Options(), sew, Direct(0, first, second), result);
+
+            // Assert
+            AssertFailedClosed(adopted, result);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_BUILD_REJECTED" && x.Message.Contains("cells 0 and 1 overlap"));
+            Assert.DoesNotContain(result.Diagnostics, x => x.Code == "SAM_OCCT_BUILD_FALLBACK_DIRECT");
+        }
+
+        [Theory]
+        [InlineData(2.0)]
+        [InlineData(1.0)]
+        public void AdoptSewCandidate_InvalidSewDisjointOrTouchingDirect_AdoptsDirect(double secondStart)
+        {
+            // Arrange: control for the case above - apart, or sharing a face.
+            OcctCell first = Cell(0, 1);
+            OcctCell second = Cell(secondStart, secondStart + 1);
+            OcctCellComplexResult sew = Candidate(Cell(0, secondStart + 1, -2));
+            OcctCellComplexResult result = new OcctCellComplexResult();
+
+            // Act
+            bool adopted = OcctCellComplexBuilder.AdoptSewCandidate(FacesOf(first, second), Options(), sew, Direct(0, first, second), result);
+
+            // Assert
+            Assert.True(adopted);
+            Assert.True(result.Success);
+            Assert.Equal(2, result.Cells.Count);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_BUILD_FALLBACK_DIRECT");
+            Assert.DoesNotContain(result.Diagnostics, x => x.Severity == OcctDiagnosticSeverity.Error);
+        }
+
+        [Fact]
+        public void AdoptSewCandidate_UnderSplitSewOverlappingDirect_KeepsSewWithUnreliable()
+        {
+            // Arrange: a valid sew cell (x 0..3.5) with the direct cells' end faces cutting through it, and a direct
+            // build whose two cells cover every face but overlap by 0.5 m3 (total 4 against 3.5: a volume conflict).
+            // Neither the #76 refinement route nor the conflict route may adopt it.
+            OcctCell first = Cell(0, 2);
+            OcctCell second = Cell(1.5, 3.5);
+            OcctCellComplexResult sew = Candidate(Cell(0, 3.5));
+            OcctCellComplexResult result = new OcctCellComplexResult();
+
+            // Act
+            bool adopted = OcctCellComplexBuilder.AdoptSewCandidate(FacesOf(first, second), Options(), sew, Direct(0, first, second), result);
+
+            // Assert: the valid sew build is kept, flagged; the overlapping direct build is never adopted.
+            Assert.True(adopted);
+            OcctCell kept = Assert.Single(result.Cells);
+            Assert.Equal(3.5, kept.Volume, 6);
+            Assert.DoesNotContain(result.Diagnostics, x => x.Code == "SAM_OCCT_BUILD_FALLBACK_DIRECT");
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_BUILD_UNRELIABLE" && x.Message.Contains("cells 0 and 1 overlap"));
         }
 
         [Fact]

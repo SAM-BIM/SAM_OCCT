@@ -1846,7 +1846,12 @@ Applies only with `OcctBuildOptions.ValidateSewCoverage` (opt-in; set by `SAMOCC
 Record: `documentation/Sew-Guard-Invalid-Cells-Q4.md`.
 
 - `SewInvalidCellGuardTests` (unit, native-free): signed-volume rejection (negative, zero, NaN, +/-infinity)
-  for sew and direct cells, volume agreement, the probe-point overlap check, complete coverage, and every
+  for sew and direct cells, volume agreement, the disjointness check (`CheckDisjoint`: partial overlap with
+  centres outside each other, duplicates, containment, a just-thicker-than-band overlap, disjoint, face-touching
+  and within-band cells decided without the exact test; an L-shaped cell with a box in its notch or intruding
+  into it decided only by the exact test, failing closed when it is unavailable or throws), complete coverage,
+  duplicate cells in both candidates with equal totals (fail-closed) and recovered by a valid direct build,
+  overlapping replacements rejected in every route, and every
   `OcctCellComplexBuilder.AdoptSewCandidate` outcome through a stand-in for the direct native build:
   coverage-clean inverted and duplicated envelopes, recovery without coverage gain, fail-closed on a failed,
   unavailable, incompletely covering, inverted or overlapping direct build, RetainTopology (fail-closed and
@@ -1859,9 +1864,11 @@ Record: `documentation/Sew-Guard-Invalid-Cells-Q4.md`.
   inverse-translated direct build cell by cell (signed volume and bounding box within 1e-3), with positive
   cells, clean coverage and no Error. The Grasshopper path with Air panels (same 16 cases) must never build
   a cluster from a non-positive or invalid cell: a positive-cell cluster or no cluster with an Error. Plus
-  RetainTopology fail-closed (no shells, no cluster) and the valid RetainTopology contract.
+  RetainTopology fail-closed (no shells, no cluster), the valid RetainTopology contract, and the native exact
+  overlap test (`OcctCellComplexBuilder.CommonVolume`: partial overlap, duplicate, containment, face-touching,
+  disjoint; the L-shape notch and intrusion through `CheckOverlap`).
 
 ```powershell
 dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~SewInvalidCellGuardTests"
-dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~SewGuardInvalidCellIntegrationTests|FullyQualifiedName~HouseUnderSplitIntegrationTests"
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~SewGuardInvalidCellIntegrationTests|FullyQualifiedName~HouseUnderSplitIntegrationTests|FullyQualifiedName~HouseAirAndAtticIntegrationTests"
 ```

@@ -21,10 +21,20 @@ namespace SAM.Geometry.OCCT.Native
     /// A sew build that is demonstrably invalid (a non-finite or non-positive signed cell volume, or overlapping
     /// cells) is not a valid reference for criteria 3 and 4. A replacement for it is judged on its own instead
     /// (<see cref="EvaluateReplacement"/>): criteria 1 and 2 plus complete input-face coverage.
-    /// Pure managed; the checks run on decoded shells only.
+    /// The checks run on decoded shells and are managed, except the exact overlap test of a cell pair that the
+    /// managed separation tests cannot decide (<see cref="CheckDisjoint"/>): that uses the native boolean Common.
     /// </summary>
     internal static class OcctUnderSplitGuard
     {
+        /// <summary>
+        /// The volume common to two closed cells, or null when it cannot be computed. Production uses the native
+        /// boolean Common (<see cref="OcctCellComplexBuilder.CommonVolume"/>); tests pass a stand-in.
+        /// </summary>
+        internal delegate double? CommonVolume(Shell first, Shell second);
+
+        /// <summary>An exact overlap test that is never available: pairs the managed tests cannot decide fail.</summary>
+        internal static readonly CommonVolume NoExactTest = (first, second) => null;
+
         internal sealed class Evaluation
         {
             public Evaluation(bool adopt, List<string> failures, FaceCoverageReport sewCoverage, FaceCoverageReport directCoverage)
@@ -165,12 +175,30 @@ namespace SAM.Geometry.OCCT.Native
         }
 
         /// <summary>
-        /// Cells of a complex must not share interior. Every cell's own internal point, plus any extra
-        /// <paramref name="probes"/> (e.g. the internal points of an alternative build, used only as sample
-        /// locations), must lie inside at most one cell. A point inside two cells proves an overlap, such as a
-        /// duplicated envelope cell around the rooms.
+        /// Cells of a complex must not share interior: <see cref="CheckDisjoint"/> with the native exact test.
         /// </summary>
         internal static List<string> CheckOverlap(IReadOnlyList<OcctCell> cells, IEnumerable<Point3D> probes, OcctBuildOptions options, string label)
+        {
+            return CheckDisjoint(cells, probes, options, label, null);
+        }
+
+        /// <summary>
+        /// Cells of a complex must not share interior. Every pair must be shown disjoint; a pair that cannot be is a
+        /// failure, so the check fails closed. Point samples can only prove an overlap, never disjointness.
+        /// <list type="number">
+        /// <item>Proof of overlap: a sample point inside two cells. The samples are each cell's internal point, the
+        /// <paramref name="probes"/> (e.g. an alternative build's internal points, used only as locations) and the
+        /// centre of each pair's bounding-box intersection.</item>
+        /// <item>Proof of disjointness, managed and exact up to the glue band max(Tolerance, FuzzyTolerance):
+        /// bounding boxes that overlap by no more than the band along some axis, or a face plane of either cell with
+        /// all vertices of one cell on one side and all of the other on the other side. A cell lies in the convex
+        /// hull of its vertices, so such a plane separates the cells (face-touching cells share it).</item>
+        /// <item>Otherwise (e.g. a cell in the notch of an L-shaped one) the exact common volume, without pieces no
+        /// thicker than the band (seams between touching cells): disjoint when it is 0, an overlap when positive, and
+        /// a failure when it cannot be computed. A null <paramref name="commonVolume"/> is the native boolean Common.</item>
+        /// </list>
+        /// </summary>
+        internal static List<string> CheckDisjoint(IReadOnlyList<OcctCell> cells, IEnumerable<Point3D> probes, OcctBuildOptions options, string label, CommonVolume commonVolume)
         {
             options = options ?? new OcctBuildOptions();
             List<string> failures = new List<string>();
@@ -179,45 +207,88 @@ namespace SAM.Geometry.OCCT.Native
                 return failures;
             }
 
-            List<BoundingBox3D> boxes = cells.Select(x => x?.Shell?.GetBoundingBox(options.FuzzyTolerance)).ToList();
+            if (commonVolume == null)
+            {
+                OcctBuildOptions nativeOptions = options;
+                commonVolume = (first, second) => OcctCellComplexBuilder.CommonVolume(first, second, nativeOptions);
+            }
+
+            double band = System.Math.Max(options.Tolerance, options.FuzzyTolerance);
+            List<BoundingBox3D> boxes = cells.Select(x => x?.Shell?.GetBoundingBox()).ToList();
             List<Point3D> points = cells.Select(x => InternalPoint(x, options)).Where(x => x != null).ToList();
             if (probes != null)
             {
                 points.AddRange(probes.Where(x => x != null));
             }
 
-            HashSet<string> pairs = new HashSet<string>();
+            HashSet<long> overlapping = new HashSet<long>();
             foreach (Point3D point3D in points)
             {
-                List<int> containing = new List<int>();
-                for (int i = 0; i < cells.Count; i++)
-                {
-                    Shell shell = cells[i]?.Shell;
-                    if (shell == null || (boxes[i] != null && !boxes[i].Inside(point3D, true, options.Tolerance)))
-                    {
-                        continue;
-                    }
-
-                    if (shell.Inside(point3D, options.FuzzyTolerance, options.Tolerance))
-                    {
-                        containing.Add(i);
-                    }
-                }
-
+                List<int> containing = ContainingCells(cells, boxes, point3D, options);
                 for (int i = 0; i < containing.Count - 1; i++)
                 {
                     for (int j = i + 1; j < containing.Count; j++)
                     {
-                        pairs.Add(string.Format("{0} {1} and {2}", label, containing[i], containing[j]));
+                        overlapping.Add(PairKey(containing[i], containing[j], cells.Count));
                     }
                 }
             }
 
-            foreach (string pair in pairs.OrderBy(x => x, System.StringComparer.Ordinal))
+            List<Point3D>[] vertices = new List<Point3D>[cells.Count];
+            SortedDictionary<long, string> messages = new SortedDictionary<long, string>();
+            foreach (long key in overlapping)
             {
-                failures.Add(string.Format("{0} overlap", pair));
+                messages[key] = string.Format("{0} {1} and {2} overlap", label, key / cells.Count, key % cells.Count);
             }
 
+            for (int i = 0; i < cells.Count - 1; i++)
+            {
+                for (int j = i + 1; j < cells.Count; j++)
+                {
+                    long key = PairKey(i, j, cells.Count);
+                    Shell first = cells[i]?.Shell;
+                    Shell second = cells[j]?.Shell;
+                    if (overlapping.Contains(key) || first == null || second == null || boxes[i] == null || boxes[j] == null || Separated(boxes[i], boxes[j], band))
+                    {
+                        continue;
+                    }
+
+                    Point3D centre = IntersectionCentre(boxes[i], boxes[j]);
+                    if (first.Inside(centre, options.FuzzyTolerance, options.Tolerance) && second.Inside(centre, options.FuzzyTolerance, options.Tolerance))
+                    {
+                        messages[key] = string.Format("{0} {1} and {2} overlap", label, i, j);
+                        continue;
+                    }
+
+                    vertices[i] = vertices[i] ?? Vertices(first);
+                    vertices[j] = vertices[j] ?? Vertices(second);
+                    if (SeparatedByFacePlane(first, vertices[i], vertices[j], band) || SeparatedByFacePlane(second, vertices[j], vertices[i], band))
+                    {
+                        continue;
+                    }
+
+                    double? common;
+                    try
+                    {
+                        common = commonVolume(first, second);
+                    }
+                    catch (System.Exception)
+                    {
+                        common = null;
+                    }
+
+                    if (common == null || double.IsNaN(common.Value) || double.IsInfinity(common.Value))
+                    {
+                        messages[key] = string.Format("{0} {1} and {2}: disjointness could not be established (no separating plane; exact overlap test unavailable or inconclusive)", label, i, j);
+                    }
+                    else if (System.Math.Abs(common.Value) > 0)
+                    {
+                        messages[key] = string.Format("{0} {1} and {2} overlap (common volume {3:0.###} m3)", label, i, j, System.Math.Abs(common.Value));
+                    }
+                }
+            }
+
+            failures.AddRange(messages.Values);
             return failures;
         }
 
@@ -250,10 +321,11 @@ namespace SAM.Geometry.OCCT.Native
         }
 
         /// <summary>
-        /// Closed, positive-volume, non-sliver and mutually non-overlapping cells. Closure is tested at
-        /// <paramref name="closureTolerance"/>, by default <see cref="OcctBuildOptions.Tolerance"/>.
+        /// Closed, positive-volume, non-sliver and mutually disjoint cells (<see cref="CheckDisjoint"/>). Closure is
+        /// tested at <paramref name="closureTolerance"/>, by default <see cref="OcctBuildOptions.Tolerance"/>. The exact
+        /// overlap test is <paramref name="commonVolume"/>, by default the native boolean Common.
         /// </summary>
-        internal static List<string> ValidateCells(IReadOnlyList<OcctCell> cells, OcctBuildOptions options, double? closureTolerance = null)
+        internal static List<string> ValidateCells(IReadOnlyList<OcctCell> cells, OcctBuildOptions options, double? closureTolerance = null, CommonVolume commonVolume = null)
         {
             List<string> failures = new List<string>();
             if (cells == null)
@@ -308,22 +380,13 @@ namespace SAM.Geometry.OCCT.Native
 
             for (int i = 0; i < cells.Count; i++)
             {
-                Point3D point3D = internalPoints[i];
-                if (point3D == null)
+                if (internalPoints[i] == null)
                 {
                     failures.Add(string.Format("cell {0} has no internal point", i));
-                    continue;
-                }
-
-                for (int j = 0; j < cells.Count; j++)
-                {
-                    if (i != j && cells[j]?.Shell != null && cells[j].Shell.Inside(point3D, options.FuzzyTolerance, options.Tolerance))
-                    {
-                        failures.Add(string.Format("cells {0} and {1} overlap", i, j));
-                    }
                 }
             }
 
+            failures.AddRange(CheckDisjoint(cells, null, options, "cells", commonVolume));
             return failures;
         }
 
@@ -433,6 +496,110 @@ namespace SAM.Geometry.OCCT.Native
             }
 
             return area;
+        }
+
+        private static long PairKey(int i, int j, int count)
+        {
+            return (long)i * count + j;
+        }
+
+        private static List<int> ContainingCells(IReadOnlyList<OcctCell> cells, List<BoundingBox3D> boxes, Point3D point3D, OcctBuildOptions options)
+        {
+            List<int> containing = new List<int>();
+            for (int i = 0; i < cells.Count; i++)
+            {
+                Shell shell = cells[i]?.Shell;
+                if (shell == null || (boxes[i] != null && !boxes[i].Inside(point3D, true, System.Math.Max(options.Tolerance, options.FuzzyTolerance))))
+                {
+                    continue;
+                }
+
+                if (shell.Inside(point3D, options.FuzzyTolerance, options.Tolerance))
+                {
+                    containing.Add(i);
+                }
+            }
+
+            return containing;
+        }
+
+        // Interiors are disjoint when the boxes overlap by no more than the band along some axis.
+        private static bool Separated(BoundingBox3D first, BoundingBox3D second, double band)
+        {
+            return System.Math.Min(first.Max.X, second.Max.X) - System.Math.Max(first.Min.X, second.Min.X) <= band
+                || System.Math.Min(first.Max.Y, second.Max.Y) - System.Math.Max(first.Min.Y, second.Min.Y) <= band
+                || System.Math.Min(first.Max.Z, second.Max.Z) - System.Math.Max(first.Min.Z, second.Min.Z) <= band;
+        }
+
+        private static Point3D IntersectionCentre(BoundingBox3D first, BoundingBox3D second)
+        {
+            return new Point3D(
+                (System.Math.Max(first.Min.X, second.Min.X) + System.Math.Min(first.Max.X, second.Max.X)) / 2,
+                (System.Math.Max(first.Min.Y, second.Min.Y) + System.Math.Min(first.Max.Y, second.Max.Y)) / 2,
+                (System.Math.Max(first.Min.Z, second.Min.Z) + System.Math.Min(first.Max.Z, second.Max.Z)) / 2);
+        }
+
+        // True when a face plane of shell puts all its own vertices on one side (within the band) and all vertices of
+        // the other shell on the other side. Both cells lie in the convex hulls of their vertices, so the plane
+        // separates them up to a band-thick slab.
+        private static bool SeparatedByFacePlane(Shell shell, List<Point3D> vertices, List<Point3D> otherVertices, double band)
+        {
+            if (vertices.Count == 0 || otherVertices.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (Face3D face3D in shell.Face3Ds ?? new List<Face3D>())
+            {
+                Plane plane = face3D?.GetPlane();
+                if (plane == null)
+                {
+                    continue;
+                }
+
+                SignedRange(plane, vertices, out double min, out double max);
+                SignedRange(plane, otherVertices, out double otherMin, out double otherMax);
+                if ((max <= band && otherMin >= -band) || (min >= -band && otherMax <= band))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static void SignedRange(Plane plane, List<Point3D> point3Ds, out double min, out double max)
+        {
+            Vector3D normal = plane.Normal;
+            Point3D origin = plane.Origin;
+            double length = System.Math.Sqrt(normal.X * normal.X + normal.Y * normal.Y + normal.Z * normal.Z);
+            min = double.MaxValue;
+            max = double.MinValue;
+            foreach (Point3D point3D in point3Ds)
+            {
+                double distance = (normal.X * (point3D.X - origin.X) + normal.Y * (point3D.Y - origin.Y) + normal.Z * (point3D.Z - origin.Z)) / length;
+                min = System.Math.Min(min, distance);
+                max = System.Math.Max(max, distance);
+            }
+        }
+
+        // Every face's outer-loop vertices; inner loops lie inside their face, so the convex hull is the same. Empty
+        // (no separating plane can be trusted) when any face has a boundary that is not a polygon.
+        private static List<Point3D> Vertices(Shell shell)
+        {
+            List<Point3D> vertices = new List<Point3D>();
+            foreach (Face3D face3D in shell?.Face3Ds ?? new List<Face3D>())
+            {
+                List<Point3D> point3Ds = (face3D?.GetExternalEdge3D() as ISegmentable3D)?.GetPoints();
+                if (point3Ds == null || point3Ds.Count == 0)
+                {
+                    return new List<Point3D>();
+                }
+
+                vertices.AddRange(point3Ds);
+            }
+
+            return vertices;
         }
 
         private static Point3D InternalPoint(OcctCell cell, OcctBuildOptions options)

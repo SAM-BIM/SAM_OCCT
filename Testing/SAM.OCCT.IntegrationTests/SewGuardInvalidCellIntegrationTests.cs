@@ -254,6 +254,84 @@ namespace SAM.OCCT.IntegrationTests
             }
         }
 
+        // Unit-height L-shaped shell: x 0..2 by y 0..1 plus x 0..1 by y 1..2 (3 m3).
+        private static Shell LShape()
+        {
+            Point3D[] footprint = { new Point3D(0, 0, 0), new Point3D(2, 0, 0), new Point3D(2, 1, 0), new Point3D(1, 1, 0), new Point3D(1, 2, 0), new Point3D(0, 2, 0) };
+            List<Face3D> faces = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(footprint),
+                TestGeometry.CreatePlanarFace(footprint.Select(x => new Point3D(x.X, x.Y, 1)).ToArray()),
+            };
+            for (int i = 0; i < footprint.Length; i++)
+            {
+                Point3D a = footprint[i];
+                Point3D b = footprint[(i + 1) % footprint.Length];
+                faces.Add(TestGeometry.CreatePlanarFace(a, b, new Point3D(b.X, b.Y, 1), new Point3D(a.X, a.Y, 1)));
+            }
+
+            return new Shell(faces);
+        }
+
+        public static IEnumerable<object[]> CommonVolumeCases()
+        {
+            // Unit-depth/height box: x origin, x size, expected common volume with the box x 0..2 (2 m3).
+            yield return new object[] { "partial overlap, centres outside each other", 1.5, 2.0, 0.5 };
+            yield return new object[] { "duplicate", 0.0, 2.0, 2.0 };
+            yield return new object[] { "containment", 0.5, 1.0, 1.0 };
+            yield return new object[] { "face-touching", 2.0, 1.0, 0.0 };
+            yield return new object[] { "seam inside the glue band", 1.9995, 1.0, 0.0 };
+            yield return new object[] { "overlap just thicker than the glue band", 1.99, 1.0, 0.01 };
+            yield return new object[] { "disjoint", 3.0, 1.0, 0.0 };
+        }
+
+        [SkippableTheory]
+        [MemberData(nameof(CommonVolumeCases))]
+        public void CommonVolume_BoxPairs_MatchesExactOverlap(string name, double x0, double sizeX, double expected)
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange
+            Shell first = TestGeometry.CreateBox(0, 0, 0, 2, 1, 1);
+            Shell second = TestGeometry.CreateBox(x0, 0, 0, sizeX, 1, 1);
+
+            // Act
+            double? common = SAM.Geometry.OCCT.Native.OcctCellComplexBuilder.CommonVolume(first, second, GrasshopperRecipe());
+
+            // Assert
+            Assert.True(common.HasValue, name);
+            Assert.True(System.Math.Abs(common.Value - expected) <= 1e-6, string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0}: common volume {1}, expected {2}.", name, common, expected));
+        }
+
+        [SkippableFact]
+        public void CheckDisjoint_NonSeparablePairsWithNativeExactTest_DecidedByKernel()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange: a box in the notch of an L (disjoint, touching on two faces, no separating face plane: only
+            // the kernel can show it disjoint), and a box intruding into the L by 0.44 m3.
+            OcctBuildOptions options = GrasshopperRecipe();
+            Shell lShape = LShape();
+            Shell notchBox = TestGeometry.CreateBox(1, 1, 0, 1, 1, 1);
+            Shell intrudingBox = TestGeometry.CreateBox(0.8, 0.8, 0, 1.2, 1.2, 1);
+            List<SAM.Geometry.OCCT.OcctCell> notch = new List<SAM.Geometry.OCCT.OcctCell> { new SAM.Geometry.OCCT.OcctCell(lShape, 3), new SAM.Geometry.OCCT.OcctCell(notchBox, 1) };
+            List<SAM.Geometry.OCCT.OcctCell> intruding = new List<SAM.Geometry.OCCT.OcctCell> { new SAM.Geometry.OCCT.OcctCell(lShape, 3), new SAM.Geometry.OCCT.OcctCell(intrudingBox, 1.44) };
+
+            // Act
+            List<string> notchFailures = SAM.Geometry.OCCT.Native.OcctUnderSplitGuard.CheckOverlap(notch, null, options, "cells");
+            List<string> notchUndecided = SAM.Geometry.OCCT.Native.OcctUnderSplitGuard.CheckDisjoint(notch, null, options, "cells", SAM.Geometry.OCCT.Native.OcctUnderSplitGuard.NoExactTest);
+            List<string> intrudingFailures = SAM.Geometry.OCCT.Native.OcctUnderSplitGuard.CheckOverlap(intruding, null, options, "cells");
+            double? notchCommon = SAM.Geometry.OCCT.Native.OcctCellComplexBuilder.CommonVolume(lShape, notchBox, options);
+            double? intrudingCommon = SAM.Geometry.OCCT.Native.OcctCellComplexBuilder.CommonVolume(lShape, intrudingBox, options);
+
+            // Assert
+            Assert.Empty(notchFailures);
+            Assert.Contains("could not be established", Assert.Single(notchUndecided));
+            Assert.Equal(0, notchCommon);
+            Assert.StartsWith("cells 0 and 1 overlap", Assert.Single(intrudingFailures));
+            Assert.True(intrudingCommon.HasValue && System.Math.Abs(intrudingCommon.Value - 0.44) <= 1e-6, string.Format(System.Globalization.CultureInfo.InvariantCulture, "common volume {0}", intrudingCommon));
+        }
+
         [SkippableFact]
         public void Shells_JulyPanelsValidSewWithRetainTopology_KeepsTopologyContract()
         {

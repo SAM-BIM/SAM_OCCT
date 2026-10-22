@@ -430,6 +430,104 @@ namespace SAM.Geometry.OCCT.Native
             }
         }
 
+        /// <summary>
+        /// The volume common to two closed shells, by the native boolean Common behind <see cref="TryIntersection"/>
+        /// (sam_occt_shells_intersection). Common pieces no thicker than the glue band max(Tolerance, FuzzyTolerance)
+        /// (mean thickness 2V/S, the sliver measure of <see cref="OcctUnderSplitGuard.ValidateCells"/>) are seams
+        /// between touching cells and are not counted. 0 when the kernel finds no common solid (status 40); null when
+        /// it cannot decide (shell not serializable, kernel error, native library missing). Used by the sew guard's
+        /// overlap test only. Self-contained: it frees its own result handle and touches no build or retained topology.
+        /// </summary>
+        internal static double? CommonVolume(Shell first, Shell second, OcctBuildOptions options)
+        {
+            options = options ?? new OcctBuildOptions();
+            OcctCellComplexResult scratch = new OcctCellComplexResult();
+            IntPtr resultHandle = IntPtr.Zero;
+            try
+            {
+                if (first == null || second == null
+                    || !OcctNativeInputBuilder.TryBuild(new[] { first }, options, scratch, "SAM_OCCT_INTERSECTION_TARGET_EMPTY", "No serializable target shell geometry was found.", out OcctNativeInput firstInput)
+                    || !OcctNativeInputBuilder.TryBuild(new[] { second }, options, scratch, "SAM_OCCT_INTERSECTION_TOOL_EMPTY", "No serializable tool shell geometry was found.", out OcctNativeInput secondInput))
+                {
+                    return null;
+                }
+
+                int status = OcctNativeMethods.sam_occt_shells_intersection(
+                    firstInput.Coordinates,
+                    firstInput.Coordinates.Length / 3,
+                    firstInput.LoopPointCounts,
+                    firstInput.LoopPointCounts.Length,
+                    firstInput.FaceLoopCounts,
+                    firstInput.FaceCount,
+                    firstInput.ShellFaceCounts,
+                    firstInput.ShellCount,
+                    secondInput.Coordinates,
+                    secondInput.Coordinates.Length / 3,
+                    secondInput.LoopPointCounts,
+                    secondInput.LoopPointCounts.Length,
+                    secondInput.FaceLoopCounts,
+                    secondInput.FaceCount,
+                    secondInput.ShellFaceCounts,
+                    secondInput.ShellCount,
+                    options.Tolerance,
+                    options.FuzzyTolerance,
+                    options.RunParallel ? 1 : 0,
+                    out resultHandle);
+
+                if (status == 40)
+                {
+                    return 0;
+                }
+
+                if (status != 0 || !DecodeResult(resultHandle, scratch))
+                {
+                    return null;
+                }
+
+                double band = System.Math.Max(options.Tolerance, options.FuzzyTolerance);
+                double volume = 0;
+                foreach (OcctCell cell in scratch.Cells)
+                {
+                    double cellVolume = System.Math.Abs(cell?.Volume ?? double.NaN);
+                    double area = cell?.Shell?.Face3Ds?.Sum(x => x?.GetArea() ?? 0) ?? 0;
+                    if (double.IsNaN(cellVolume) || double.IsInfinity(cellVolume) || double.IsNaN(area))
+                    {
+                        return null;
+                    }
+
+                    if (area <= 0 || 2 * cellVolume / area > band)
+                    {
+                        volume += cellVolume;
+                    }
+                }
+
+                return volume;
+            }
+            catch (DllNotFoundException)
+            {
+                return null;
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return null;
+            }
+            finally
+            {
+                if (resultHandle != IntPtr.Zero)
+                {
+                    try
+                    {
+                        OcctNativeMethods.sam_occt_free_result(resultHandle);
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                scratch.Dispose();
+            }
+        }
+
         /// <summary>The isolated direct MakerVolume build used as the sew guard's alternative (see <see cref="TryDirectBuild"/>).</summary>
         internal delegate int DirectBuild(OcctCellComplexResult candidate, out bool decoded);
 
@@ -437,8 +535,9 @@ namespace SAM.Geometry.OCCT.Native
         /// Adopts a successful sew-then-MakerVolume candidate. With <see cref="OcctBuildOptions.ValidateSewCoverage"/>
         /// it is first checked against a direct MakerVolume build made in isolation:
         /// <list type="bullet">
-        /// <item>A sew build with a non-finite or non-positive signed cell volume, or with overlapping cells, is
-        /// invalid. The direct build replaces it only if it passes its own cell and coverage checks
+        /// <item>A sew build with a non-finite or non-positive signed cell volume, or with cells that are not shown
+        /// disjoint (<see cref="OcctUnderSplitGuard.CheckOverlap"/>, always run), is invalid. The direct build
+        /// replaces it only if it passes its own cell and coverage checks
         /// (<see cref="OcctUnderSplitGuard.EvaluateReplacement"/>); otherwise the build fails closed with an Error and
         /// no cells.</item>
         /// <item>A valid sew build whose coverage shows faces cutting through a cell or unused, or whose total volume
@@ -520,10 +619,10 @@ namespace SAM.Geometry.OCCT.Native
 
                 bool suspect = OcctUnderSplitGuard.IsSuspect(sewCoverage);
 
-                // Overlap test (pairwise point-in-cell): run when something is already in doubt, or when no direct
-                // volume is available to compare. A clean, positive sew build that agrees with the direct volume
-                // cannot hide an overlap: overlapping cells add volume that only missing (uncovered) space could offset.
-                if (invalidity.Count == 0 && (suspect || volumeConflict != null || directFailures.Count != 0 || sewCoverage == null))
+                // Disjointness of the sew cells, always: clean coverage and an agreeing total volume prove nothing
+                // (both builds can hold the same duplicated cells). A pair that cannot be shown disjoint makes the sew
+                // build invalid.
+                if (invalidity.Count == 0)
                 {
                     IEnumerable<Point3D> probes = directCells == null ? null : OcctUnderSplitGuard.InternalPoints(directCells, options);
                     invalidity.AddRange(OcctUnderSplitGuard.CheckOverlap(sewCandidate.Cells, probes, options, "sew cells"));
@@ -651,7 +750,7 @@ namespace SAM.Geometry.OCCT.Native
         private static bool ReplaceInvalidSew(List<Face3D> face3Ds, OcctBuildOptions options, OcctCellComplexResult sewCandidate, OcctCellComplexResult directCandidate, IReadOnlyList<OcctCell> directCells, List<string> invalidity, List<string> directFailures, double minArea, OcctCellComplexResult result)
         {
             result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_SEW_BUILD_INVALID", string.Format(
-                "The sew build is invalid and cannot be used: {0}{1}. Sew: {2} cell(s), total volume {3:0.###} m3.",
+                "The sew build failed validation and cannot be used: {0}{1}. Sew: {2} cell(s), total volume {3:0.###} m3.",
                 string.Join("; ", invalidity.Take(8)), invalidity.Count > 8 ? "; ..." : string.Empty, sewCandidate.Cells.Count, OcctUnderSplitGuard.TotalVolume(sewCandidate.Cells)));
 
             List<string> failures = new List<string>(directFailures);
