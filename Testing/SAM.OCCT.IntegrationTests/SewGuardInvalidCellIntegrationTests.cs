@@ -496,6 +496,26 @@ namespace SAM.OCCT.IntegrationTests
         }
 
 
+        [SkippableFact]
+        public void CommonVolume_ProofBudgetSpent_UndecidedNotSeam()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange (R4): the 0.5 mm L seam, whose fine-pass piece only the glue-band proof can classify.
+            Shell[] pair = GlueBandPair("L-notch seam 0.5 mm");
+            List<OcctCell> cells = pair.Select(x => new OcctCell(x, x.Volume())).ToList();
+
+            // Act: the proof with its budget and with a single box.
+            double? decided = SAM.Geometry.OCCT.Native.OcctCellComplexBuilder.CommonVolume(pair[0], pair[1], GrasshopperRecipe());
+            double? undecided = SAM.Geometry.OCCT.Native.OcctCellComplexBuilder.CommonVolume(pair[0], pair[1], GrasshopperRecipe(), proofBudget: 1);
+            List<string> failures = SAM.Geometry.OCCT.Native.OcctUnderSplitGuard.CheckDisjoint(cells, null, GrasshopperRecipe(), "cells", (first, second) => SAM.Geometry.OCCT.Native.OcctCellComplexBuilder.CommonVolume(first, second, GrasshopperRecipe(), proofBudget: 1));
+
+            // Assert: an undecided piece is never a seam; the pair fails closed.
+            Assert.Equal(0, decided);
+            Assert.Null(undecided);
+            Assert.Contains("could not be established", Assert.Single(failures));
+        }
+
         public static IEnumerable<object[]> GlueBandOrchestrationCases()
         {
             foreach (object[] motion in RigidMotions())

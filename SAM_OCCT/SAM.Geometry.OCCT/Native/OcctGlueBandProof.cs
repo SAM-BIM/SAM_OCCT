@@ -55,6 +55,7 @@ namespace SAM.Geometry.OCCT.Native
 
         private sealed class Facet
         {
+            public Face3D Face;
             public int Cell;
             public double[] Origin;
             public double[] Normal;
@@ -182,9 +183,9 @@ namespace SAM.Geometry.OCCT.Native
                     continue;
                 }
 
-                // Otherwise at the middle, across the faces that cross the box (or along its longest side): as boxes
-                // shrink, the bounds approach the true largest depth.
-                int axis = SplitAxis(facets, ranges, frame, lo, hi);
+                // Otherwise at the middle: where most halves are then resolved (bounded or empty), else across the faces
+                // that cross the box, else along its longest side. As boxes shrink, the bounds approach the true depth.
+                int axis = SplitAxis(facets, ranges, frame, lo, hi, bounds, limit, clearance);
 
                 double middle = (lo[axis] + hi[axis]) / 2;
                 double[] lowHi = (double[])hi.Clone();
@@ -404,8 +405,20 @@ namespace SAM.Geometry.OCCT.Native
         // The axis to split when the bounds do not discriminate: across the faces that cross the box (largest extent
         // times normal component), so that a box beside a wall becomes a plate and an extrusion is not cut along its
         // length; the longest axis when no face crosses the box.
-        private static int SplitAxis(List<Facet> facets, List<double[]> ranges, double[][] frame, double[] lo, double[] hi)
+        private static int SplitAxis(List<Facet> facets, List<double[]> ranges, double[][] frame, double[] lo, double[] hi, double[] bounds, double limit, double clearance)
         {
+            // One step ahead: the halves resolved by the rules of Exceeds (bounded by the limit, or empty).
+            int[] resolved = new int[3];
+            for (int a = 0; a < 3; a++)
+            {
+                double[] lowerHi = (double[])hi.Clone();
+                lowerHi[a] = (lo[a] + hi[a]) / 2;
+                double[] upperLo = (double[])lo.Clone();
+                upperLo[a] = lowerHi[a];
+                resolved[a] = (bounds[1 + 2 * a] <= limit || Empty(facets, ranges, frame, lo, lowerHi, clearance, null) ? 1 : 0)
+                    + (bounds[2 + 2 * a] <= limit || Empty(facets, ranges, frame, upperLo, hi, clearance, null) ? 1 : 0);
+            }
+
             double[] weights = new double[3];
             double[] centre = Point(frame, (lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2);
             for (int f = 0; f < facets.Count; f++)
@@ -423,12 +436,13 @@ namespace SAM.Geometry.OCCT.Native
                 }
             }
 
+            // Only sides at least a tenth of the longest compete, so that a vanishing side is never cut again.
+            double longest = System.Math.Max(hi[0] - lo[0], System.Math.Max(hi[1] - lo[1], hi[2] - lo[2]));
+            double[] scores = Enumerable.Range(0, 3).Select(a => hi[a] - lo[a] >= 0.1 * longest ? weights[a] * (hi[a] - lo[a]) : 0).ToArray();
             int axis = 0;
             for (int a = 1; a < 3; a++)
             {
-                double score = weights[a] * (hi[a] - lo[a]);
-                double best = weights[axis] * (hi[axis] - lo[axis]);
-                if (score > best || (score == best && hi[a] - lo[a] > hi[axis] - lo[axis]))
+                if (resolved[a] > resolved[axis] || (resolved[a] == resolved[axis] && (scores[a] > scores[axis] || (scores[a] == scores[axis] && hi[a] - lo[a] > hi[axis] - lo[axis]))))
                 {
                     axis = a;
                 }
@@ -786,7 +800,7 @@ namespace SAM.Geometry.OCCT.Native
                     return false;
                 }
 
-                Facet facet = new Facet { Cell = cell, Origin = new[] { plane.Origin.X, plane.Origin.Y, plane.Origin.Z }, Normal = new[] { normal.X / length, normal.Y / length, normal.Z / length } };
+                Facet facet = new Facet { Face = face3D, Cell = cell, Origin = new[] { plane.Origin.X, plane.Origin.Y, plane.Origin.Z }, Normal = new[] { normal.X / length, normal.Y / length, normal.Z / length } };
                 facet.U = Perpendicular(facet.Normal);
                 facet.V = Cross(facet.Normal, facet.U);
                 List<IClosedPlanar3D> loops = new List<IClosedPlanar3D> { face3D.GetExternalEdge3D() };
@@ -834,7 +848,8 @@ namespace SAM.Geometry.OCCT.Native
             return true;
         }
 
-        // Convex facets as they are; a non-convex facet (or one with holes) only through its edges.
+        // Convex facets as they are; a non-convex facet (or one with holes) through its edges and its verified
+        // triangles (see VerifiedTriangles).
         private static List<Element> Elements(List<Facet> facets)
         {
             List<Element> elements = new List<Element>();
@@ -846,6 +861,7 @@ namespace SAM.Geometry.OCCT.Native
                     continue;
                 }
 
+                elements.AddRange(VerifiedTriangles(facet).Select(x => new Element { Facet = x, Min = x.Min, Max = x.Max }));
                 foreach (double[][] loop in facet.Loops3D)
                 {
                     for (int i = 0, j = loop.Length - 1; i < loop.Length; j = i++)
@@ -864,6 +880,144 @@ namespace SAM.Geometry.OCCT.Native
             }
 
             return elements;
+        }
+
+        // Convex pieces of a non-convex facet for the upper bound, which needs subsets of the boundary: SAM's
+        // triangulation of the face, each triangle shrunk by 1e-9 m towards its centroid and kept only when its
+        // centroid lies inside the facet and no facet edge meets it (its interior then lies inside the facet). A
+        // triangulation error can only drop triangles (a weaker bound), never add a point off the boundary.
+        private static List<Facet> VerifiedTriangles(Facet facet)
+        {
+            List<Facet> result = new List<Facet>();
+            List<Triangle3D> triangle3Ds;
+            try
+            {
+                triangle3Ds = facet.Face?.Triangulate(1e-9);
+            }
+            catch (System.Exception)
+            {
+                triangle3Ds = null;
+            }
+
+            foreach (Triangle3D triangle3D in triangle3Ds ?? new List<Triangle3D>())
+            {
+                List<Point3D> point3Ds = (triangle3D as ISegmentable3D)?.GetPoints();
+                if (point3Ds == null || point3Ds.Count != 3)
+                {
+                    continue;
+                }
+
+                double[] loop = new double[6];
+                for (int i = 0; i < 3; i++)
+                {
+                    double[] relative = { point3Ds[i].X - facet.Origin[0], point3Ds[i].Y - facet.Origin[1], point3Ds[i].Z - facet.Origin[2] };
+                    loop[2 * i] = Dot(relative, facet.U);
+                    loop[2 * i + 1] = Dot(relative, facet.V);
+                }
+
+                double cx = (loop[0] + loop[2] + loop[4]) / 3;
+                double cy = (loop[1] + loop[3] + loop[5]) / 3;
+                bool usable = true;
+                for (int i = 0; i < 3 && usable; i++)
+                {
+                    double dx = cx - loop[2 * i];
+                    double dy = cy - loop[2 * i + 1];
+                    double length = System.Math.Sqrt(dx * dx + dy * dy);
+                    usable = length > 2e-9;
+                    if (usable)
+                    {
+                        loop[2 * i] += dx * 1e-9 / length;
+                        loop[2 * i + 1] += dy * 1e-9 / length;
+                    }
+                }
+
+                if (!usable || Cross2D(loop, 0, 1, 2) == 0 || !Inside2D(facet, cx, cy) || facet.Loops2D.Any(x => LoopMeetsTriangle(x, loop)))
+                {
+                    continue;
+                }
+
+                Facet triangle = new Facet { Face = null, Cell = facet.Cell, Origin = facet.Origin, Normal = facet.Normal, U = facet.U, V = facet.V, Convex = true };
+                triangle.Loops2D.Add(loop);
+                double[][] loop3D = new double[3][];
+                for (int i = 0; i < 3; i++)
+                {
+                    loop3D[i] = new[]
+                    {
+                        facet.Origin[0] + loop[2 * i] * facet.U[0] + loop[2 * i + 1] * facet.V[0],
+                        facet.Origin[1] + loop[2 * i] * facet.U[1] + loop[2 * i + 1] * facet.V[1],
+                        facet.Origin[2] + loop[2 * i] * facet.U[2] + loop[2 * i + 1] * facet.V[2],
+                    };
+                }
+
+                triangle.Loops3D.Add(loop3D);
+                triangle.Min = Enumerable.Range(0, 3).Select(a => loop3D.Min(x => x[a])).ToArray();
+                triangle.Max = Enumerable.Range(0, 3).Select(a => loop3D.Max(x => x[a])).ToArray();
+                result.Add(triangle);
+            }
+
+            return result;
+        }
+
+        // Twice the signed area of the triangle (i, j, k) of a 2D loop.
+        private static double Cross2D(double[] loop, int i, int j, int k)
+        {
+            return (loop[2 * j] - loop[2 * i]) * (loop[2 * k + 1] - loop[2 * i + 1]) - (loop[2 * j + 1] - loop[2 * i + 1]) * (loop[2 * k] - loop[2 * i]);
+        }
+
+        // Whether an edge of the closed loop meets the closed triangle (both 2D): an edge end inside the triangle,
+        // or an edge crossing or touching a triangle side.
+        private static bool LoopMeetsTriangle(double[] loop, double[] triangle)
+        {
+            int count = loop.Length / 2;
+            for (int i = 0, j = count - 1; i < count; j = i++)
+            {
+                double[] edge = { loop[2 * j], loop[2 * j + 1], loop[2 * i], loop[2 * i + 1] };
+                if (InTriangle(triangle, edge[0], edge[1]) || InTriangle(triangle, edge[2], edge[3]))
+                {
+                    return true;
+                }
+
+                for (int s = 0; s < 3; s++)
+                {
+                    int t = (s + 1) % 3;
+                    if (SegmentsMeet(edge, new[] { triangle[2 * s], triangle[2 * s + 1], triangle[2 * t], triangle[2 * t + 1] }))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool InTriangle(double[] triangle, double x, double y)
+        {
+            double[] points = { triangle[0], triangle[1], triangle[2], triangle[3], triangle[4], triangle[5], x, y };
+            double a = Cross2D(points, 0, 1, 3);
+            double b = Cross2D(points, 1, 2, 3);
+            double c = Cross2D(points, 2, 0, 3);
+            return (a >= 0 && b >= 0 && c >= 0) || (a <= 0 && b <= 0 && c <= 0);
+        }
+
+        // Closed segments (x0, y0, x1, y1) meet, collinear overlaps included.
+        private static bool SegmentsMeet(double[] p, double[] q)
+        {
+            double[] points = { p[0], p[1], p[2], p[3], q[0], q[1], q[2], q[3] };
+            double d1 = Cross2D(points, 2, 3, 0);
+            double d2 = Cross2D(points, 2, 3, 1);
+            double d3 = Cross2D(points, 0, 1, 2);
+            double d4 = Cross2D(points, 0, 1, 3);
+            if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)))
+            {
+                return true;
+            }
+
+            return (d1 == 0 && OnSegment(q, p[0], p[1])) || (d2 == 0 && OnSegment(q, p[2], p[3])) || (d3 == 0 && OnSegment(p, q[0], q[1])) || (d4 == 0 && OnSegment(p, q[2], q[3]));
+        }
+
+        private static bool OnSegment(double[] segment, double x, double y)
+        {
+            return x >= System.Math.Min(segment[0], segment[2]) && x <= System.Math.Max(segment[0], segment[2]) && y >= System.Math.Min(segment[1], segment[3]) && y <= System.Math.Max(segment[1], segment[3]);
         }
 
         // A simple polygon whose turns all have the sign of its area and add up to one full turn.

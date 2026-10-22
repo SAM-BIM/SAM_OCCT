@@ -164,6 +164,38 @@ namespace SAM.OCCT.UnitTests
             Assert.True(exceeds == expected, string.Format(System.Globalization.CultureInfo.InvariantCulture, "width {0} ({1}): {2}", width, motion, exceeds));
         }
 
+        public static IEnumerable<object[]> TiltedLNotchSeams()
+        {
+            // Notch box turned about the reflex edge (1, 1): the seam widens by the angle times 1 m at one leg end.
+            foreach (string motion in new[] { "identity", "rotate oblique, translate" })
+            {
+                yield return new object[] { motion, 1e-6, 0.5e-3, false };
+                yield return new object[] { motion, 1e-4, 0.8e-3, false };
+                yield return new object[] { motion, 1e-4, 0.9e-3, true };
+                yield return new object[] { motion, 3e-4, 0.8e-3, true };
+            }
+        }
+
+        [Theory]
+        [MemberData(nameof(TiltedLNotchSeams))]
+        public void Exceeds_TiltedLShapedSeam_DecidedByBallDiameter(string motion, double angle, double width, bool expected)
+        {
+            // Arrange: no face of the notch box is parallel to the L (decoded geometry is never exactly aligned).
+            // 1e-4 rad and 0.8 mm: at most 0.9 mm wide (seam); 3e-4 rad: 1.1 mm at one end (overlap). The piece
+            // passed is a covering L region, 0.4 mm wider than the seam.
+            Func<double, double, Point3D> turned = (x, y) => new Point3D(1 + (x - 1) * Math.Cos(angle) - (y - 1) * Math.Sin(angle), 1 + (x - 1) * Math.Sin(angle) + (y - 1) * Math.Cos(angle), 0);
+            Shell notchBox = Prism(new[] { turned(1 - width, 1 - width), turned(2, 1 - width), turned(2, 2), turned(1 - width, 2) }, 0, 1);
+            double w = width + 0.4e-3;
+            Shell region = Prism(new[] { new Point3D(1 - w, 1 - w, 0), new Point3D(2, 1 - w, 0), new Point3D(2, 1, 0), new Point3D(1, 1, 0), new Point3D(1, 2, 0), new Point3D(1 - w, 2, 0) }, 0, 1);
+            Shell[] shells = { LNotch(width)[0], notchBox, region };
+
+            // Act
+            bool? exceeds = Exceeds(shells, motion);
+
+            // Assert
+            Assert.True(exceeds == expected, string.Format(System.Globalization.CultureInfo.InvariantCulture, "angle {0}, width {1} ({2}): {3}", angle, width, motion, exceeds));
+        }
+
         [Fact]
         public void CornerTriangle_ReviewWitness_LiesDeeperThanHalfBandInBothCells()
         {

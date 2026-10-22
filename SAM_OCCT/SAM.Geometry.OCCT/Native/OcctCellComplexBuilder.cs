@@ -448,8 +448,9 @@ namespace SAM.Geometry.OCCT.Native
         /// 0 when nothing beyond the band is common; null when it cannot be decided (shell not serializable, kernel
         /// error, native library missing, or a piece that neither test can classify). Used by the sew guard's overlap
         /// test only. Self-contained: it frees its own result handles and touches no build or retained topology.
+        /// proofBudget: the work budget of the proof per piece (tests lower it).
         /// </summary>
-        internal static double? CommonVolume(Shell first, Shell second, OcctBuildOptions options)
+        internal static double? CommonVolume(Shell first, Shell second, OcctBuildOptions options, int proofBudget = OcctGlueBandProof.DefaultBudget)
         {
             options = options ?? new OcctBuildOptions();
             double band = OcctUnderSplitGuard.GlueBand(options);
@@ -473,7 +474,7 @@ namespace SAM.Geometry.OCCT.Native
                 // The proof covers the piece enlarged by the kernel's fuzzy value: the decoded piece may differ from
                 // the exact common region by that much.
                 bool? exceeds = OcctUnderSplitGuard.ExceedsBand(piece.Shell, piece.Center, options)
-                    ?? OcctGlueBandProof.Exceeds(first, second, piece.Shell, fuzzyTolerance + options.Tolerance, options);
+                    ?? OcctGlueBandProof.Exceeds(first, second, piece.Shell, fuzzyTolerance + options.Tolerance, options, proofBudget);
                 if (exceeds == true)
                 {
                     volume += pieceVolume;
