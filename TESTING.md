@@ -1858,7 +1858,14 @@ Record: `documentation/Sew-Guard-Invalid-Cells-Q4.md`.
   handle released; valid contract kept), volume conflict only (sew kept with a Warning), a suspect sew build
   in volume conflict (independently valid direct adopted), the unchanged under-split route and the unchanged
   opt-out. Also the internal-point fallback on an exact roof-wedge cell from a real direct build, and closure
-  at the glue band (replacement route) versus Tolerance (under-split route).
+  at the glue band (replacement route) versus Tolerance (under-split route). Glue-band policy (review R3), at
+  production tolerances in six rigid poses (identity, two rotations about Z, an oblique rotation, a far
+  translation, oblique plus translation): half-band seams, face-touching and half-band gaps pass without the
+  exact test; 1.5-band and 1 cm slabs, partial overlap, duplicates and containment are rejected, at pair level
+  and through the full builder; a point inside both cells but within half the band of a boundary proves
+  nothing; and `ExceedsBand` classifies common pieces (slabs, compact cubes either side of the band, a 0.2 m L
+  strip; an L-shaped seam stays undecided). `Moved_EveryPose_IsRigid` guards the poses themselves: SAM's
+  axis-angle `Transform3D.GetRotation` is not orthonormal and is not used.
 - `SewGuardInvalidCellIntegrationTests` (native-gated): two fixed Revit-home `Solve3D` outputs
   (`Fixtures/Revit-Reconstruction/`) at the eight recorded rigid offsets. The guarded build must match the
   inverse-translated direct build cell by cell (signed volume and bounding box within 1e-3), with positive
@@ -1866,7 +1873,9 @@ Record: `documentation/Sew-Guard-Invalid-Cells-Q4.md`.
   a cluster from a non-positive or invalid cell: a positive-cell cluster or no cluster with an Error. Plus
   RetainTopology fail-closed (no shells, no cluster), the valid RetainTopology contract, and the native exact
   overlap test (`OcctCellComplexBuilder.CommonVolume`: partial overlap, duplicate, containment, face-touching,
-  disjoint; the L-shape notch and intrusion through `CheckOverlap`).
+  disjoint; the L-shape notch and intrusion through `CheckOverlap`). R3: `CommonVolume` and `CheckOverlap` with
+  the real kernel in four rigid poses for slab and L-notch seams and overlaps either side of the band, compact
+  corner overlaps of 0.6 mm, 2 mm and 9 mm (the last two were lost before), face-touching and duplicates.
 
 ```powershell
 dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~SewInvalidCellGuardTests"
