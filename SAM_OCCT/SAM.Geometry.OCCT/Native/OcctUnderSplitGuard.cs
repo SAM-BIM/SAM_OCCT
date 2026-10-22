@@ -248,8 +248,9 @@ namespace SAM.Geometry.OCCT.Native
         /// a cell lies in the convex hull of its vertices). The common region then lies in a slab no thicker than b,
         /// which holds no ball of diameter greater than b.</item>
         /// <item>Otherwise (e.g. a cell in the notch of an L-shaped one) the exact common volume, measured by the
-        /// same policy (see <see cref="ExceedsBand"/>): touching when it is 0, an overlap when positive, and a failure
-        /// when it cannot be computed. A null <paramref name="commonVolume"/> is the native boolean Common.</item>
+        /// same policy (see <see cref="ExceedsBand"/> and, for pieces it leaves undecided, <see cref="OcctGlueBandProof"/>):
+        /// touching when it is 0, an overlap when positive, and a failure when it cannot be computed. A null
+        /// <paramref name="commonVolume"/> is the native boolean Common.</item>
         /// </list>
         /// </summary>
         internal static List<string> CheckDisjoint(IReadOnlyList<OcctCell> cells, IEnumerable<Point3D> probes, OcctBuildOptions options, string label, CommonVolume commonVolume)

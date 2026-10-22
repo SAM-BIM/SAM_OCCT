@@ -436,62 +436,60 @@ namespace SAM.Geometry.OCCT.Native
         /// policy (<see cref="OcctUnderSplitGuard.CheckDisjoint"/>): each common piece is classified by
         /// <see cref="OcctUnderSplitGuard.ExceedsBand"/>, and only pieces holding a ball thicker than the band count.
         /// <para>
-        /// The kernel runs first with a fine fuzzy value, a tenth of the band, and a decode threshold far below the
-        /// volume of a band-wide ball, so that no compact piece thicker than the band is lost: at the band itself the
-        /// kernel also glues away compact pieces up to a few bands wide, depending on their orientation, and the
-        /// decoder drops solids whose volume is below Tolerance (in m3). A piece that the managed tests can neither
-        /// place in a band-thin slab nor show to hold a band-wide ball (e.g. an L-shaped seam) is then judged by the
-        /// kernel at the band: if no common solid remains there, it is a seam.
+        /// The kernel runs with a fine fuzzy value, a tenth of the band, and a decode threshold far below the volume
+        /// of a band-wide ball, so that no compact piece thicker than the band is lost: at the band itself the kernel
+        /// also glues away compact pieces up to a few bands wide, depending on their orientation, and the decoder
+        /// drops solids whose volume is below Tolerance (in m3). A piece that the managed tests can neither place in
+        /// a band-thin slab nor show to hold a band-wide ball (e.g. an L-shaped seam, or a compact piece whose
+        /// candidate points all lie too near its boundary) is decided on the two cells themselves by
+        /// <see cref="OcctGlueBandProof"/>. Whether the kernel at a coarser fuzzy value still finds the piece is not
+        /// evidence: a 2 mm triangular prism holding a 1.17 mm ball vanishes at fuzzy = band.
         /// </para>
         /// 0 when nothing beyond the band is common; null when it cannot be decided (shell not serializable, kernel
-        /// error, native library missing, or a piece still unclassified). Used by the sew guard's overlap test only.
-        /// Self-contained: it frees its own result handles and touches no build or retained topology.
+        /// error, native library missing, or a piece that neither test can classify). Used by the sew guard's overlap
+        /// test only. Self-contained: it frees its own result handles and touches no build or retained topology.
         /// </summary>
         internal static double? CommonVolume(Shell first, Shell second, OcctBuildOptions options)
         {
             options = options ?? new OcctBuildOptions();
             double band = OcctUnderSplitGuard.GlueBand(options);
-            foreach (double fuzzyTolerance in new[] { System.Math.Max(options.Tolerance, band / 10), band })
+            double fuzzyTolerance = System.Math.Max(options.Tolerance, band / 10);
+            List<OcctCell> pieces = CommonPieces(first, second, options, fuzzyTolerance);
+            if (pieces == null)
             {
-                List<OcctCell> pieces = CommonPieces(first, second, options, fuzzyTolerance);
-                if (pieces == null)
+                return null;
+            }
+
+            double volume = 0;
+            bool undecided = false;
+            foreach (OcctCell piece in pieces)
+            {
+                double pieceVolume = System.Math.Abs(piece?.Volume ?? double.NaN);
+                if (double.IsNaN(pieceVolume) || double.IsInfinity(pieceVolume))
                 {
                     return null;
                 }
 
-                double volume = 0;
-                bool undecided = false;
-                foreach (OcctCell piece in pieces)
+                // The proof covers the piece enlarged by the kernel's fuzzy value: the decoded piece may differ from
+                // the exact common region by that much.
+                bool? exceeds = OcctUnderSplitGuard.ExceedsBand(piece.Shell, piece.Center, options)
+                    ?? OcctGlueBandProof.Exceeds(first, second, piece.Shell, fuzzyTolerance + options.Tolerance, options);
+                if (exceeds == true)
                 {
-                    double pieceVolume = System.Math.Abs(piece?.Volume ?? double.NaN);
-                    if (double.IsNaN(pieceVolume) || double.IsInfinity(pieceVolume))
-                    {
-                        return null;
-                    }
-
-                    bool? exceeds = OcctUnderSplitGuard.ExceedsBand(piece.Shell, piece.Center, options);
-                    if (exceeds == true)
-                    {
-                        volume += pieceVolume;
-                    }
-                    else if (exceeds == null)
-                    {
-                        undecided = true;
-                    }
+                    volume += pieceVolume;
                 }
-
-                if (volume > 0)
+                else if (exceeds == null)
                 {
-                    return volume;
-                }
-
-                if (!undecided)
-                {
-                    return 0;
+                    undecided = true;
                 }
             }
 
-            return null;
+            if (volume > 0)
+            {
+                return volume;
+            }
+
+            return undecided ? (double?)null : 0;
         }
 
         // The decoded pieces of the native Common of two shells at the given fuzzy value (empty for status 40, no

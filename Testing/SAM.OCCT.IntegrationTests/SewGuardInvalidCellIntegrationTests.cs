@@ -273,6 +273,27 @@ namespace SAM.OCCT.IntegrationTests
             return new Shell(faces);
         }
 
+        // R4 (review reproduction): the unit cube and a prism over (1 - s, 1), (1, 1 - s), (2, 2), z 0.998..2. Their
+        // common region is a right isosceles prism with legs s and height 2 mm, holding a ball of diameter
+        // 2 s/(2 + sqrt 2): 1.17 mm for s = 2 mm (an overlap), 0.94 mm for s = 1.6 mm (a seam).
+        private static Shell[] CornerPrism(double side)
+        {
+            Point3D[] footprint = { new Point3D(1 - side, 1, 0.998), new Point3D(1, 1 - side, 0.998), new Point3D(2, 2, 0.998) };
+            List<Face3D> faces = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(footprint),
+                TestGeometry.CreatePlanarFace(footprint.Select(x => new Point3D(x.X, x.Y, 2)).ToArray()),
+            };
+            for (int i = 0; i < footprint.Length; i++)
+            {
+                Point3D a = footprint[i];
+                Point3D b = footprint[(i + 1) % footprint.Length];
+                faces.Add(TestGeometry.CreatePlanarFace(a, b, new Point3D(b.X, b.Y, 2), new Point3D(a.X, a.Y, 2)));
+            }
+
+            return new[] { TestGeometry.CreateBox(0, 0, 0, 1, 1, 1), new Shell(faces) };
+        }
+
         public static IEnumerable<object[]> CommonVolumeCases()
         {
             // Unit-depth/height box: x origin, x size, expected common volume with the box x 0..2 (2 m3).
@@ -368,6 +389,12 @@ namespace SAM.OCCT.IntegrationTests
                 case "corner cube 9 mm": return new[] { cube, TestGeometry.CreateBox(0.991, 0.991, 0.991, 1, 1, 1) };
                 case "L-notch seam 0.5 mm": return new[] { LShape(), TestGeometry.CreateBox(0.9995, 0.9995, 0, 1.0005, 1.0005, 1) };
                 case "L-notch overlap 1.5 mm": return new[] { LShape(), TestGeometry.CreateBox(0.9985, 0.9985, 0, 1.0015, 1.0015, 1) };
+                case "L-notch seam 0.8 mm": return new[] { LShape(), TestGeometry.CreateBox(0.9992, 0.9992, 0, 1.0008, 1.0008, 1) };
+                case "L-notch overlap 0.9 mm": return new[] { LShape(), TestGeometry.CreateBox(0.9991, 0.9991, 0, 1.0009, 1.0009, 1) };
+                case "L-notch overlap 1 mm": return new[] { LShape(), TestGeometry.CreateBox(0.999, 0.999, 0, 1.001, 1.001, 1) };
+                case "corner prism 1.6 mm": return CornerPrism(0.0016);
+                case "corner prism 1.75 mm": return CornerPrism(0.00175);
+                case "corner prism 2 mm (R4)": return CornerPrism(0.002);
                 case "face-touching": return new[] { cube, TestGeometry.CreateBox(1, 0, 0, 1, 1, 1) };
                 case "duplicate": return new[] { cube, TestGeometry.CreateBox(0, 0, 0, 1, 1, 1) };
                 default: throw new System.ArgumentException(name);
@@ -386,6 +413,12 @@ namespace SAM.OCCT.IntegrationTests
                 new object[] { "corner cube 9 mm", 7.29e-7 },
                 new object[] { "L-notch seam 0.5 mm", 0.0 },
                 new object[] { "L-notch overlap 1.5 mm", 0.00300225 },
+                new object[] { "L-notch seam 0.8 mm", 0.0 },
+                new object[] { "L-notch overlap 0.9 mm", 0.00180081 },
+                new object[] { "L-notch overlap 1 mm", 0.002001 },
+                new object[] { "corner prism 1.6 mm", 0.0 },
+                new object[] { "corner prism 1.75 mm", 3.0625e-9 },
+                new object[] { "corner prism 2 mm (R4)", 4e-9 },
                 new object[] { "face-touching", 0.0 },
                 new object[] { "duplicate", 1.0 },
             };
@@ -427,6 +460,12 @@ namespace SAM.OCCT.IntegrationTests
                 yield return new object[] { motion[0], "slab overlap 1.5 mm", true };
                 yield return new object[] { motion[0], "L-notch overlap 1.5 mm", true };
                 yield return new object[] { motion[0], "corner cube 2 mm", true };
+                yield return new object[] { motion[0], "L-notch seam 0.8 mm", false };
+                yield return new object[] { motion[0], "L-notch overlap 0.9 mm", true };
+                yield return new object[] { motion[0], "L-notch overlap 1 mm", true };
+                yield return new object[] { motion[0], "corner prism 1.6 mm", false };
+                yield return new object[] { motion[0], "corner prism 1.75 mm", true };
+                yield return new object[] { motion[0], "corner prism 2 mm (R4)", true };
                 yield return new object[] { motion[0], "duplicate", true };
             }
         }
@@ -456,6 +495,59 @@ namespace SAM.OCCT.IntegrationTests
             }
         }
 
+
+        public static IEnumerable<object[]> GlueBandOrchestrationCases()
+        {
+            foreach (object[] motion in RigidMotions())
+            {
+                yield return new object[] { motion[0], "corner prism 2 mm (R4)", true };
+                yield return new object[] { motion[0], "corner prism 1.6 mm", false };
+                yield return new object[] { motion[0], "L-notch overlap 0.9 mm", true };
+                yield return new object[] { motion[0], "L-notch seam 0.8 mm", false };
+            }
+        }
+
+        [SkippableTheory]
+        [MemberData(nameof(GlueBandOrchestrationCases))]
+        public void AdoptSewCandidate_GlueBandPairInBothBuildsUnderRigidMotion_DecidedByBallDiameter(string motion, string name, bool overlaps)
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange (R4, full builder, real kernel): the sew build and the direct build both hold the pair, as in the
+            // review's reproduction (2 mm prism: two cells and SEW_SUCCESS before R4).
+            List<OcctCell> cells = GlueBandPair(name).Select(x => Moved(x, motion)).Select(x => new OcctCell(x, x.Volume())).ToList();
+            OcctCellComplexResult sew = new OcctCellComplexResult { NativeAvailable = true };
+            cells.ForEach(x => sew.AddCell(x));
+            SAM.Geometry.OCCT.Native.OcctCellComplexBuilder.DirectBuild direct = (OcctCellComplexResult candidate, out bool decoded) =>
+            {
+                decoded = true;
+                cells.ForEach(x => candidate.AddCell(x));
+                return 0;
+            };
+
+            // Act
+            using (OcctCellComplexResult result = new OcctCellComplexResult())
+            {
+                bool adopted = SAM.Geometry.OCCT.Native.OcctCellComplexBuilder.AdoptSewCandidate(cells.SelectMany(x => x.Shell.Face3Ds).ToList(), GrasshopperRecipe(), sew, direct, result);
+
+                // Assert
+                string message = name + " (" + motion + "): " + string.Join("; ", result.Diagnostics.Select(x => x.Code + " " + x.Message));
+                if (overlaps)
+                {
+                    Assert.False(adopted, message);
+                    Assert.False(result.Success, message);
+                    Assert.Empty(result.Cells);
+                    Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_BUILD_REJECTED" && x.Severity == OcctDiagnosticSeverity.Error && x.Message.Contains("cells 0 and 1 overlap"));
+                }
+                else
+                {
+                    Assert.True(adopted, message);
+                    Assert.True(result.Success, message);
+                    Assert.Equal(2, result.Cells.Count);
+                    Assert.DoesNotContain(result.Diagnostics, x => x.Code == "SAM_OCCT_SEW_BUILD_INVALID" || x.Code == "SAM_OCCT_BUILD_REJECTED");
+                }
+            }
+        }
 
         [SkippableFact]
         public void Shells_JulyPanelsValidSewWithRetainTopology_KeepsTopologyContract()

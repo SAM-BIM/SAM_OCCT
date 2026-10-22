@@ -1185,8 +1185,8 @@ namespace SAM.OCCT.UnitTests
         [MemberData(nameof(RigidMotions))]
         public void ExceedsBand_LShapedSeamWithinBand_Undecided(string motion)
         {
-            // Arrange: an L-shaped seam 0.5 mm wide lies in no thin slab and holds no band-wide ball. The managed
-            // tests cannot place it; the native exact test then asks the kernel at the band (integration tests).
+            // Arrange: an L-shaped seam 0.5 mm wide lies in no thin slab and holds no band-wide ball. The piece tests
+            // cannot place it; OcctGlueBandProof then decides it on the two cells (OcctGlueBandProofTests).
             OcctCell cell = Moved(new OcctCell(LPiece(0.5 * Band), 1), motion);
 
             // Act
