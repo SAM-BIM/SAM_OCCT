@@ -18,6 +18,9 @@ namespace SAM.Geometry.OCCT.Native
     /// <item>the direct complex refines the sew complex: each sew cell is exactly partitioned by direct cells;</item>
     /// <item>input-face coverage strictly improves and no face loses coverage.</item>
     /// </list>
+    /// A sew build that is demonstrably invalid (a non-finite or non-positive signed cell volume, or overlapping
+    /// cells) is not a valid reference for criteria 3 and 4. A replacement for it is judged on its own instead
+    /// (<see cref="EvaluateReplacement"/>): criteria 1 and 2 plus complete input-face coverage.
     /// Pure managed; the checks run on decoded shells only.
     /// </summary>
     internal static class OcctUnderSplitGuard
@@ -72,6 +75,175 @@ namespace SAM.Geometry.OCCT.Native
             return new Evaluation(failures.Count == 0, failures, sewCoverage, directCoverage);
         }
 
+        /// <summary>
+        /// Judges a direct candidate that would replace a demonstrably invalid sew build. There is no valid sew
+        /// complex to refine or to improve on, so the refinement and coverage-gain criteria do not apply. The
+        /// candidate must stand on its own: valid cells (<see cref="ValidateCells"/>) and complete coverage of the
+        /// input faces (<see cref="CheckCoverageComplete"/>).
+        /// </summary>
+        internal static Evaluation EvaluateReplacement(IReadOnlyList<Face3D> inputFaces, IReadOnlyList<OcctCell> directCells, OcctBuildOptions options, double minArea)
+        {
+            options = options ?? new OcctBuildOptions();
+            List<string> failures = new List<string>();
+
+            if (directCells == null || directCells.Count == 0)
+            {
+                failures.Add("direct build produced no cells");
+                return new Evaluation(false, failures, null, null);
+            }
+
+            failures.AddRange(ValidateCells(directCells, options));
+
+            FaceCoverageReport directCoverage = Query.FaceCoverage(inputFaces, directCells.Select(x => x?.Shell), minArea, options.Tolerance, options.FuzzyTolerance);
+            failures.AddRange(CheckCoverageComplete(directCoverage));
+
+            return new Evaluation(failures.Count == 0, failures, null, directCoverage);
+        }
+
+        /// <summary>
+        /// Signed cell volumes must be finite and positive. Runs before any absolute value is taken: an inverted
+        /// cell (negative volume) would otherwise pass as a valid one.
+        /// </summary>
+        internal static List<string> CheckSignedVolumes(IReadOnlyList<OcctCell> cells, string label)
+        {
+            List<string> failures = new List<string>();
+            if (cells == null || cells.Count == 0)
+            {
+                failures.Add("no cells");
+                return failures;
+            }
+
+            for (int i = 0; i < cells.Count; i++)
+            {
+                double volume = cells[i]?.Volume ?? double.NaN;
+                if (cells[i]?.Shell == null)
+                {
+                    failures.Add(string.Format("{0} {1} has no shell", label, i));
+                }
+                else if (double.IsNaN(volume) || double.IsInfinity(volume))
+                {
+                    failures.Add(string.Format("{0} {1} has a non-finite volume", label, i));
+                }
+                else if (volume <= 0)
+                {
+                    failures.Add(string.Format("{0} {1} has a non-positive signed volume ({2:0.###} m3)", label, i, volume));
+                }
+            }
+
+            return failures;
+        }
+
+        /// <summary>Sum of the signed cell volumes.</summary>
+        internal static double TotalVolume(IReadOnlyList<OcctCell> cells)
+        {
+            return cells?.Sum(x => x?.Volume ?? 0) ?? 0;
+        }
+
+        /// <summary>
+        /// Null when the two complexes enclose the same total volume (within 0.1 % plus tolerance times the input
+        /// area); otherwise a description of the disagreement. A disagreement says that one of the two builds is
+        /// wrong, not which one.
+        /// </summary>
+        internal static string CheckVolumeAgreement(IReadOnlyList<OcctCell> sewCells, IReadOnlyList<OcctCell> directCells, double inputArea, OcctBuildOptions options)
+        {
+            options = options ?? new OcctBuildOptions();
+            double sewVolume = TotalVolume(sewCells);
+            double directVolume = TotalVolume(directCells);
+            double allowed = 1e-3 * System.Math.Max(System.Math.Abs(sewVolume), System.Math.Abs(directVolume)) + options.Tolerance * System.Math.Max(inputArea, 0);
+            double difference = System.Math.Abs(sewVolume - directVolume);
+            if (double.IsNaN(difference) || difference > allowed)
+            {
+                return string.Format("sew total volume {0:0.###} m3 differs from direct total volume {1:0.###} m3 by {2:0.###} m3 (allowed {3:0.###} m3)", sewVolume, directVolume, difference, allowed);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Cells of a complex must not share interior. Every cell's own internal point, plus any extra
+        /// <paramref name="probes"/> (e.g. the internal points of an alternative build, used only as sample
+        /// locations), must lie inside at most one cell. A point inside two cells proves an overlap, such as a
+        /// duplicated envelope cell around the rooms.
+        /// </summary>
+        internal static List<string> CheckOverlap(IReadOnlyList<OcctCell> cells, IEnumerable<Point3D> probes, OcctBuildOptions options, string label)
+        {
+            options = options ?? new OcctBuildOptions();
+            List<string> failures = new List<string>();
+            if (cells == null || cells.Count < 2)
+            {
+                return failures;
+            }
+
+            List<BoundingBox3D> boxes = cells.Select(x => x?.Shell?.GetBoundingBox(options.FuzzyTolerance)).ToList();
+            List<Point3D> points = cells.Select(x => InternalPoint(x, options)).Where(x => x != null).ToList();
+            if (probes != null)
+            {
+                points.AddRange(probes.Where(x => x != null));
+            }
+
+            HashSet<string> pairs = new HashSet<string>();
+            foreach (Point3D point3D in points)
+            {
+                List<int> containing = new List<int>();
+                for (int i = 0; i < cells.Count; i++)
+                {
+                    Shell shell = cells[i]?.Shell;
+                    if (shell == null || (boxes[i] != null && !boxes[i].Inside(point3D, true, options.Tolerance)))
+                    {
+                        continue;
+                    }
+
+                    if (shell.Inside(point3D, options.FuzzyTolerance, options.Tolerance))
+                    {
+                        containing.Add(i);
+                    }
+                }
+
+                for (int i = 0; i < containing.Count - 1; i++)
+                {
+                    for (int j = i + 1; j < containing.Count; j++)
+                    {
+                        pairs.Add(string.Format("{0} {1} and {2}", label, containing[i], containing[j]));
+                    }
+                }
+            }
+
+            foreach (string pair in pairs.OrderBy(x => x, System.StringComparer.Ordinal))
+            {
+                failures.Add(string.Format("{0} overlap", pair));
+            }
+
+            return failures;
+        }
+
+        /// <summary>
+        /// Absolute coverage of a candidate judged on its own: every evaluated input face is covered or legitimately
+        /// trimmed. No face may cut through a cell, be left unused outside every cell or be unresolved.
+        /// </summary>
+        internal static List<string> CheckCoverageComplete(FaceCoverageReport coverage)
+        {
+            List<string> failures = new List<string>();
+            if (coverage == null)
+            {
+                failures.Add("coverage unavailable");
+                return failures;
+            }
+
+            if (!coverage.IsClean)
+            {
+                failures.Add(string.Format("input-face coverage is incomplete ({0})", coverage.Summary()));
+            }
+
+            return failures;
+        }
+
+        /// <summary>The internal points of <paramref name="cells"/> (null entries skipped).</summary>
+        internal static List<Point3D> InternalPoints(IReadOnlyList<OcctCell> cells, OcctBuildOptions options)
+        {
+            options = options ?? new OcctBuildOptions();
+            return cells?.Select(x => InternalPoint(x, options)).Where(x => x != null).ToList() ?? new List<Point3D>();
+        }
+
         /// <summary>Closed, positive-volume, non-sliver and mutually non-overlapping cells.</summary>
         internal static List<string> ValidateCells(IReadOnlyList<OcctCell> cells, OcctBuildOptions options)
         {
@@ -98,11 +270,21 @@ namespace SAM.Geometry.OCCT.Native
                     failures.Add(string.Format("cell {0} is not closed", i));
                 }
 
-                double volume = System.Math.Abs(cells[i].Volume);
+                // The signed volume is checked first: an inverted cell has a negative volume whose absolute value
+                // would otherwise look valid.
+                double volume = cells[i].Volume;
                 double area = SurfaceArea(shell);
                 BoundingBox3D boundingBox3D = shell.GetBoundingBox();
                 double minExtent = boundingBox3D == null ? 0 : System.Math.Min(boundingBox3D.Width, System.Math.Min(boundingBox3D.Depth, boundingBox3D.Height));
-                if (double.IsNaN(volume) || volume <= 0 || area <= 0)
+                if (double.IsNaN(volume) || double.IsInfinity(volume))
+                {
+                    failures.Add(string.Format("cell {0} has a non-finite volume", i));
+                }
+                else if (volume < 0)
+                {
+                    failures.Add(string.Format("cell {0} has a negative signed volume ({1:0.###} m3)", i, volume));
+                }
+                else if (volume == 0 || area <= 0)
                 {
                     failures.Add(string.Format("cell {0} has no volume", i));
                 }
