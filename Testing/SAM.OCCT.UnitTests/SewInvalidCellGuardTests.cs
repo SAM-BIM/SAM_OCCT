@@ -318,6 +318,45 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(0, exactCalls);
         }
 
+        // Unit-height triangular prism over the footprint a, b, c (counter-clockwise), volume 0.5.
+        private static OcctCell Wedge(Point3D a, Point3D b, Point3D c)
+        {
+            Point3D[] footprint = { a, b, c };
+            List<Face3D> faces = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(footprint),
+                TestGeometry.CreatePlanarFace(footprint.Select(x => new Point3D(x.X, x.Y, 1)).ToArray()),
+            };
+            for (int i = 0; i < footprint.Length; i++)
+            {
+                Point3D p = footprint[i];
+                Point3D q = footprint[(i + 1) % footprint.Length];
+                faces.Add(TestGeometry.CreatePlanarFace(p, q, new Point3D(q.X, q.Y, 1), new Point3D(p.X, p.Y, 1)));
+            }
+
+            return new OcctCell(new Shell(faces), 0.5, center: new Point3D((a.X + b.X + c.X) / 3, (a.Y + b.Y + c.Y) / 3, 0.5));
+        }
+
+        [Fact]
+        public void CheckDisjoint_WedgesSharingDiagonalFace_SeparatedByFacePlane()
+        {
+            // Arrange: the unit square split along x + y = 1. The bounding boxes coincide, and their centre lies on
+            // the shared face, so only the face-plane test can show the cells disjoint.
+            List<OcctCell> cells = new List<OcctCell>
+            {
+                Wedge(new Point3D(0, 0, 0), new Point3D(1, 0, 0), new Point3D(0, 1, 0)),
+                Wedge(new Point3D(1, 0, 0), new Point3D(1, 1, 0), new Point3D(0, 1, 0)),
+            };
+            int exactCalls = 0;
+
+            // Act
+            List<string> failures = OcctUnderSplitGuard.CheckDisjoint(cells, null, Options(), "cells", (first, second) => { exactCalls++; return null; });
+
+            // Assert
+            Assert.Empty(failures);
+            Assert.Equal(0, exactCalls);
+        }
+
         [Fact]
         public void CheckDisjoint_CellInNotchOfLShape_NeedsExactTest()
         {
