@@ -1864,8 +1864,16 @@ Record: `documentation/Sew-Guard-Invalid-Cells-Q4.md`.
   exact test; 1.5-band and 1 cm slabs, partial overlap, duplicates and containment are rejected, at pair level
   and through the full builder; a point inside both cells but within half the band of a boundary proves
   nothing; and `ExceedsBand` classifies common pieces (slabs, compact cubes either side of the band, a 0.2 m L
-  strip; an L-shaped seam stays undecided). `Moved_EveryPose_IsRigid` guards the poses themselves: SAM's
-  axis-angle `Transform3D.GetRotation` is not orthonormal and is not used.
+  strip; an L-shaped seam stays undecided, for the proof below). `Moved_EveryPose_IsRigid` guards the poses
+  themselves: SAM's axis-angle `Transform3D.GetRotation` is not orthonormal and is not used.
+- `OcctGlueBandProofTests` (unit, native-free; review R4): `OcctGlueBandProof.Exceeds`, which decides the pieces
+  `ExceedsBand` leaves undecided, on the two cells, in four rigid poses. Corner triangular prisms (the review's
+  cube-versus-prism pair) either side of the analytic threshold s* = 1.7071 mm (1.6 and 1.7 mm seams; 1.75, 1.8,
+  2 and 3 mm overlaps), L-shaped seams either side of t* = 0.8536 mm (0.2 to 0.85 mm seams; 0.86, 0.9, 1 and
+  1.5 mm overlaps: an L seam holds a 1.17 t ball), L seams with the notch box turned by 1e-6 to 3e-4 rad, L seams
+  beside non-convex (L-shaped) floor and ceiling faces, a slab exactly one band thick (a seam), the review's
+  analytic witness checked independently (inside both cells, 0.5858 mm deep), and null (never a seam) for a spent
+  budget and an open cell.
 - `SewGuardInvalidCellIntegrationTests` (native-gated): two fixed Revit-home `Solve3D` outputs
   (`Fixtures/Revit-Reconstruction/`) at the eight recorded rigid offsets. The guarded build must match the
   inverse-translated direct build cell by cell (signed volume and bounding box within 1e-3), with positive
@@ -1875,9 +1883,14 @@ Record: `documentation/Sew-Guard-Invalid-Cells-Q4.md`.
   overlap test (`OcctCellComplexBuilder.CommonVolume`: partial overlap, duplicate, containment, face-touching,
   disjoint; the L-shape notch and intrusion through `CheckOverlap`). R3: `CommonVolume` and `CheckOverlap` with
   the real kernel in four rigid poses for slab and L-notch seams and overlaps either side of the band, compact
-  corner overlaps of 0.6 mm, 2 mm and 9 mm (the last two were lost before), face-touching and duplicates.
+  corner overlaps of 0.6 mm, 2 mm and 9 mm (the last two were lost before), face-touching and duplicates. R4:
+  the same in four poses for the corner prisms (1.6 mm seam; 1.75 mm and the review's 2 mm overlap, which the
+  kernel at the band used to glue away) and L-notch seams of 0.8 mm (seam), 0.9 and 1 mm (overlaps); the full
+  builder (`AdoptSewCandidate`, both candidates holding the pair) failing closed on the 2 mm prism and the 0.9 mm
+  L seam and keeping the 1.6 mm and 0.8 mm controls; and a spent proof budget leaving `CommonVolume` undecided
+  (null) and the pair failing closed.
 
 ```powershell
-dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~SewInvalidCellGuardTests"
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~SewInvalidCellGuardTests|FullyQualifiedName~OcctGlueBandProofTests"
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~SewGuardInvalidCellIntegrationTests|FullyQualifiedName~HouseUnderSplitIntegrationTests|FullyQualifiedName~HouseAirAndAtticIntegrationTests"
 ```

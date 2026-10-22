@@ -6,19 +6,135 @@ Commits: `63be627` (guard), `ac212bd` (replacement judged on its own merits, aft
 `599ed75` (record), then the R1/R2 corrections from the independent review: `45e307f` (always check sew-cell
 disjointness; establish disjointness soundly) and `8d4beff` (unit test pinning the separating-face-plane path),
 `e7bb5e2` (record), then the R3 correction from the second review: `cb1a719` (one glue-band policy for every
-overlap test, with tests).
-Tested content SHA: `cb1a719` (full SHA in "R3 correction"). The commit after it changes only this record and
-`TESTING.md` (docs only). The earlier tested content SHAs `ac212bd` and `8d4beff` are superseded; their results
-are kept below where marked.
+overlap test, with tests), `1726f0d` (record), then the R4 correction from the third review: `63067b5`, `0498a24`,
+`a135c5f` (glue-band proof replaces the coarse kernel pass).
+Tested content SHA: `a135c5f` (full SHA in "R4 correction"). The commit after it changes only this record and
+`TESTING.md` (docs only). The earlier tested content SHAs `ac212bd`, `8d4beff` and `cb1a719` are superseded; their
+results are kept below where marked.
 Source of the task: Scope 1 of `.review-occt-integration19-20261022/ATTRIBUTION.md` (machine-local, owner workspace).
-Independent reviews: `SAM-BIM/.review-sew-guard-independent-20261022/REVIEW.md` (findings R1, R2) and `REVIEW-R2.md`
-(finding R3), machine-local. `PROJECT_PROGRESS.md` is not touched (post-merge closeout only).
+Independent reviews: `SAM-BIM/.review-sew-guard-independent-20261022/REVIEW.md` (findings R1, R2), `REVIEW-R2.md`
+(finding R3) and `REVIEW-R3.md` (finding R4), machine-local. `PROJECT_PROGRESS.md` is not touched (post-merge
+closeout only).
 
 ## Status
 
 Implementation, tests and local validation are complete, including the corrections for review findings R1, R2
-(section "R1/R2 corrections") and R3 (section "R3 correction"). Awaiting a third independent review. Not pushed;
-no hosted CI has run. Open owner decisions are listed under "Unresolved".
+(section "R1/R2 corrections"), R3 ("R3 correction") and R4 ("R4 correction"). Awaiting a fourth independent review.
+Not pushed; no PR; no hosted CI has run. Open owner decisions are listed under "Unresolved".
+
+## R4 correction (2026-10-22)
+
+**R4 (P1): the coarse kernel pass accepted an overlap beyond its own band rule.** When the fine kernel pass
+(fuzzy b/10) left a common piece unclassified, `CommonVolume` asked the kernel again at fuzzy = b and took "no
+common solid" as a seam. Third review reproduction (machine-local `.review-sew-guard-independent-20261022/
+REVIEW-R3.md`, `r3-probe/`): unit cube against the prism over (0.998, 1), (1, 0.998), (2, 2), z 0.998..2. Their
+common region is a right isosceles prism, legs 2 mm, 2 mm high (4e-9 m3), whose incentre (1 - r, 1 - r, 0.999),
+r = 0.002 / (2 + sqrt 2) = 0.5858 mm, lies 0.5858 mm inside both cells: a ball of diameter 1.17 mm > b = 1 mm. The
+fine pass found the piece (undecided), the coarse pass glued it away: `CommonVolume` 0 and the full
+`AdoptSewCandidate` two cells with `SEW_SUCCESS`. The 1.75 mm and 1.8 mm corner prisms were accepted the same way.
+
+**Fix: the coarse pass is removed; undecided pieces are decided by a proof on the two cells**
+(`SAM_OCCT/SAM.Geometry.OCCT/Native/OcctGlueBandProof.cs`, new; called from `CommonVolume`). The policy is
+unchanged: overlap iff the common region holds a ball of diameter > b. For x inside both cells the largest ball
+centred at x inside the common region has radius d(x), the distance from x to the union of the two boundaries.
+Branch and bound over boxes covering the undecided piece's region (its extent in a frame taken from its own
+faces, enlarged by the fine fuzzy value plus Tolerance, since the decoded piece may differ from the exact region by
+that much):
+- Upper bound (sound): d(x) is at most the distance from x to any convex subset of the boundary. The subsets are
+  convex faces, triangles of non-convex faces (SAM's triangulation, each triangle shrunk 1e-9 m and kept only if
+  its centroid lies inside the face and no face edge meets it, so a faulty triangulation can only weaken the bound)
+  and face edges. Each distance is convex in x, so its maximum over a box is at a corner; the smallest such corner
+  maximum, and d(centre) + half the diagonal, bound d on the box. A box bounded by b/2 holds no centre of a ball
+  wider than b.
+- Empty box (sound): a box that, enlarged by b/8, meets no face of one cell (exact box-section-versus-polygon test,
+  or centre farther than half the diagonal + b/8) lies inside or outside that cell as its centre does; outside one
+  cell it holds no common point. The inside test is ray parity that discards rays passing within b/8 of a face edge;
+  cells must be closed at b/8.
+- Witness: a box centre inside both cells with d > b/2 proves the overlap.
+- Answers: overlap (piece volume counted), seam (every box bounded), or undecided (budget of 20,000 boxes spent, a
+  cell not closed at b/8, unusable geometry). Undecided keeps the pair failing closed, as before. The threshold b/2
+  carries a relative 1e-9 allowance (5e-13 m) so that a slab exactly b thick is a seam despite rounding; the same
+  threshold is used for both answers.
+- How boxes are cut (at planes of faces perpendicular to a frame axis and b/2 either side of them; otherwise where
+  the proof's own rules then resolve a half; otherwise across the faces crossing the box or along the longest side)
+  affects only the work, never the answer. The rejected alternatives and why: more sample points (misses are not
+  proof), mean thickness 2V/S, and kernel disappearance at a coarser fuzzy value (the R4 defect).
+
+**Behaviour change, by the documented criterion (not a widening):** an L-shaped seam of width t holds a ball of
+diameter 2 sqrt 2 t / (1 + sqrt 2) = 1.1716 t at its reflex corner, so it is an overlap once t > 0.8536 mm. The R3
+code accepted L seams up to 1 mm through the kernel's gluing; L seams of 0.86 to 1 mm are now overlaps (tested). A
+seam is accepted only through the proof (or the unchanged piece tests); a pair the R3 code left undecided (both
+kernel passes keeping an unclassified piece) can now be proven a seam and accepted.
+
+Commits: `63067b5` (proof replaces the coarse pass), `0498a24` (robust to faces off the frame axes: verified
+triangles of non-convex faces, lookahead steering; optional proof budget parameter on `CommonVolume` as a test seam),
+`a135c5f` (redundant pair bound removed after mutation testing). No native, ABI, SAM, solver, Grasshopper, golden,
+closure-tolerance or fixture change. Files: `OcctGlueBandProof.cs` (new), `OcctCellComplexBuilder.cs`
+(`CommonVolume`), `OcctUnderSplitGuard.cs` (doc only), `Testing/SAM.OCCT.UnitTests/OcctGlueBandProofTests.cs` (new),
+`SewInvalidCellGuardTests.cs` (comment), `SewGuardInvalidCellIntegrationTests.cs` (+65 rows), `TESTING.md`.
+
+**Tested content SHA `a135c5f4a6e25dd1c40a11a4881219c1271bc4a3`** (`1726f0d..a135c5f`). Local only, same machine,
+same frozen native (SAM.Occt.Native.dll 438089F8..., TKBO.dll 1FA732FE..., verified) and managed dependencies as in
+"Validation"; `SAM_OCCT_SKIP_NATIVE_BUILD=true`. Raw evidence, machine-local:
+`SAM-BIM/.review-sew-guard-q4-20261022/r4-corrections/` (new folder; nothing earlier modified).
+
+| Check | Reviewed `1726f0d` (content `cb1a719`) | Corrected `a135c5f` |
+|---|---|---|
+| Review reproduction, 2 mm corner prism | `CommonVolume` 0, full guard True, Success True, 2 cells, `SEW_SUCCESS` | overlap 4.0e-9 m3; full guard False, Success False, 0 cells, `SEW_BUILD_INVALID` + `BUILD_REJECTED` |
+| Same, 1.75 / 1.8 mm prisms | `CommonVolume` 0 (accepted) | overlaps 3.06e-9 / 3.24e-9 m3 |
+| Unit suite | 903 / 0 | **975 / 0** (+72 `OcctGlueBandProofTests`) |
+| Native, focused (`SewGuardInvalidCell`, `HouseUnderSplit`, `HouseAirAndAttic`) | 122 / 0 / 0 | **187 / 0 / 0** (+65) |
+| Native integration, full | 367 / 19 / 2 | **432 / 19 / 2** (6 min 56 s) |
+| Real fixed panel sets, guarded builds (6 sets x 2 modes x 8 offsets) | - | **96 / 96 identical outcomes**, codes included; no `Success=False` |
+
+- Builds (`--no-incremental`): 0 errors; 243 (unit) / 284 (integration) warnings, the same pre-existing counts; none
+  in the changed files. Logs: `suites/build-*-a135c5f.log`.
+- Full native comparison by identity (`Compare-Trx.ps1` against `r3-corrections/suites/native-full-r3.trx`;
+  `suites/compare-native-full-r3-vs-a135c5f.txt`): the same 19 failures by name and message, none new, none
+  resolved; the same 2 skips (`LargePanelSewGuard...SkipsNativeSew`, `NativeMissing...ReportsNativeMissing`). They
+  are the solver golden and parity tests explained by SAM 173ababc (unchanged since base).
+- Review reproduction: the reviewer's `r3-probe` needs one change for the new optional `CommonVolume` argument
+  (reflection does not fill optional parameters); port in `reviewer-probe-port/` (diff: those two calls only), run with
+  the frozen native copied next to it. Outputs `probe-runs/reviewer-probe-cb1a719.txt` (reproduces R4 exactly) and
+  `reviewer-probe-a135c5f.txt`. `reviewer-probe-a135c5f-NO-NATIVE-invalid.txt` is a first run without the native
+  runtime (every exact test unavailable), kept and labelled, not evidence.
+- Proof decisions against the analytic thresholds (scratch probe, four poses; the committed tests pin a subset):
+  corner prisms 1.705 mm seam / 1.71 mm overlap, L seams 0.853 mm seam / 0.855 mm overlap, in every pose, 50 to
+  130 boxes, under 60 ms. L seams with the notch box turned 1e-6 to 3e-4 rad: 170 to 3,573 boxes, under 120 ms;
+  beside non-convex floor/ceiling faces up to 5,808 boxes, 130 ms. Saved scans: `r4-corrections/proof-scans/`.
+- Real panel sets (`run-probes.sh`, probe v5 unchanged; `Summarize-Probes.ps1 -Head a135c5f`,
+  `probe-runs/summary-1726f0d-vs-a135c5f.txt`): every guarded build identical to `1726f0d`. Median build time
+  deltas are within run-to-run noise (largest: PR49-Test2 GH path 680 -> 746.5 ms; g-1 GH path 546 -> 510 ms).
+  **No real-model outcome changed, so there are no before/after `.sam` exports.**
+- Pair level: probe v5 calls `CommonVolume` by reflection with three arguments, which throws on the new head and was
+  reported as undecided, so its R4-head pair files are invalid and renamed `*-INVALID-reflection-arity.txt`. Probe
+  v5.1 (`harness/Probe-v5.1-*`, only that call changed) on both heads (`run-pairs-v51.sh`): identical cells, exact
+  calls and failure lists on all six sets. Exact-test time, summed over 8 offsets (`exact-time-*.txt`): no piece was
+  undecided on these sets (next item), so both heads execute the same path (neither the coarse pass nor the proof
+  runs) and the differences are run-to-run noise: AdjacencyCluster-home direct 1242 -> 1274 ms; Face3D-home sew
+  910 -> 1073 ms (+18 %), direct 992 -> 1071 ms; cur-1 sew 848 -> 902 ms, direct 170 -> 142 ms.
+- **The proof never ran on the real sets** (probe v5.2, `harness/Probe-v5.2-*`, `proof-stats-*`): of the exact-test
+  pairs, cur-1 had 5 fine-pass pieces, all proven overlaps by the unchanged piece tests; every other call had no
+  common solid (status 40, so 0) or a kernel failure (AdjacencyCluster-home, 20 calls, undecided before the proof as
+  at R3). The proof is exercised by synthetic geometry only.
+- Mutation checks (`run-mutations.sh`, `mutations.txt`; each defect injected by script, target suite rebuilt and
+  run, source restored with `git checkout` and verified clean):
+
+| Injected defect | Target suite | Failed tests |
+|---|---|---|
+| R4-M1 coarse kernel disappearance proves a seam (the R4 defect) | `SewGuardInvalidCellIntegrationTests` (171) | 39 |
+| R4-M2 undecided piece counted as seam in `CommonVolume` | same | 1 |
+| R4-M3 witness never reported | `OcctGlueBandProofTests` + `SewInvalidCellGuardTests` (275) | 38 |
+| R4-M5 empty box judged by its centre only (no clearance) | same | 33 |
+| R4-M6 spent budget reported as seam | same | 1 |
+| R4-M7 closure precondition removed | same | 1 |
+| R4-M8 witness without the inside test | same | 23 |
+| R4-M9 non-convex faces bounded by edges only | `OcctGlueBandProofTests` (72) | 2 |
+| R4-M10 triangles used without verification | same | **0** (survives: SAM's triangulation is correct on every test face; the check guards against a faulty one) |
+| R4-M11 cut steering without lookahead | same | 8 (budget spent: steering affects work, not answers) |
+
+  Earlier runs with script defects are kept and labelled (`mutations-63067b5-first-run.txt`,
+  `mutations-0498a24-script-defects.txt`); the first also showed the pair bound (since removed) to be redundant.
 
 ## R3 correction (2026-10-22)
 
@@ -203,8 +319,9 @@ managed tests cannot decide):
 `OcctCellComplexBuilder.CommonVolume` (R1/R2 round; reworked in the R3 round): the exact test, through the
 existing native `sam_occt_shells_intersection` (boolean Common) on one pair of shells. It returns the volume of the
 common pieces that exceed the band by `ExceedsBand`, 0 when none does, and null ("cannot decide") on any failure
-or a piece that stays undecided. Kernel at fuzzy band/10 with a decode threshold far below a band-wide ball first;
-at fuzzy = band only for undecided pieces (see "R3 correction").
+or a piece that stays undecided. Kernel at fuzzy band/10 with a decode threshold far below a band-wide ball; since
+R4, pieces `ExceedsBand` leaves undecided are decided by `OcctGlueBandProof` and the kernel is not asked again at
+fuzzy = band (see "R4 correction").
 
 The direct-build delegate (`OcctCellComplexBuilder.DirectBuild`) is a test seam. Production passes the unchanged
 `TryDirectBuild`; unit tests pass a stand-in, so every path, including fail-closed, runs without OCCT. The exact
@@ -245,9 +362,11 @@ Tests and inputs:
   glues geometry within the fuzzy tolerance, and decoded real cells have seams of 1e-6 to 1e-4 m. A compact
   overlap counts once it is wider than b in every direction. (Before R3: band-thick slabs in the managed tests,
   mean thickness 2V/S in the exact test, and any shallow point in both cells as proof of overlap.)
-- **Residual assumption (R3).** A common piece that the managed rules cannot classify (in practice an L-shaped
-  seam between b/10 and b) is judged by the kernel at fuzzy = b. This trusts the kernel's gluing for such pieces;
-  on its own scan the kernel glued slab and L seams of up to b in every pose and kept 1.2 mm ones.
+- **Undecided pieces (R4; replaces the R3 residual assumption).** A common piece that the piece tests cannot
+  classify is decided by `OcctGlueBandProof` on the two cells (see "R4 correction"), not by the kernel at fuzzy = b,
+  whose gluing removed a piece holding a 1.17 mm ball. A piece the proof cannot decide within its budget fails
+  closed. What remains trusted to the kernel: the fine pass (fuzzy b/10) finds every common piece that holds a
+  band-wide ball, and its decoded pieces locate the exact common region to within that fuzzy value.
 - **Exact test = existing native boolean Common.** `OcctCellComplexBuilder.CommonVolume` calls the existing
   `sam_occt_shells_intersection` entry point (no ABI change) on one pair, frees its own handle, and never enters
   the guard or touches a candidate's retained topology. It runs only for pairs the managed tests cannot decide.
@@ -500,6 +619,18 @@ and pairs outputs for both heads, the kernel scans, and the (100,-50,0) diagnosi
 full native TRX files and log of `cb1a719`). Export used: `SAM-BIM/SAM_OCCT-reviewed-e7bb5e2` (`git archive
 e7bb5e2`, frozen native copied into its ignored `build/`).
 
+R4 round, in `SAM-BIM/.review-sew-guard-q4-20261022/r4-corrections/` (new files only; nothing earlier was
+modified): `suites/` (fresh build logs, `unit-a135c5f.trx`, `native-focused-a135c5f.trx`, `native-full-a135c5f.trx`
+and log, `tested-sha.txt`, `compare-native-full-r3-vs-a135c5f.txt`), `Compare-Trx.ps1`, `reviewer-probe-port/`
+(the review's `r3-probe` with one call adapted), `harness/` (probe v5 unchanged; v5.1 fixes the pairs-mode
+reflection call; v5.2 adds evidence-only proof statistics), `run-probes.sh`, `run-pairs-v51.sh`,
+`Summarize-Probes.ps1`, `run-mutations.sh` with `mutations*.txt` and logs, and `probe-runs/` (reviewer probe on
+`cb1a719` and `a135c5f`, shells and GH-path outputs for both heads, v5.1 pairs, v5.2 proof statistics, summaries;
+files marked INVALID are kept but are not evidence). Export used: `SAM-BIM/SAM_OCCT-reviewed-1726f0d` (`git archive
+1726f0d`, frozen native copied into its ignored `build/`). `proof-scans/`: sources and outputs of the
+analytic-threshold, tilt and non-convex-face scans, run on a public copy of the `a135c5f` proof (the committed unit
+tests pin the decisive cases).
+
 **Evidence incident (owner action needed, machine-local):** during this work an evidence-only probe run, with a
 stale binary, wrote its text log over two files in `.review-occt-integration19-20261022/sam-models/`:
 `02_July_Solve3D-output_105-panels.sam` and `03_Current_Solve3D-output_131-panels.sam` (now 2.5 kB text). Their
@@ -539,18 +670,30 @@ and any output that is not a new `.txt` file.
   instability (Scope 2: 4 to 42 spaces under translation on gappy fixtures) is unchanged and was kept separate. All
   reconstruction checks here use fixed solver outputs.
 - Every guarded call now pays one extra native direct build, plus the exact test for pairs the managed tests cannot
-  decide (+2 % to +60 % on the recorded sets, see "Runtime impact"). Only the opt-in path pays it. Since R3 the
-  exact test can run the kernel twice per pair; its kernel time roughly doubled on AdjacencyCluster-home and
-  Face3D-home (see "R3 correction").
+  decide (+2 % to +60 % on the recorded sets, see "Runtime impact"). Only the opt-in path pays it. Since R4 the
+  exact test runs the kernel once per pair (the coarse pass is gone); exact-test time on the recorded sets is
+  unchanged from `cb1a719` within noise. The proof costs up to its 20,000-box budget per undecided piece (measured
+  on synthetic pieces: 2 to 5,808 boxes, under 130 ms; a spent budget took 0.6 to 1.5 s); it never ran on the real sets.
 - Disjointness is exact only up to the glue band (see Decisions). Pairs with no separating face plane depend on
   the kernel's boolean Common. Direct cells were never undecided on the recorded sets and offsets; no guarded build
   failed closed there.
-- **R3 residual assumption (owner/reviewer judgement).** A common piece the managed rules cannot classify (in
-  practice an L-shaped seam between b/10 and b) is accepted as a seam when the kernel at fuzzy = b finds no common
-  solid. This rests on the kernel's gluing, measured on synthetic pieces only (slab and L seams glued up to b in two
-  poses, 1.2 mm kept). The kernel at b also loses compact pieces up to 2 to 3 mm, which is why it is not used first;
-  a piece that is compact and deep is classified at b/10 before this point. A non-convex piece that holds a deep
-  point none of the candidates finds could still be glued away here.
+- **R3 residual assumption: resolved by R4.** Undecided pieces are no longer accepted through the kernel's gluing at
+  fuzzy = b (that acceptance was the R4 false success); they are proven seams or overlaps by `OcctGlueBandProof`, or
+  fail closed.
+- **R4 limits (reviewer/owner judgement).**
+  - The proof never ran on the six real panel sets (no fine-pass piece was left undecided), so its cost and its
+    answers on real undecided pieces are known from synthetic geometry only. A real piece too complex for the budget
+    fails closed (the pair is "not established"): on other inputs this can turn a previously accepted sew build into
+    a replacement or a `BUILD_REJECTED`.
+  - Behaviour change by the criterion: L-shaped seams 0.86 to 1 mm wide (accepted at R3) are now overlaps; the
+    criterion holds a 1.17 t ball at the reflex corner. Whether that strict reading is wanted at the band edge is an
+    owner decision; widening it would be a change of the documented criterion, not of this fix.
+  - Still trusted to the kernel (unchanged since R3): the fine pass (fuzzy b/10) finds every common piece that holds
+    a band-wide ball, and locates it to within that fuzzy value (the proof's region margin). A deep region glued away
+    already at b/10 is not searched.
+  - Ray parity needs cells closed at b/8 (checked; otherwise undecided). The threshold carries a relative 1e-9
+    allowance (5e-13 m). Mutation R4-M10 (triangle verification removed) survives because SAM's triangulation is
+    correct on every test face.
 - **Policy change at the band edge.** The face-normal test now measures the overlap of the projections (at most
   b) instead of "own vertices within b on one side, the other's within b on the other" (up to 2b for non-convex
   cells), and point samples need depth > b/2. Within-band seams are accepted in every pose; nothing that the old
@@ -577,12 +720,12 @@ and any output that is not a new `.txt` file.
 
 ## Next step
 
-Third independent review of the R3 correction: diff `e7bb5e2..cb1a719` (and `dc871f7..HEAD` for context), this
-record, `r3-corrections/` evidence, and the review's `reproduce-rotation.ps1` (PowerShell 7, or the C# port in
-`r3-corrections/repro-rotation-src/`). Focus: the single glue-band policy and the soundness of each proof
-(deep point, projected-overlap slab, piece classification), the two-pass native exact test and its residual
-assumption, the one changed real-data outcome (current Revit-home GH path at (100,-50,0)), and the extra exact-test
-cost. Then the owner decides on the closure band for the #76 route, on the fail-closed stance for undecidable pairs,
-on the R3 residual assumption, on restoring the damaged evidence files from the reconstructions, and on pushing and
-opening a PR to `sow/2026-Q4` (hosted `build` and `spdx` must pass). Recommended reviewer: Opus, high effort, new
-session, Plan mode: the review spans geometric soundness, kernel tolerances and real-fixture evidence.
+Fourth independent review of the R4 correction: diff `1726f0d..a135c5f` (and `dc871f7..HEAD` for context), this
+record, `r4-corrections/` evidence and the ported review probe (`reviewer-probe-port/`). Focus: the soundness of
+`OcctGlueBandProof` (corner-maximum bound over convex faces, verified triangles and edges; empty-box rule with its
+exact box-polygon test and ray parity; witness; the 1e-9 threshold allowance; region margin), whether any path
+accepts a seam without the proof, the L-seam behaviour change at the band edge, and the unexercised-on-real-data
+limit. Then the owner decides on the closure band for the #76 route, on the fail-closed stance for undecidable pairs
+(now including a spent proof budget), on the strict L-seam reading, on restoring the damaged evidence files from the
+reconstructions, and on pushing and opening a PR to `sow/2026-Q4` (hosted `build` and `spdx` must pass). Recommended
+reviewer: Opus, high effort, new session, Plan mode: the review is a geometric soundness proof plus evidence.
