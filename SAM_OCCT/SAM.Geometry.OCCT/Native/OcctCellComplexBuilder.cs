@@ -443,7 +443,9 @@ namespace SAM.Geometry.OCCT.Native
         /// no cells.</item>
         /// <item>A valid sew build whose coverage shows faces cutting through a cell or unused, or whose total volume
         /// disagrees with the direct build, is suspect. The direct build replaces it only when
-        /// <see cref="OcctUnderSplitGuard.Evaluate"/> proves it a valid, strictly better refinement; otherwise the sew
+        /// <see cref="OcctUnderSplitGuard.Evaluate"/> proves it a valid, strictly better refinement. When the sew
+        /// build is both suspect and in volume conflict (not a pure under-split), a direct build that passes
+        /// <see cref="OcctUnderSplitGuard.EvaluateReplacement"/> on its own may also replace it. Otherwise the valid sew
         /// build is kept with a Warning.</item>
         /// </list>
         /// The direct build is made on every validated call, so a volume disagreement is found even when the sew
@@ -587,6 +589,33 @@ namespace SAM.Geometry.OCCT.Native
                         "Adopted the direct MakerVolume build instead of the sew build: {0} cell(s) instead of {1}, and it passed the closure, overlap, refinement and coverage checks. Sew coverage: {2}. Direct coverage: {3}.",
                         directCandidate.Cells.Count, sewCandidate.Cells.Count, evaluation.SewCoverage?.Summary(), evaluation.DirectCoverage?.Summary()));
                     return true;
+                }
+
+                // Incomplete coverage AND a total-volume conflict: the sew build lost or gained volume, so it is not a
+                // pure under-split (merging rooms keeps the volume) and refining it proves nothing. The direct build may
+                // still replace it, but only on its own merits, exactly as for an invalid sew build.
+                if (suspect && volumeConflict != null && directFailures.Count == 0)
+                {
+                    OcctUnderSplitGuard.Evaluation replacement;
+                    try
+                    {
+                        replacement = OcctUnderSplitGuard.EvaluateReplacement(face3Ds, directCells, options, minArea);
+                    }
+                    catch (Exception exception)
+                    {
+                        replacement = new OcctUnderSplitGuard.Evaluation(false, new List<string> { string.Format("evaluation failed ({0})", exception.Message) }, null, null);
+                    }
+
+                    if (replacement.Adopt)
+                    {
+                        result.AdoptFrom(directCandidate);
+                        result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_BUILD_FALLBACK_DIRECT", string.Format(
+                            "Adopted the direct MakerVolume build instead of the sew build: the sew build's coverage is incomplete and its volume disagrees ({0}), so it is not an under-split to refine. The direct build ({1} cell(s)) passed the closure, positive-volume, sliver, overlap and complete-coverage checks on its own. Sew coverage: {2}. Direct coverage: {3}.",
+                            volumeConflict, directCandidate.Cells.Count, sewCoverage?.Summary(), replacement.DirectCoverage?.Summary()));
+                        return true;
+                    }
+
+                    evaluation.Failures.AddRange(replacement.Failures.Select(x => "as a replacement: " + x));
                 }
 
                 result.AdoptFrom(sewCandidate);

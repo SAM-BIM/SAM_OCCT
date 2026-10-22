@@ -171,6 +171,42 @@ namespace SAM.OCCT.IntegrationTests
             }
         }
 
+        [SkippableTheory]
+        [MemberData(nameof(Cases))]
+        public void AdjacencyCluster_TranslatedRevitPanelsWithAir_NeverBuildsFromInvalidCells(string fixture, int offsetIndex)
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange: the Grasshopper path, Air gap-fill panels included.
+            Vector3D offset = Offset(offsetIndex);
+            List<Panel> panels = LoadPanels(fixture, offset, includeAir: true);
+
+            // Act
+            AdjacencyCluster adjacencyCluster = AnalyticalOcctCreate.AdjacencyCluster(null, panels, out OcctCellComplexResult result, null, GrasshopperRecipe());
+
+            // Assert: either a cluster from positive, valid cells, or no cluster and an Error - never a cluster built
+            // on an invalid sew build kept with a Warning.
+            using (result)
+            {
+                string context = string.Format("{0} at ({1}, {2}, {3})", fixture, offset.X, offset.Y, offset.Z);
+                if (adjacencyCluster == null)
+                {
+                    Assert.False(result.Success, context);
+                    Assert.Contains(result.Diagnostics, x => x.Severity == OcctDiagnosticSeverity.Error);
+                    return;
+                }
+
+                Assert.True(result.Success, context);
+                Assert.All(result.Cells, x => Assert.True(x.Volume > 0, string.Format("{0}: non-positive cell {1}.", context, x.Volume)));
+                Assert.Equal(result.Cells.Count, adjacencyCluster.GetSpaces().Count);
+                Assert.InRange(result.Cells.Sum(x => x.Volume), 0, ObservedTotalVolume + 0.01);
+                if (result.Diagnostics.Any(x => x.Code == "SAM_OCCT_SEW_BUILD_INVALID"))
+                {
+                    Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_BUILD_FALLBACK_DIRECT" || x.Code == "SAM_OCCT_ANALYTICAL_AIR_DIRECT_BUILD");
+                }
+            }
+        }
+
         [SkippableFact]
         public void Shells_CurrentPanelsInvalidSewWithRetainTopology_FailsClosedWithoutCluster()
         {

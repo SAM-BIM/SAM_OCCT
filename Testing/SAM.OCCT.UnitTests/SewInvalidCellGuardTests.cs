@@ -526,6 +526,75 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void AdoptSewCandidate_SuspectSewWithVolumeConflict_AdoptsIndependentlyValidDirect()
+        {
+            // Arrange: a positive sew cell (x 0..1.5) that stops short of the outer wall: the partition cuts through it
+            // and its volume (1.5) disagrees with the direct build (2). The refinement check fails (the second room's
+            // internal point lies on the sew cell's boundary), but the sew cell is no under-split to refine.
+            OcctCellComplexResult sew = Candidate(Cell(0, 1.5));
+            OcctCellComplexResult result = new OcctCellComplexResult();
+            Assert.NotEmpty(OcctUnderSplitGuard.CheckRefinement(sew.Cells, new List<OcctCell> { Cell(0, 1), Cell(1, 2) }, Options()));
+
+            // Act
+            bool adopted = OcctCellComplexBuilder.AdoptSewCandidate(TwoRoomFaces(), Options(), sew, Direct(0, Cell(0, 1), Cell(1, 2)), result);
+
+            // Assert
+            Assert.True(adopted);
+            Assert.Equal(2, result.Cells.Count);
+            Assert.Contains(result.Diagnostics, x => x.Code == "SAM_OCCT_BUILD_FALLBACK_DIRECT" && x.Message.Contains("volume disagrees"));
+            Assert.DoesNotContain(result.Diagnostics, x => x.Code == "SAM_OCCT_SEW_BUILD_INVALID" || x.Code == "SAM_OCCT_BUILD_UNRELIABLE");
+        }
+
+        [Fact]
+        public void InternalPoints_RoofWedgeDefeatingCentreAndInternalPoint3D_UsesVerifiedVertexCentroid()
+        {
+            // Arrange: direct cell 5 of the current Revit-home panels with Air (a 0.053 m3 roof wedge), exact
+            // coordinates. Neither its native centre nor Shell.InternalPoint3D gives an interior point, so before the
+            // fallback the guard rejected a valid direct build as "cell 5 has no internal point".
+            Shell wedge = new Shell(new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(new Point3D(8.13525801529758, 2.620280179563709, 0.4372656035465036), new Point3D(7.718648016953255, 2.6202801795637107, 0.43726560765449074), new Point3D(8.13525801529758, 2.620280179563708, 0.044999999999999984)),
+                TestGeometry.CreatePlanarFace(new Point3D(7.718648016953255, 2.6202801795637103, 0.43726560765449085), new Point3D(8.13525801529758, 2.620280179563709, 0.4372656035465037), new Point3D(8.135257634074765, 4.574729613216517, 0.04500000000000004)),
+                TestGeometry.CreatePlanarFace(new Point3D(8.135257634074765, 4.574729613216517, 0.04499999999999996), new Point3D(8.13525801529758, 2.6202801795637085, 0.43726560354650357), new Point3D(8.13525801529758, 2.6202801795637076, 0.04499999999999996)),
+                TestGeometry.CreatePlanarFace(new Point3D(8.13525801529758, 2.620280179563706, 0.04500000000000026), new Point3D(7.718648016953255, 2.6202801795637103, 0.43726560765449096), new Point3D(8.135257634074765, 4.574729613216517, 0.045000000000000207)),
+            });
+            OcctCell cell = new OcctCell(wedge, 0.05323326510040709, center: new Point3D(7.926953016125418, 3.597504896390112, 0.24113280382724533));
+            OcctBuildOptions options = new OcctBuildOptions { Tolerance = 1e-6, FuzzyTolerance = 1e-3 };
+            Assert.False(wedge.Inside(cell.Center, options.FuzzyTolerance, options.Tolerance));
+            Assert.Null(wedge.InternalPoint3D(options.FuzzyTolerance, options.Tolerance));
+
+            // Act
+            List<Point3D> points = OcctUnderSplitGuard.InternalPoints(new List<OcctCell> { cell }, options);
+
+            // Assert
+            Point3D point = Assert.Single(points);
+            Assert.True(wedge.Inside(point, options.FuzzyTolerance, options.Tolerance));
+            Assert.Empty(OcctUnderSplitGuard.ValidateCells(new List<OcctCell> { cell }, options));
+        }
+
+        [Fact]
+        public void EvaluateReplacement_SeamBelowFuzzyTolerance_JudgesClosureAtGlueBand()
+        {
+            // Arrange: a unit box whose lid sits 5e-5 m above its walls, the size of the decoding seams seen on
+            // direct AdjacencyCluster-home and Face3D-home cells (1e-6 to 1e-4 m, below the 1e-3 m fuzzy tolerance).
+            const double seam = 5e-5;
+            OcctBuildOptions options = new OcctBuildOptions { Tolerance = 1e-6, FuzzyTolerance = 1e-3 };
+            List<Face3D> faces = Box(0, 1).Face3Ds.ToList();
+            List<Face3D> cellFaces = faces.Take(1)
+                .Concat(new[] { TestGeometry.CreatePlanarFace(new Point3D(0, 0, 1 + seam), new Point3D(1, 0, 1 + seam), new Point3D(1, 1, 1 + seam), new Point3D(0, 1, 1 + seam)) })
+                .Concat(faces.Skip(2)).ToList();
+            List<OcctCell> cells = new List<OcctCell> { new OcctCell(new Shell(cellFaces), 1, center: new Point3D(0.5, 0.5, 0.5)) };
+
+            // Act
+            List<string> strict = OcctUnderSplitGuard.ValidateCells(cells, options);
+            OcctUnderSplitGuard.Evaluation replacement = OcctUnderSplitGuard.EvaluateReplacement(faces, cells, options, 0.01);
+
+            // Assert: the under-split route keeps its strict closure test; the replacement route uses the glue band.
+            Assert.Contains(strict, x => x.Contains("not closed"));
+            Assert.True(replacement.Adopt, string.Join("; ", replacement.Failures));
+        }
+
+        [Fact]
         public void AdoptSewCandidate_ValidUnderSplitSewDirectNotRefinement_KeepsSewWithUnreliable()
         {
             // Arrange: the alternative covers only one room, so it does not partition the sew cell.

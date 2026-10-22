@@ -1839,3 +1839,29 @@ MaxExtend revert restores the pre-P3 signatures exactly (all 15 pinned rows pass
 
 - `Towers_DoubleWallGap_FixAcceptance_Gap05StripSurvives` — Phase 1d acceptance: gap 0.5
   must give 29 cells (strip space survives); gap 0.47 ⇒ 29 cells, no merge.re-baselined in this phase.
+
+## Sew guard against invalid cells (`fix/sew-guard-invalid-cells-q4`, 2026-10-22)
+
+Applies only with `OcctBuildOptions.ValidateSewCoverage` (opt-in; set by `SAMOCCT.CreateAdjacencyCluster`).
+Record: `documentation/Sew-Guard-Invalid-Cells-Q4.md`.
+
+- `SewInvalidCellGuardTests` (unit, native-free): signed-volume rejection (negative, zero, NaN, +/-infinity)
+  for sew and direct cells, volume agreement, the probe-point overlap check, complete coverage, and every
+  `OcctCellComplexBuilder.AdoptSewCandidate` outcome through a stand-in for the direct native build:
+  coverage-clean inverted and duplicated envelopes, recovery without coverage gain, fail-closed on a failed,
+  unavailable, incompletely covering, inverted or overlapping direct build, RetainTopology (fail-closed and
+  handle released; valid contract kept), volume conflict only (sew kept with a Warning), a suspect sew build
+  in volume conflict (independently valid direct adopted), the unchanged under-split route and the unchanged
+  opt-out. Also the internal-point fallback on an exact roof-wedge cell from a real direct build, and closure
+  at the glue band (replacement route) versus Tolerance (under-split route).
+- `SewGuardInvalidCellIntegrationTests` (native-gated): two fixed Revit-home `Solve3D` outputs
+  (`Fixtures/Revit-Reconstruction/`) at the eight recorded rigid offsets. The guarded build must match the
+  inverse-translated direct build cell by cell (signed volume and bounding box within 1e-3), with positive
+  cells, clean coverage and no Error. The Grasshopper path with Air panels (same 16 cases) must never build
+  a cluster from a non-positive or invalid cell: a positive-cell cluster or no cluster with an Error. Plus
+  RetainTopology fail-closed (no shells, no cluster) and the valid RetainTopology contract.
+
+```powershell
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~SewInvalidCellGuardTests"
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~SewGuardInvalidCellIntegrationTests|FullyQualifiedName~HouseUnderSplitIntegrationTests"
+```

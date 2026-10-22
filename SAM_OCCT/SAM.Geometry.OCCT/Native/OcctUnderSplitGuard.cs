@@ -80,6 +80,11 @@ namespace SAM.Geometry.OCCT.Native
         /// complex to refine or to improve on, so the refinement and coverage-gain criteria do not apply. The
         /// candidate must stand on its own: valid cells (<see cref="ValidateCells"/>) and complete coverage of the
         /// input faces (<see cref="CheckCoverageComplete"/>).
+        /// <para>
+        /// Closure is judged at the build's own glue band, max(Tolerance, FuzzyTolerance), the band the coverage check
+        /// already uses: MakerVolume glues geometry closer than the fuzzy tolerance, and decoded real-model cells show
+        /// seams of 1e-6 to 1e-4 m. The under-split route (<see cref="Evaluate"/>) keeps its stricter Tolerance.
+        /// </para>
         /// </summary>
         internal static Evaluation EvaluateReplacement(IReadOnlyList<Face3D> inputFaces, IReadOnlyList<OcctCell> directCells, OcctBuildOptions options, double minArea)
         {
@@ -92,7 +97,7 @@ namespace SAM.Geometry.OCCT.Native
                 return new Evaluation(false, failures, null, null);
             }
 
-            failures.AddRange(ValidateCells(directCells, options));
+            failures.AddRange(ValidateCells(directCells, options, System.Math.Max(options.Tolerance, options.FuzzyTolerance)));
 
             FaceCoverageReport directCoverage = Query.FaceCoverage(inputFaces, directCells.Select(x => x?.Shell), minArea, options.Tolerance, options.FuzzyTolerance);
             failures.AddRange(CheckCoverageComplete(directCoverage));
@@ -244,8 +249,11 @@ namespace SAM.Geometry.OCCT.Native
             return cells?.Select(x => InternalPoint(x, options)).Where(x => x != null).ToList() ?? new List<Point3D>();
         }
 
-        /// <summary>Closed, positive-volume, non-sliver and mutually non-overlapping cells.</summary>
-        internal static List<string> ValidateCells(IReadOnlyList<OcctCell> cells, OcctBuildOptions options)
+        /// <summary>
+        /// Closed, positive-volume, non-sliver and mutually non-overlapping cells. Closure is tested at
+        /// <paramref name="closureTolerance"/>, by default <see cref="OcctBuildOptions.Tolerance"/>.
+        /// </summary>
+        internal static List<string> ValidateCells(IReadOnlyList<OcctCell> cells, OcctBuildOptions options, double? closureTolerance = null)
         {
             List<string> failures = new List<string>();
             if (cells == null)
@@ -265,7 +273,7 @@ namespace SAM.Geometry.OCCT.Native
                     continue;
                 }
 
-                if (!shell.IsClosed(options.Tolerance))
+                if (!shell.IsClosed(closureTolerance ?? options.Tolerance))
                 {
                     failures.Add(string.Format("cell {0} is not closed", i));
                 }
@@ -440,7 +448,31 @@ namespace SAM.Geometry.OCCT.Native
                 return cell.Center;
             }
 
-            return shell.InternalPoint3D(options.FuzzyTolerance, options.Tolerance);
+            Point3D point3D = shell.InternalPoint3D(options.FuzzyTolerance, options.Tolerance);
+            if (point3D != null)
+            {
+                return point3D;
+            }
+
+            // Fallback, verified by the same Inside test: the vertex centroid. Thin tetrahedral cells (wedges under a
+            // pitched roof in a direct build) defeat both the native centre and Shell.InternalPoint3D, but their
+            // vertex centroid lies well inside them.
+            List<Point3D> vertices = new List<Point3D>();
+            foreach (Face3D face3D in shell.Face3Ds ?? new List<Face3D>())
+            {
+                if (face3D?.GetExternalEdge3D() is ISegmentable3D segmentable3D)
+                {
+                    vertices.AddRange(segmentable3D.GetPoints() ?? new List<Point3D>());
+                }
+            }
+
+            if (vertices.Count == 0)
+            {
+                return null;
+            }
+
+            Point3D centroid = new Point3D(vertices.Average(x => x.X), vertices.Average(x => x.Y), vertices.Average(x => x.Z));
+            return shell.Inside(centroid, options.FuzzyTolerance, options.Tolerance) ? centroid : null;
         }
     }
 }
