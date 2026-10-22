@@ -196,6 +196,32 @@ namespace SAM.OCCT.UnitTests
             Assert.True(exceeds == expected, string.Format(System.Globalization.CultureInfo.InvariantCulture, "angle {0}, width {1} ({2}): {3}", angle, width, motion, exceeds));
         }
 
+        public static IEnumerable<object[]> LNotchSeamsBesideNonConvexFace()
+        {
+            foreach (string motion in new[] { "identity", "rotate oblique, translate" })
+            {
+                yield return new object[] { motion, 0.5e-3, false };
+                yield return new object[] { motion, 0.9e-3, true };
+            }
+        }
+
+        [Theory]
+        [MemberData(nameof(LNotchSeamsBesideNonConvexFace))]
+        public void Exceeds_LShapedSeamBesideNonConvexFace_DecidedByBallDiameter(string motion, double width, bool expected)
+        {
+            // Arrange: the notch box reaches 0.5 m below and above the L, so near its floor and ceiling the seam is
+            // bounded only by the L-shaped (non-convex) faces of the L, which enter the bound through their verified
+            // triangles.
+            Shell[] shells = LNotch(width);
+            shells[1] = Box(1 - width, 1 - width, -0.5, 2, 2, 1.5);
+
+            // Act
+            bool? exceeds = Exceeds(shells, motion);
+
+            // Assert
+            Assert.True(exceeds == expected, string.Format(System.Globalization.CultureInfo.InvariantCulture, "width {0} ({1}): {2}", width, motion, exceeds));
+        }
+
         [Fact]
         public void CornerTriangle_ReviewWitness_LiesDeeperThanHalfBandInBothCells()
         {

@@ -21,10 +21,9 @@ namespace SAM.Geometry.OCCT.Native
     /// </para>
     /// <list type="number">
     /// <item>Upper bound: d(x) is at most the distance f(x) from x to any convex subset of either boundary (a convex
-    /// face, or an edge of a non-convex face), and at most w f(x) + (1 - w) g(x) for two such subsets and any w in
-    /// [0, 1] (between two parallel faces t apart this is t/2 everywhere). These are convex functions of x, so their
-    /// maximum over a box is reached at a corner; the smallest such corner maximum bounds d on the whole box, and so
-    /// does d(centre) + half the box diagonal. A box bounded by b/2 holds no centre of a band-wide ball.</item>
+    /// face, a verified triangle of a non-convex face, or an edge). Each such distance is a convex function of x, so
+    /// its maximum over a box is reached at a corner; the smallest such corner maximum bounds d on the whole box, and
+    /// so does d(centre) + half the box diagonal. A box bounded by b/2 holds no centre of a band-wide ball.</item>
     /// <item>Empty box: when the box, enlarged by b/8, meets no face of one cell (its centre is farther from that
     /// boundary than half the box diagonal plus b/8, or an exact box-polygon test per face), it lies inside or
     /// outside that cell as its centre does. Outside either cell: dropped.</item>
@@ -255,12 +254,10 @@ namespace SAM.Geometry.OCCT.Native
             double[] lowerBounds = elements.Select(x => BoxDistance(boxMin, boxMax, x.Min, x.Max)).ToArray();
             int[] order = Enumerable.Range(0, elements.Count).OrderBy(x => lowerBounds[x]).ToArray();
             double[] bounds = Enumerable.Repeat(double.MaxValue, Corners.Length).ToArray();
-            List<double[]> nearest = new List<double[]>();
             foreach (int index in order)
             {
-                // No corner of the box (or of a half) is nearer the element than the box itself. The nearest few
-                // elements are kept for the pair bound below.
-                if (lowerBounds[index] >= bounds.Max() && nearest.Count >= PairElements)
+                // No corner of the box (or of a half) is nearer the element than the box itself.
+                if (lowerBounds[index] >= bounds.Max())
                 {
                     break;
                 }
@@ -270,11 +267,6 @@ namespace SAM.Geometry.OCCT.Native
                 for (int p = 0; p < 27; p++)
                 {
                     distances[p] = element.Facet != null ? FacetDistance(element.Facet, grid[p]) : SegmentDistance(element.A, element.B, grid[p]);
-                }
-
-                if (nearest.Count < PairElements)
-                {
-                    nearest.Add(distances);
                 }
 
                 for (int o = 0; o < Corners.Length; o++)
@@ -289,59 +281,7 @@ namespace SAM.Geometry.OCCT.Native
                 }
             }
 
-            // Pair bound: min(f, g) <= w f + (1 - w) g for any w in [0, 1], again convex, so its largest corner value
-            // bounds d on the box. Between two parallel faces at distance t it gives t/2 everywhere.
-            for (int i = 0; i < nearest.Count - 1; i++)
-            {
-                for (int j = i + 1; j < nearest.Count; j++)
-                {
-                    for (int o = 0; o < Corners.Length; o++)
-                    {
-                        bounds[o] = System.Math.Min(bounds[o], PairBound(nearest[i], nearest[j], Corners[o]));
-                    }
-                }
-            }
-
             return bounds;
-        }
-
-        // Elements combined pairwise in the pair bound (the nearest to the box).
-        private const int PairElements = 6;
-
-        // min over w in [0, 1] of the largest corner value of w f + (1 - w) g: a convex piecewise-linear function of
-        // w, so its minimum is at w = 0, w = 1 or where two corner lines cross.
-        private static double PairBound(double[] f, double[] g, int[] corners)
-        {
-            List<double> weights = new List<double> { 0, 1 };
-            for (int i = 0; i < corners.Length - 1; i++)
-            {
-                for (int j = i + 1; j < corners.Length; j++)
-                {
-                    double slope = (f[corners[i]] - g[corners[i]]) - (f[corners[j]] - g[corners[j]]);
-                    if (slope != 0)
-                    {
-                        double w = (g[corners[j]] - g[corners[i]]) / slope;
-                        if (w > 0 && w < 1)
-                        {
-                            weights.Add(w);
-                        }
-                    }
-                }
-            }
-
-            double result = double.MaxValue;
-            foreach (double w in weights)
-            {
-                double largest = 0;
-                foreach (int p in corners)
-                {
-                    largest = System.Math.Max(largest, w * f[p] + (1 - w) * g[p]);
-                }
-
-                result = System.Math.Min(result, largest);
-            }
-
-            return result;
         }
 
         // True when the box (frame coordinates lo..hi), enlarged by clearance along each axis (which contains every
