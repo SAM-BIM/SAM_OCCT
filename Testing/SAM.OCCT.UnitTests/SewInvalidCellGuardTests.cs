@@ -930,5 +930,270 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(3, result.Cells.Count);
             Assert.DoesNotContain(result.Diagnostics, x => x.Severity != OcctDiagnosticSeverity.Info);
         }
+
+        // R3: one glue-band policy under rigid motions. Production tolerances (1e-6 m, fuzzy 1e-3 m): band 1 mm.
+        private const double Band = 1e-3;
+
+        private static OcctBuildOptions ProductionOptions()
+        {
+            OcctBuildOptions options = Options();
+            options.Tolerance = 1e-6;
+            options.FuzzyTolerance = Band;
+            return options;
+        }
+
+        // Rigid motions applied in sequence: none, two rotations about Z, an oblique rotation, a far translation, and
+        // the oblique rotation followed by the translation.
+        public static IEnumerable<object[]> RigidMotions()
+        {
+            yield return new object[] { "identity" };
+            yield return new object[] { "rotate Z 45" };
+            yield return new object[] { "rotate Z 30" };
+            yield return new object[] { "rotate oblique" };
+            yield return new object[] { "translate" };
+            yield return new object[] { "rotate oblique, translate" };
+        }
+
+        private static List<Transform3D> Motion(string name)
+        {
+            // Oblique: about Z, then X, then Y (each elementary rotation is orthonormal).
+            Transform3D[] oblique = { Transform3D.GetRotationZ(0.6), Transform3D.GetRotationX(0.5), Transform3D.GetRotationY(0.4) };
+            Transform3D translation = Transform3D.GetTranslation(100, -50, 7);
+            switch (name)
+            {
+                case "identity": return new List<Transform3D>();
+                case "rotate Z 45": return new List<Transform3D> { Transform3D.GetRotationZ(System.Math.PI / 4) };
+                case "rotate Z 30": return new List<Transform3D> { Transform3D.GetRotationZ(System.Math.PI / 6) };
+                case "rotate oblique": return oblique.ToList();
+                case "translate": return new List<Transform3D> { translation };
+                case "rotate oblique, translate": return oblique.Append(translation).ToList();
+                default: throw new ArgumentException(name);
+            }
+        }
+
+        private static OcctCell Moved(OcctCell cell, string motion)
+        {
+            Shell shell = cell.Shell;
+            Point3D centre = cell.Center;
+            foreach (Transform3D transform3D in Motion(motion))
+            {
+                shell = (Shell)shell.GetTransformed(transform3D);
+                centre = (Point3D)centre?.GetTransformed(transform3D);
+            }
+
+            return new OcctCell(shell, cell.Volume, center: centre);
+        }
+
+        [Theory]
+        [MemberData(nameof(RigidMotions))]
+        public void Moved_EveryPose_IsRigid(string motion)
+        {
+            // Arrange: SAM's axis-angle Transform3D.GetRotation is not orthonormal, so the poses use only the
+            // elementary rotations and a translation; check that volume and the cube's edge length are kept.
+            OcctCell cell = Cell(0, 1);
+
+            // Act
+            Shell shell = Moved(cell, motion).Shell;
+
+            // Assert
+            Assert.Equal(1, shell.Volume(), 9);
+            Assert.All(shell.Face3Ds, x => Assert.Equal(1, x.GetArea(), 9));
+        }
+
+        // Unit cube x 0..1 against a unit-section box from x0 to 2: seams and gaps across x = 1.
+        public static IEnumerable<object[]> TouchingWithinBand()
+        {
+            foreach (object[] motion in RigidMotions())
+            {
+                yield return new object[] { motion[0], "seam of half the band", 1 - 0.5 * Band };
+                yield return new object[] { motion[0], "face-touching", 1.0 };
+                yield return new object[] { motion[0], "gap of half the band", 1 + 0.5 * Band };
+            }
+        }
+
+        public static IEnumerable<object[]> OverlapsBeyondBand()
+        {
+            foreach (object[] motion in RigidMotions())
+            {
+                yield return new object[] { motion[0], "slab of 1.5 bands", 0.0, 1.0, 1 - 1.5 * Band, 2.0 };
+                yield return new object[] { motion[0], "slab of 1 cm", 0.0, 1.0, 0.99, 2.0 };
+                yield return new object[] { motion[0], "partial overlap", 0.0, 2.0, 1.5, 3.5 };
+                yield return new object[] { motion[0], "duplicate", 0.0, 1.0, 0.0, 1.0 };
+                yield return new object[] { motion[0], "containment", 0.0, 3.0, 1.0, 2.0 };
+                yield return new object[] { motion[0], "containment sharing faces", 0.0, 2.0, 0.0, 1.0 };
+            }
+        }
+
+        [Theory]
+        [MemberData(nameof(TouchingWithinBand))]
+        public void CheckDisjoint_TouchingWithinBandUnderRigidMotion_PassesWithoutExactTest(string motion, string name, double x0)
+        {
+            // Arrange
+            List<OcctCell> cells = new List<OcctCell> { Moved(Cell(0, 1), motion), Moved(Cell(x0, 2), motion) };
+            int exactCalls = 0;
+
+            // Act
+            List<string> failures = OcctUnderSplitGuard.CheckDisjoint(cells, null, ProductionOptions(), "cells", (first, second) => { exactCalls++; return null; });
+
+            // Assert: the same decision in every pose, by the managed slab test.
+            Assert.True(failures.Count == 0, name + ": " + string.Join("; ", failures));
+            Assert.Equal(0, exactCalls);
+        }
+
+        [Theory]
+        [MemberData(nameof(OverlapsBeyondBand))]
+        public void CheckDisjoint_OverlapBeyondBandUnderRigidMotion_Rejected(string motion, string name, double a0, double a1, double b0, double b1)
+        {
+            // Arrange
+            List<OcctCell> cells = new List<OcctCell> { Moved(Cell(a0, a1), motion), Moved(Cell(b0, b1), motion) };
+            double common = System.Math.Max(0, System.Math.Min(a1, b1) - System.Math.Max(a0, b0));
+
+            // Act: without an exact test, and with one that reports the true common volume.
+            List<string> withoutExact = OcctUnderSplitGuard.CheckDisjoint(cells, null, ProductionOptions(), "cells", OcctUnderSplitGuard.NoExactTest);
+            List<string> withExact = OcctUnderSplitGuard.CheckDisjoint(cells, null, ProductionOptions(), "cells", (first, second) => common);
+
+            // Assert: rejected in every pose and never shown touching. Without the exact test an overlap that no
+            // sample proves stays undecided, which also fails.
+            Assert.True(withoutExact.Count == 1 && withoutExact[0].StartsWith("cells 0 and 1", StringComparison.Ordinal), name + ": " + string.Join("; ", withoutExact));
+            Assert.True(withExact.Count == 1 && withExact[0].StartsWith("cells 0 and 1 overlap", StringComparison.Ordinal), name + ": " + string.Join("; ", withExact));
+        }
+
+        [Fact]
+        public void CheckDisjoint_RotatedSeamPointInBothCells_PointDoesNotProveOverlap()
+        {
+            // Arrange (R3 reproduction): x 0..1 and 0.9995..2 rotated 45 degrees about Z. Their bounding boxes overlap
+            // widely and the centre of that overlap lies inside both cells, but only 0.25 mm from each boundary.
+            List<OcctCell> cells = new List<OcctCell> { Moved(Cell(0, 1), "rotate Z 45"), Moved(Cell(0.9995, 2), "rotate Z 45") };
+            OcctBuildOptions options = ProductionOptions();
+            BoundingBox3D a = cells[0].Shell.GetBoundingBox();
+            BoundingBox3D b = cells[1].Shell.GetBoundingBox();
+            Point3D centre = new Point3D(
+                (System.Math.Max(a.Min.X, b.Min.X) + System.Math.Min(a.Max.X, b.Max.X)) / 2,
+                (System.Math.Max(a.Min.Y, b.Min.Y) + System.Math.Min(a.Max.Y, b.Max.Y)) / 2,
+                (System.Math.Max(a.Min.Z, b.Min.Z) + System.Math.Min(a.Max.Z, b.Max.Z)) / 2);
+            Assert.True(cells[0].Shell.Inside(centre, options.FuzzyTolerance, options.Tolerance) && cells[1].Shell.Inside(centre, options.FuzzyTolerance, options.Tolerance));
+
+            // Act
+            List<string> failures = OcctUnderSplitGuard.CheckDisjoint(cells, null, options, "cells", OcctUnderSplitGuard.NoExactTest);
+
+            // Assert
+            Assert.Empty(failures);
+        }
+
+        [Theory]
+        [MemberData(nameof(RigidMotions))]
+        public void AdoptSewCandidate_SeamWithinBandUnderRigidMotion_KeepsSew(string motion)
+        {
+            // Arrange (R3, full builder): both candidates hold the two cells with a 0.5 mm seam, as in the review's
+            // reproduction; the unrotated pair was kept and the rotated one failed closed.
+            OcctCell first = Moved(Cell(0, 1), motion);
+            OcctCell second = Moved(Cell(1 - 0.5 * Band, 2), motion);
+            OcctCellComplexResult sew = Candidate(first, second);
+            OcctCellComplexResult result = new OcctCellComplexResult();
+
+            // Act
+            bool adopted = OcctCellComplexBuilder.AdoptSewCandidate(FacesOf(first, second), ProductionOptions(), sew, Direct(0, first, second), result);
+
+            // Assert
+            Assert.True(adopted);
+            Assert.True(result.Success);
+            Assert.Equal(2, result.Cells.Count);
+            Assert.Equal("SAM_OCCT_SEW_SUCCESS", Assert.Single(result.Diagnostics).Code);
+        }
+
+        [Theory]
+        [MemberData(nameof(OverlapsBeyondBand))]
+        public void AdoptSewCandidate_OverlapBeyondBandUnderRigidMotion_FailsClosed(string motion, string name, double a0, double a1, double b0, double b1)
+        {
+            // Arrange (R3 controls, full builder): both candidates hold the same overlapping pair.
+            OcctCell first = Moved(Cell(a0, a1), motion);
+            OcctCell second = Moved(Cell(b0, b1), motion);
+            OcctCellComplexResult sew = Candidate(first, second);
+            OcctCellComplexResult result = new OcctCellComplexResult();
+
+            // Act
+            bool adopted = OcctCellComplexBuilder.AdoptSewCandidate(FacesOf(first, second), ProductionOptions(), sew, Direct(0, first, second), result);
+
+            // Assert
+            AssertFailedClosed(adopted, result);
+            Assert.True(result.Diagnostics.Any(x => x.Code == "SAM_OCCT_BUILD_REJECTED" && x.Message.Contains("cells 0 and 1")), name);
+        }
+
+        // An axis-aligned cuboid shell.
+        private static Shell Cuboid(double x0, double y0, double z0, double x1, double y1, double z1)
+        {
+            return new Shell(new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(new Point3D(x0, y0, z0), new Point3D(x1, y0, z0), new Point3D(x1, y1, z0), new Point3D(x0, y1, z0)),
+                TestGeometry.CreatePlanarFace(new Point3D(x0, y0, z1), new Point3D(x1, y0, z1), new Point3D(x1, y1, z1), new Point3D(x0, y1, z1)),
+                TestGeometry.CreatePlanarFace(new Point3D(x0, y0, z0), new Point3D(x1, y0, z0), new Point3D(x1, y0, z1), new Point3D(x0, y0, z1)),
+                TestGeometry.CreatePlanarFace(new Point3D(x0, y1, z0), new Point3D(x1, y1, z0), new Point3D(x1, y1, z1), new Point3D(x0, y1, z1)),
+                TestGeometry.CreatePlanarFace(new Point3D(x0, y0, z0), new Point3D(x0, y1, z0), new Point3D(x0, y1, z1), new Point3D(x0, y0, z1)),
+                TestGeometry.CreatePlanarFace(new Point3D(x1, y0, z0), new Point3D(x1, y1, z0), new Point3D(x1, y1, z1), new Point3D(x1, y0, z1)),
+            });
+        }
+
+        // Unit-height L-shaped piece: the strips x 1-t..2 by y 1-t..1 and x 1-t..1 by y 1..2 (an L seam of width t).
+        private static Shell LPiece(double t)
+        {
+            Point3D[] footprint = { new Point3D(1 - t, 1 - t, 0), new Point3D(2, 1 - t, 0), new Point3D(2, 1, 0), new Point3D(1, 1, 0), new Point3D(1, 2, 0), new Point3D(1 - t, 2, 0) };
+            List<Face3D> faces = new List<Face3D>
+            {
+                TestGeometry.CreatePlanarFace(footprint),
+                TestGeometry.CreatePlanarFace(footprint.Select(x => new Point3D(x.X, x.Y, 1)).ToArray()),
+            };
+            for (int i = 0; i < footprint.Length; i++)
+            {
+                Point3D a = footprint[i];
+                Point3D b = footprint[(i + 1) % footprint.Length];
+                faces.Add(TestGeometry.CreatePlanarFace(a, b, new Point3D(b.X, b.Y, 1), new Point3D(a.X, a.Y, 1)));
+            }
+
+            return new Shell(faces);
+        }
+
+        public static IEnumerable<object[]> CommonPieces()
+        {
+            foreach (object[] motion in RigidMotions())
+            {
+                yield return new object[] { motion[0], "slab seam of half the band", "slab", 0.5 * Band, false };
+                yield return new object[] { motion[0], "slab of 1.5 bands", "slab", 1.5 * Band, true };
+                yield return new object[] { motion[0], "compact cube of 0.6 bands", "cube", 0.6 * Band, false };
+                yield return new object[] { motion[0], "compact cube of 2 bands", "cube", 2 * Band, true };
+                yield return new object[] { motion[0], "compact cube of 1 cm", "cube", 0.01, true };
+                yield return new object[] { motion[0], "L strip of 0.2 m", "L", 0.2, true };
+            }
+        }
+
+        [Theory]
+        [MemberData(nameof(CommonPieces))]
+        public void ExceedsBand_CommonPieceUnderRigidMotion_ClassifiedByOnePolicy(string motion, string name, string shape, double size, bool expected)
+        {
+            // Arrange: a piece of the common region of two cells, as the native Common returns it.
+            Shell piece = shape == "slab" ? Cuboid(1 - size, 0, 0, 1, 1, 1) : shape == "cube" ? Cuboid(1 - size, 1 - size, 1 - size, 1, 1, 1) : LPiece(size);
+            OcctCell cell = Moved(new OcctCell(piece, 1), motion);
+
+            // Act
+            bool? exceeds = OcctUnderSplitGuard.ExceedsBand(cell.Shell, null, ProductionOptions());
+
+            // Assert: slabs and compact pieces no thicker than the band are seams; thicker ones are overlaps,
+            // whatever their mean thickness 2V/S (a 2 mm cube has 0.67 mm).
+            Assert.True(exceeds == expected, string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0} ({1}): {2}", name, motion, exceeds));
+        }
+
+        [Theory]
+        [MemberData(nameof(RigidMotions))]
+        public void ExceedsBand_LShapedSeamWithinBand_Undecided(string motion)
+        {
+            // Arrange: an L-shaped seam 0.5 mm wide lies in no thin slab and holds no band-wide ball. The managed
+            // tests cannot place it; the native exact test then asks the kernel at the band (integration tests).
+            OcctCell cell = Moved(new OcctCell(LPiece(0.5 * Band), 1), motion);
+
+            // Act
+            bool? exceeds = OcctUnderSplitGuard.ExceedsBand(cell.Shell, null, ProductionOptions());
+
+            // Assert
+            Assert.Null(exceeds);
+        }
     }
 }

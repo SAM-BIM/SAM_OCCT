@@ -431,16 +431,74 @@ namespace SAM.Geometry.OCCT.Native
         }
 
         /// <summary>
-        /// The volume common to two closed shells, by the native boolean Common behind <see cref="TryIntersection"/>
-        /// (sam_occt_shells_intersection). Common pieces no thicker than the glue band max(Tolerance, FuzzyTolerance)
-        /// (mean thickness 2V/S, the sliver measure of <see cref="OcctUnderSplitGuard.ValidateCells"/>) are seams
-        /// between touching cells and are not counted. 0 when the kernel finds no common solid (status 40); null when
-        /// it cannot decide (shell not serializable, kernel error, native library missing). Used by the sew guard's
-        /// overlap test only. Self-contained: it frees its own result handle and touches no build or retained topology.
+        /// The volume common to two closed shells beyond the glue band, by the native boolean Common behind
+        /// <see cref="TryIntersection"/> (sam_occt_shells_intersection), measured by the sew guard's one glue-band
+        /// policy (<see cref="OcctUnderSplitGuard.CheckDisjoint"/>): each common piece is classified by
+        /// <see cref="OcctUnderSplitGuard.ExceedsBand"/>, and only pieces holding a ball thicker than the band count.
+        /// <para>
+        /// The kernel runs first with a fine fuzzy value, a tenth of the band, and a decode threshold far below the
+        /// volume of a band-wide ball, so that no compact piece thicker than the band is lost: at the band itself the
+        /// kernel also glues away compact pieces up to a few bands wide, depending on their orientation, and the
+        /// decoder drops solids whose volume is below Tolerance (in m3). A piece that the managed tests can neither
+        /// place in a band-thin slab nor show to hold a band-wide ball (e.g. an L-shaped seam) is then judged by the
+        /// kernel at the band: if no common solid remains there, it is a seam.
+        /// </para>
+        /// 0 when nothing beyond the band is common; null when it cannot be decided (shell not serializable, kernel
+        /// error, native library missing, or a piece still unclassified). Used by the sew guard's overlap test only.
+        /// Self-contained: it frees its own result handles and touches no build or retained topology.
         /// </summary>
         internal static double? CommonVolume(Shell first, Shell second, OcctBuildOptions options)
         {
             options = options ?? new OcctBuildOptions();
+            double band = OcctUnderSplitGuard.GlueBand(options);
+            foreach (double fuzzyTolerance in new[] { System.Math.Max(options.Tolerance, band / 10), band })
+            {
+                List<OcctCell> pieces = CommonPieces(first, second, options, fuzzyTolerance);
+                if (pieces == null)
+                {
+                    return null;
+                }
+
+                double volume = 0;
+                bool undecided = false;
+                foreach (OcctCell piece in pieces)
+                {
+                    double pieceVolume = System.Math.Abs(piece?.Volume ?? double.NaN);
+                    if (double.IsNaN(pieceVolume) || double.IsInfinity(pieceVolume))
+                    {
+                        return null;
+                    }
+
+                    bool? exceeds = OcctUnderSplitGuard.ExceedsBand(piece.Shell, piece.Center, options);
+                    if (exceeds == true)
+                    {
+                        volume += pieceVolume;
+                    }
+                    else if (exceeds == null)
+                    {
+                        undecided = true;
+                    }
+                }
+
+                if (volume > 0)
+                {
+                    return volume;
+                }
+
+                if (!undecided)
+                {
+                    return 0;
+                }
+            }
+
+            return null;
+        }
+
+        // The decoded pieces of the native Common of two shells at the given fuzzy value (empty for status 40, no
+        // common solid), or null when the kernel cannot decide. The decode threshold (native tolerance, applied to
+        // solid volumes) is kept below a thousandth of the volume of a band-wide cube.
+        private static List<OcctCell> CommonPieces(Shell first, Shell second, OcctBuildOptions options, double fuzzyTolerance)
+        {
             OcctCellComplexResult scratch = new OcctCellComplexResult();
             IntPtr resultHandle = IntPtr.Zero;
             try
@@ -452,6 +510,7 @@ namespace SAM.Geometry.OCCT.Native
                     return null;
                 }
 
+                double band = OcctUnderSplitGuard.GlueBand(options);
                 int status = OcctNativeMethods.sam_occt_shells_intersection(
                     firstInput.Coordinates,
                     firstInput.Coordinates.Length / 3,
@@ -469,14 +528,14 @@ namespace SAM.Geometry.OCCT.Native
                     secondInput.FaceCount,
                     secondInput.ShellFaceCounts,
                     secondInput.ShellCount,
-                    options.Tolerance,
-                    options.FuzzyTolerance,
+                    System.Math.Min(options.Tolerance, 1e-3 * band * band * band),
+                    fuzzyTolerance,
                     options.RunParallel ? 1 : 0,
                     out resultHandle);
 
                 if (status == 40)
                 {
-                    return 0;
+                    return new List<OcctCell>();
                 }
 
                 if (status != 0 || !DecodeResult(resultHandle, scratch))
@@ -484,24 +543,7 @@ namespace SAM.Geometry.OCCT.Native
                     return null;
                 }
 
-                double band = System.Math.Max(options.Tolerance, options.FuzzyTolerance);
-                double volume = 0;
-                foreach (OcctCell cell in scratch.Cells)
-                {
-                    double cellVolume = System.Math.Abs(cell?.Volume ?? double.NaN);
-                    double area = cell?.Shell?.Face3Ds?.Sum(x => x?.GetArea() ?? 0) ?? 0;
-                    if (double.IsNaN(cellVolume) || double.IsInfinity(cellVolume) || double.IsNaN(area))
-                    {
-                        return null;
-                    }
-
-                    if (area <= 0 || 2 * cellVolume / area > band)
-                    {
-                        volume += cellVolume;
-                    }
-                }
-
-                return volume;
+                return scratch.Cells.ToList();
             }
             catch (DllNotFoundException)
             {

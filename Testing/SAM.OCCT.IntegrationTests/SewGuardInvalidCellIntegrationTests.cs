@@ -331,6 +331,131 @@ namespace SAM.OCCT.IntegrationTests
             Assert.StartsWith("cells 0 and 1 overlap", Assert.Single(intrudingFailures));
             Assert.True(intrudingCommon.HasValue && System.Math.Abs(intrudingCommon.Value - 0.44) <= 1e-6, string.Format(System.Globalization.CultureInfo.InvariantCulture, "common volume {0}", intrudingCommon));
         }
+        // R3: the native exact test under rigid motions, measured by the guard's one glue-band policy (band 1 mm).
+        public static IEnumerable<object[]> RigidMotions()
+        {
+            yield return new object[] { "identity" };
+            yield return new object[] { "rotate Z 45" };
+            yield return new object[] { "rotate oblique" };
+            yield return new object[] { "rotate oblique, translate" };
+        }
+
+        private static Shell Moved(Shell shell, string motion)
+        {
+            // Oblique: about Z, then X, then Y (each elementary rotation is orthonormal).
+            Transform3D[] oblique = { Transform3D.GetRotationZ(0.6), Transform3D.GetRotationX(0.5), Transform3D.GetRotationY(0.4) };
+            List<Transform3D> transforms = motion == "identity" ? new List<Transform3D>()
+                : motion == "rotate Z 45" ? new List<Transform3D> { Transform3D.GetRotationZ(System.Math.PI / 4) }
+                : motion == "rotate oblique" ? oblique.ToList()
+                : oblique.Append(Transform3D.GetTranslation(100, -50, 7)).ToList();
+            foreach (Transform3D transform3D in transforms)
+            {
+                shell = (Shell)shell.GetTransformed(transform3D);
+            }
+
+            return shell;
+        }
+
+        private static Shell[] GlueBandPair(string name)
+        {
+            Shell cube = TestGeometry.CreateBox(0, 0, 0, 1, 1, 1);
+            switch (name)
+            {
+                case "slab seam 0.5 mm": return new[] { cube, TestGeometry.CreateBox(0.9995, 0, 0, 1.0005, 1, 1) };
+                case "slab overlap 1.5 mm": return new[] { cube, TestGeometry.CreateBox(0.9985, 0, 0, 1.0015, 1, 1) };
+                case "corner cube 0.6 mm": return new[] { cube, TestGeometry.CreateBox(0.9994, 0.9994, 0.9994, 1, 1, 1) };
+                case "corner cube 2 mm": return new[] { cube, TestGeometry.CreateBox(0.998, 0.998, 0.998, 1, 1, 1) };
+                case "corner cube 9 mm": return new[] { cube, TestGeometry.CreateBox(0.991, 0.991, 0.991, 1, 1, 1) };
+                case "L-notch seam 0.5 mm": return new[] { LShape(), TestGeometry.CreateBox(0.9995, 0.9995, 0, 1.0005, 1.0005, 1) };
+                case "L-notch overlap 1.5 mm": return new[] { LShape(), TestGeometry.CreateBox(0.9985, 0.9985, 0, 1.0015, 1.0015, 1) };
+                case "face-touching": return new[] { cube, TestGeometry.CreateBox(1, 0, 0, 1, 1, 1) };
+                case "duplicate": return new[] { cube, TestGeometry.CreateBox(0, 0, 0, 1, 1, 1) };
+                default: throw new System.ArgumentException(name);
+            }
+        }
+
+        public static IEnumerable<object[]> GlueBandCommonCases()
+        {
+            // Expected common volume beyond the band (m3): 0 for seams no thicker than the band.
+            object[][] cases =
+            {
+                new object[] { "slab seam 0.5 mm", 0.0 },
+                new object[] { "slab overlap 1.5 mm", 0.0015 },
+                new object[] { "corner cube 0.6 mm", 0.0 },
+                new object[] { "corner cube 2 mm", 8e-9 },
+                new object[] { "corner cube 9 mm", 7.29e-7 },
+                new object[] { "L-notch seam 0.5 mm", 0.0 },
+                new object[] { "L-notch overlap 1.5 mm", 0.00300225 },
+                new object[] { "face-touching", 0.0 },
+                new object[] { "duplicate", 1.0 },
+            };
+            foreach (object[] motion in RigidMotions())
+            {
+                foreach (object[] item in cases)
+                {
+                    yield return new object[] { motion[0], item[0], item[1] };
+                }
+            }
+        }
+
+        [SkippableTheory]
+        [MemberData(nameof(GlueBandCommonCases))]
+        public void CommonVolume_UnderRigidMotion_CountsOnlyOverlapBeyondGlueBand(string motion, string name, double expected)
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange: before R3 the kernel ran at the band and dropped solids under 1e-6 m3, so the 2 mm and 9 mm
+            // corner cubes reported 0.
+            Shell[] pair = GlueBandPair(name);
+
+            // Act
+            double? common = SAM.Geometry.OCCT.Native.OcctCellComplexBuilder.CommonVolume(Moved(pair[0], motion), Moved(pair[1], motion), GrasshopperRecipe());
+
+            // Assert
+            string message = string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0} ({1}): common volume {2}, expected {3}.", name, motion, common, expected);
+            Assert.True(common.HasValue, message);
+            Assert.True(expected == 0 ? common.Value == 0 : System.Math.Abs(common.Value - expected) <= 1e-4 * expected, message);
+        }
+
+        public static IEnumerable<object[]> GlueBandPairCases()
+        {
+            foreach (object[] motion in RigidMotions())
+            {
+                yield return new object[] { motion[0], "slab seam 0.5 mm", false };
+                yield return new object[] { motion[0], "L-notch seam 0.5 mm", false };
+                yield return new object[] { motion[0], "corner cube 0.6 mm", false };
+                yield return new object[] { motion[0], "slab overlap 1.5 mm", true };
+                yield return new object[] { motion[0], "L-notch overlap 1.5 mm", true };
+                yield return new object[] { motion[0], "corner cube 2 mm", true };
+                yield return new object[] { motion[0], "duplicate", true };
+            }
+        }
+
+        [SkippableTheory]
+        [MemberData(nameof(GlueBandPairCases))]
+        public void CheckOverlap_PairsUnderRigidMotionWithNativeExactTest_SameDecisionInEveryPose(string motion, string name, bool overlaps)
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange
+            Shell[] pair = GlueBandPair(name);
+            List<OcctCell> cells = pair.Select(x => Moved(x, motion)).Select(x => new OcctCell(x, x.Volume())).ToList();
+
+            // Act
+            List<string> failures = SAM.Geometry.OCCT.Native.OcctUnderSplitGuard.CheckOverlap(cells, null, GrasshopperRecipe(), "cells");
+
+            // Assert
+            string message = name + " (" + motion + "): " + string.Join("; ", failures);
+            if (overlaps)
+            {
+                Assert.True(failures.Count == 1 && failures[0].StartsWith("cells 0 and 1 overlap", System.StringComparison.Ordinal), message);
+            }
+            else
+            {
+                Assert.True(failures.Count == 0, message);
+            }
+        }
+
 
         [SkippableFact]
         public void Shells_JulyPanelsValidSewWithRetainTopology_KeepsTopologyContract()

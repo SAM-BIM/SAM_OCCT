@@ -175,6 +175,54 @@ namespace SAM.Geometry.OCCT.Native
         }
 
         /// <summary>
+        /// The glue band max(Tolerance, FuzzyTolerance): the kernel glues geometry closer than the fuzzy tolerance,
+        /// and decoded real cells show seams of 1e-6 to 1e-4 m. Overlaps no thicker than the band are seams.
+        /// </summary>
+        internal static double GlueBand(OcctBuildOptions options)
+        {
+            options = options ?? new OcctBuildOptions();
+            return System.Math.Max(options.Tolerance, options.FuzzyTolerance);
+        }
+
+        /// <summary>
+        /// Applies the glue-band policy of <see cref="CheckDisjoint"/> to one closed piece of the common region of two
+        /// cells: true when it holds a ball of diameter greater than the band (a candidate point - the given
+        /// <paramref name="centre"/>, the internal point or the vertex centroid - lies inside and farther than half
+        /// the band from its boundary); false when it lies in a slab no thicker than the band (along a coordinate
+        /// axis or one of its face normals); null when neither is shown. Mean thickness is not used: a thin seam
+        /// attached to a compact lump can have a small mean thickness.
+        /// </summary>
+        internal static bool? ExceedsBand(Shell piece, Point3D centre, OcctBuildOptions options)
+        {
+            options = options ?? new OcctBuildOptions();
+            double band = GlueBand(options);
+            BoundingBox3D boundingBox3D = piece?.GetBoundingBox();
+            if (boundingBox3D == null)
+            {
+                return null;
+            }
+
+            List<Point3D> vertices = Vertices(piece);
+            if (System.Math.Min(boundingBox3D.Width, System.Math.Min(boundingBox3D.Depth, boundingBox3D.Height)) <= band || ThinAlongOwnFaceNormal(piece, vertices, band))
+            {
+                return false;
+            }
+
+            List<Point3D> candidates = new List<Point3D> { centre, piece.InternalPoint3D(options.FuzzyTolerance, options.Tolerance) };
+            if (vertices.Count != 0)
+            {
+                candidates.Add(new Point3D(vertices.Average(x => x.X), vertices.Average(x => x.Y), vertices.Average(x => x.Z)));
+            }
+
+            if (candidates.Any(x => IsDeepInside(piece, x, band, options)))
+            {
+                return true;
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// Cells of a complex must not share interior: <see cref="CheckDisjoint"/> with the native exact test.
         /// </summary>
         internal static List<string> CheckOverlap(IReadOnlyList<OcctCell> cells, IEnumerable<Point3D> probes, OcctBuildOptions options, string label)
@@ -183,19 +231,25 @@ namespace SAM.Geometry.OCCT.Native
         }
 
         /// <summary>
-        /// Cells of a complex must not share interior. Every pair must be shown disjoint; a pair that cannot be is a
-        /// failure, so the check fails closed. Point samples can only prove an overlap, never disjointness.
+        /// Cells of a complex must not share interior beyond the glue band b = max(Tolerance, FuzzyTolerance)
+        /// (<see cref="GlueBand"/>). The one tolerance policy, used by every test below: two cells overlap when
+        /// their common region holds a ball of diameter greater than b, i.e. some point lies deeper than b/2 inside
+        /// both cells; otherwise they touch, with a seam no thicker than the band. The policy is invariant under rigid
+        /// motions. Every pair must be shown to touch or be disjoint; a pair that cannot be is a failure, so the check
+        /// fails closed.
         /// <list type="number">
-        /// <item>Proof of overlap: a sample point inside two cells. The samples are each cell's internal point, the
-        /// <paramref name="probes"/> (e.g. an alternative build's internal points, used only as locations) and the
-        /// centre of each pair's bounding-box intersection.</item>
-        /// <item>Proof of disjointness, managed and exact up to the glue band max(Tolerance, FuzzyTolerance):
-        /// bounding boxes that overlap by no more than the band along some axis, or a face plane of either cell with
-        /// all vertices of one cell on one side and all of the other on the other side. A cell lies in the convex
-        /// hull of its vertices, so such a plane separates the cells (face-touching cells share it).</item>
-        /// <item>Otherwise (e.g. a cell in the notch of an L-shaped one) the exact common volume, without pieces no
-        /// thicker than the band (seams between touching cells): disjoint when it is 0, an overlap when positive, and
-        /// a failure when it cannot be computed. A null <paramref name="commonVolume"/> is the native boolean Common.</item>
+        /// <item>Proof of overlap: a sample point inside both cells and farther than b/2 from both boundaries. A
+        /// point inside both but nearer a boundary proves only that the cells meet, not that the band is exceeded,
+        /// and decides nothing. The samples are each cell's internal point, the <paramref name="probes"/> (e.g. an
+        /// alternative build's internal points, used only as locations) and the centre of each pair's bounding-box
+        /// intersection.</item>
+        /// <item>Proof of touching: a direction along which the projections of the two cells overlap by no more than
+        /// b. The directions are the coordinate axes (bounding boxes) and the face normals of either cell (vertices:
+        /// a cell lies in the convex hull of its vertices). The common region then lies in a slab no thicker than b,
+        /// which holds no ball of diameter greater than b.</item>
+        /// <item>Otherwise (e.g. a cell in the notch of an L-shaped one) the exact common volume, measured by the
+        /// same policy (see <see cref="ExceedsBand"/>): touching when it is 0, an overlap when positive, and a failure
+        /// when it cannot be computed. A null <paramref name="commonVolume"/> is the native boolean Common.</item>
         /// </list>
         /// </summary>
         internal static List<string> CheckDisjoint(IReadOnlyList<OcctCell> cells, IEnumerable<Point3D> probes, OcctBuildOptions options, string label, CommonVolume commonVolume)
@@ -213,7 +267,7 @@ namespace SAM.Geometry.OCCT.Native
                 commonVolume = (first, second) => OcctCellComplexBuilder.CommonVolume(first, second, nativeOptions);
             }
 
-            double band = System.Math.Max(options.Tolerance, options.FuzzyTolerance);
+            double band = GlueBand(options);
             List<BoundingBox3D> boxes = cells.Select(x => x?.Shell?.GetBoundingBox()).ToList();
             List<Point3D> points = cells.Select(x => InternalPoint(x, options)).Where(x => x != null).ToList();
             if (probes != null)
@@ -224,7 +278,7 @@ namespace SAM.Geometry.OCCT.Native
             HashSet<long> overlapping = new HashSet<long>();
             foreach (Point3D point3D in points)
             {
-                List<int> containing = ContainingCells(cells, boxes, point3D, options);
+                List<int> containing = DeeplyContainingCells(cells, boxes, point3D, options);
                 for (int i = 0; i < containing.Count - 1; i++)
                 {
                     for (int j = i + 1; j < containing.Count; j++)
@@ -254,7 +308,7 @@ namespace SAM.Geometry.OCCT.Native
                     }
 
                     Point3D centre = IntersectionCentre(boxes[i], boxes[j]);
-                    if (first.Inside(centre, options.FuzzyTolerance, options.Tolerance) && second.Inside(centre, options.FuzzyTolerance, options.Tolerance))
+                    if (IsDeepInside(first, centre, band, options) && IsDeepInside(second, centre, band, options))
                     {
                         messages[key] = string.Format("{0} {1} and {2} overlap", label, i, j);
                         continue;
@@ -262,7 +316,7 @@ namespace SAM.Geometry.OCCT.Native
 
                     vertices[i] = vertices[i] ?? Vertices(first);
                     vertices[j] = vertices[j] ?? Vertices(second);
-                    if (SeparatedByFacePlane(first, vertices[i], vertices[j], band) || SeparatedByFacePlane(second, vertices[j], vertices[i], band))
+                    if (ThinAlongFaceNormal(first, vertices[i], vertices[j], band) || ThinAlongFaceNormal(second, vertices[j], vertices[i], band))
                     {
                         continue;
                     }
@@ -503,18 +557,20 @@ namespace SAM.Geometry.OCCT.Native
             return (long)i * count + j;
         }
 
-        private static List<int> ContainingCells(IReadOnlyList<OcctCell> cells, List<BoundingBox3D> boxes, Point3D point3D, OcctBuildOptions options)
+        // The cells in which point3D lies deeper than half the glue band.
+        private static List<int> DeeplyContainingCells(IReadOnlyList<OcctCell> cells, List<BoundingBox3D> boxes, Point3D point3D, OcctBuildOptions options)
         {
+            double band = GlueBand(options);
             List<int> containing = new List<int>();
             for (int i = 0; i < cells.Count; i++)
             {
                 Shell shell = cells[i]?.Shell;
-                if (shell == null || (boxes[i] != null && !boxes[i].Inside(point3D, true, System.Math.Max(options.Tolerance, options.FuzzyTolerance))))
+                if (shell == null || (boxes[i] != null && !boxes[i].Inside(point3D, true, band)))
                 {
                     continue;
                 }
 
-                if (shell.Inside(point3D, options.FuzzyTolerance, options.Tolerance))
+                if (IsDeepInside(shell, point3D, band, options))
                 {
                     containing.Add(i);
                 }
@@ -523,7 +579,33 @@ namespace SAM.Geometry.OCCT.Native
             return containing;
         }
 
-        // Interiors are disjoint when the boxes overlap by no more than the band along some axis.
+        // True when point3D is inside shell and farther than band/2 from its boundary: the ball of diameter band
+        // around it lies in the shell. A point inside two shells this way proves that they overlap beyond the band.
+        // The inside test ignores ray hits within band/2 of an edge (not the fuzzy tolerance): the point is that far
+        // from every face anyway, and a wider margin leaves no usable ray in a piece only a few bands wide.
+        private static bool IsDeepInside(Shell shell, Point3D point3D, double band, OcctBuildOptions options)
+        {
+            if (shell == null || point3D == null || !shell.Inside(point3D, band / 2, options.Tolerance))
+            {
+                return false;
+            }
+
+            double depth = double.MaxValue;
+            foreach (Face3D face3D in shell.Face3Ds ?? new List<Face3D>())
+            {
+                double distance = face3D?.Distance(point3D) ?? double.NaN;
+                if (double.IsNaN(distance))
+                {
+                    return false;
+                }
+
+                depth = System.Math.Min(depth, distance);
+            }
+
+            return depth > band / 2;
+        }
+
+        // The common region of the two boxes lies in a slab no thicker than the band along some axis.
         private static bool Separated(BoundingBox3D first, BoundingBox3D second, double band)
         {
             return System.Math.Min(first.Max.X, second.Max.X) - System.Math.Max(first.Min.X, second.Min.X) <= band
@@ -539,10 +621,10 @@ namespace SAM.Geometry.OCCT.Native
                 (System.Math.Max(first.Min.Z, second.Min.Z) + System.Math.Min(first.Max.Z, second.Max.Z)) / 2);
         }
 
-        // True when a face plane of shell puts all its own vertices on one side (within the band) and all vertices of
-        // the other shell on the other side. Both cells lie in the convex hulls of their vertices, so the plane
-        // separates them up to a band-thick slab.
-        private static bool SeparatedByFacePlane(Shell shell, List<Point3D> vertices, List<Point3D> otherVertices, double band)
+        // True when, along the normal of a face of shell, the projections of the two vertex sets overlap by no more
+        // than the band. Both cells lie in the convex hulls of their vertices, so their common region lies in a slab
+        // no thicker than the band (face-touching cells: no overlap at all). The same measure as the axis test.
+        private static bool ThinAlongFaceNormal(Shell shell, List<Point3D> vertices, List<Point3D> otherVertices, double band)
         {
             if (vertices.Count == 0 || otherVertices.Count == 0)
             {
@@ -559,7 +641,33 @@ namespace SAM.Geometry.OCCT.Native
 
                 SignedRange(plane, vertices, out double min, out double max);
                 SignedRange(plane, otherVertices, out double otherMin, out double otherMax);
-                if ((max <= band && otherMin >= -band) || (min >= -band && otherMax <= band))
+                if (System.Math.Min(max, otherMax) - System.Math.Max(min, otherMin) <= band)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // True when, along the normal of one of its own faces, the vertices of shell span no more than the band.
+        private static bool ThinAlongOwnFaceNormal(Shell shell, List<Point3D> vertices, double band)
+        {
+            if (vertices.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (Face3D face3D in shell.Face3Ds ?? new List<Face3D>())
+            {
+                Plane plane = face3D?.GetPlane();
+                if (plane == null)
+                {
+                    continue;
+                }
+
+                SignedRange(plane, vertices, out double min, out double max);
+                if (max - min <= band)
                 {
                     return true;
                 }
