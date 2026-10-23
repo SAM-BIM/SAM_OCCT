@@ -1852,6 +1852,32 @@ MaxExtend revert restores the pre-P3 signatures exactly (all 15 pinned rows pass
   stamps, North1 unchanged, and the pair-only chain keeping North0 with the unstamped band's two Extra
   cells unchanged. Record: `documentation/North0-Consolidation-Follow-Q4.md`.
 
+- `ResidualContactClosureTests` (unit, 37) — the residual cap-edge closure (rule E) on synthetic z = 3 caps
+  (fill margin 0.4, overshoot 0.05), controls C01-C31 of the towers residual-closure review: an edge authored on
+  a wall that conditioning moved away closes onto the wall plane + overshoot (C02, partial cover C03, hole kept
+  C05, finite wall section C09, corner partner C15, ring wrapping index 0 C21, blocker only touching the sweep
+  C23); never-authored voids (C01), full cover, hole-edge contact, blockers inside the strip or the overshoot,
+  narrow stubs, out of reach, already closed, interrupted target wall, another wall's source foot in the strip,
+  non-partner crossings, off-storey source walls, non-image notches, sloped (45 deg) and tilted (10 deg) panels,
+  mid-span partner crossings, two contact intervals, a broken chain and a sweep across the cap's own overhang
+  (C29) all stay put. Lineage: a source whose contact-edge band lies outside the current cap (C26) or off the
+  level group (C30), nearest-fallback lineage on the cap or wall side (C27/C28), and a source attributed to two
+  clean faces all create no contact; a unique geometric wall source closes (C31, by construction a Stage-A move).
+  `SnapStage.Clean` attributes a 7 deg crossing partition to BOTH clean faces (the reachable C31 path the
+  ambiguity guard rejects). `MoveSplitBoundaryRun` accepts the C29 self-intersecting move without the
+  simple-polygon check (why the pass adds it) and leaves the cap unchanged with it. End to end through
+  `Panel3DSnapSolver.Execute`: a Stage-A-broken contact closes on the one-step uniform path only (not
+  directional, not `InputAlreadyClean`); a misattributed unrelated floor leaves an authored void open.
+
+- `TowersResidualContactClosureIntegrationTests` (native-gated) — on `whole-level-towers.sam` at doubleWallGap
+  0 / 0.4 / 0.47 / 0.5 the one-step uniform chain closes exactly one edge (the middle room's floor onto the north
+  wall) and gains exactly one cell (119.364 m3, 10 faces, bbox x 17.1427..21.9509, y -8.9172..-0.7442, containing
+  (19.5, -5, 13.8)); every cell of the gated-off two-step control keeps its complete boundary (face loops and
+  holes, 1e-6 m). Towers pins reconciled by measurement (+1 cell, +119.364 m3, +39.136 m2 cell floor area,
+  +0.286 m2 level-datum panel area at every gap; the 0.4 -> 0.5 delta unchanged) in
+  `PR61TowersQuantitativeValidationTests` and `TowersBucketLeverDiagnosticTests`. Record:
+  `documentation/Towers-Residual-Closure-Q4.md`.
+
 - `ParameterPrecedenceTests.ResolveConsolidationRanges_*` — Unit tests for the
   `ResolveConsolidationRanges` resolver: stamped BucketSize ⇒ value; unstamped ⇒ 0.
 

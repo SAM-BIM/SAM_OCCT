@@ -43,6 +43,11 @@ namespace SAM.OCCT.IntegrationTests
     /// in that record, not as acceptance.
     /// </para>
     /// <para>
+    /// Every gap: the residual cap-edge closure (documentation/Towers-Residual-Closure-Q4.md) closes the 12-28 mm
+    /// floor/north-wall slot the uniform Fill left, so the middle towers room (119.364 m³, floor 39.136 m²) now
+    /// exists at gaps 0, 0.4, 0.47 and 0.5 (one more cell each; the 0.4 -> 0.5 delta is unchanged).
+    /// </para>
+    /// <para>
     /// Fixture: whole-level-towers.sam. Values captured by actual execution.
     /// </para>
     /// </summary>
@@ -86,17 +91,20 @@ namespace SAM.OCCT.IntegrationTests
         // Exact expected metrics (m³ / m²), captured by actual execution
         // AbsTol is the pinning tolerance.
         private const double AbsTol = 0.05;
-        private const double Volume0 = 9605.396;
-        private const double Volume04 = 9620.406;
-        private const double Volume05 = 9641.151; // re-measured 2026-10-23: west north-strip room kept (was 9552.766)
-        private const double CellFloorArea0 = 3160.075;
-        private const double CellFloorArea04 = 3168.220;
-        private const double CellFloorArea05 = 3171.799; // re-measured 2026-10-23 (was 3142.820)
-        private const double PanelFloorArea0 = 1336.727;
-        private const double PanelFloorArea04 = 1335.811;
-        private const double PanelFloorArea05 = 1330.101; // unchanged by the restored room
-        private const double VolumeDrift05 = 0.3722; // % vs gap 0, re-measured 2026-10-23 (was about -0.548)
-        private const double VolumeDelta04To05 = 20.745; // m3, re-measured 2026-10-23 (was -67.640)
+        // Re-measured 2026-10-23 with the residual cap-edge closure (middle towers room recovered): every volume
+        // +119.364 m3, every cell floor area +39.136 m2, every level-datum panel floor area +0.286 m2 (the closed floor
+        // edge). Previous values in parentheses.
+        private const double Volume0 = 9724.761; // (9605.396)
+        private const double Volume04 = 9739.770; // (9620.406)
+        private const double Volume05 = 9760.515; // (9641.151; before the North0 follow 9552.766)
+        private const double CellFloorArea0 = 3199.211; // (3160.075)
+        private const double CellFloorArea04 = 3207.355; // (3168.220)
+        private const double CellFloorArea05 = 3210.935; // (3171.799; before the North0 follow 3142.820)
+        private const double PanelFloorArea0 = 1337.013; // (1336.727)
+        private const double PanelFloorArea04 = 1336.097; // (1335.811)
+        private const double PanelFloorArea05 = 1330.387; // (1330.101)
+        private const double VolumeDrift05 = 0.3677; // % vs gap 0 (0.3722; before the North0 follow about -0.548)
+        private const double VolumeDelta04To05 = 20.745; // m3, unchanged by the closure (before the North0 follow -67.640)
         private const double Sliver18Volume = 1.095;
         private const double Sliver19Volume = 2.738;
         private const double NorthStripParentVolume = 157.574;
@@ -302,8 +310,8 @@ namespace SAM.OCCT.IntegrationTests
                 output.WriteLine("GAP=0 (baseline): cells={0} volume={1:F3} m³ cellFloorArea={2:F3} m² panelFloorArea={3:F3} m² slivers={4} v18={5:0.###} v19={6:0.###} 22↔26={7}",
                     cellCount, totalVolume, cellFloorArea, panelFloorArea, sliverCount, v18, v19, adjacency);
 
-                // Exact deterministic assertions (verified by actual execution).
-                Assert.Equal(31, cellCount);
+                // Exact deterministic assertions (verified by actual execution). 32 = 31 + the middle towers room.
+                Assert.Equal(32, cellCount);
                 Assert.InRange(totalVolume, Volume0 - AbsTol, Volume0 + AbsTol);
                 Assert.InRange(cellFloorArea, CellFloorArea0 - AbsTol, CellFloorArea0 + AbsTol);
                 Assert.InRange(panelFloorArea, PanelFloorArea0 - AbsTol, PanelFloorArea0 + AbsTol);
@@ -359,8 +367,8 @@ namespace SAM.OCCT.IntegrationTests
                         c.Center?.X ?? double.NaN, c.Center?.Y ?? double.NaN, c.Center?.Z ?? double.NaN, c.Volume);
                 output.WriteLine("  22↔26 adjacency: {0}", adjacency04);
 
-                // Exact deterministic assertions (verified by actual execution).
-                Assert.Equal(30, cells04);
+                // Exact deterministic assertions (verified by actual execution). 31 = 30 + the middle towers room.
+                Assert.Equal(31, cells04);
                 Assert.InRange(vol04, Volume04 - AbsTol, Volume04 + AbsTol);
                 Assert.InRange(cellArea04, CellFloorArea04 - AbsTol, CellFloorArea04 + AbsTol);
                 Assert.InRange(panelArea04, PanelFloorArea04 - AbsTol, PanelFloorArea04 + AbsTol);
@@ -545,8 +553,8 @@ namespace SAM.OCCT.IntegrationTests
                 Assert.Equal(0, run04.Cells.Count(c => c.Volume > 0 && c.Volume < SliverVolumeThreshold));
                 Assert.Equal(0, run05.Cells.Count(c => c.Volume > 0 && c.Volume < SliverVolumeThreshold));
 
-                // No cell lost: 30 at gap 0.4 and every one of them has a gap-0.5 successor.
-                Assert.Equal(30, cells04);
+                // No cell lost: 31 at gap 0.4 (30 + the middle towers room) and every one of them has a gap-0.5 successor.
+                Assert.Equal(31, cells04);
                 Assert.Empty(removed);
                 Assert.Equal(cells04, cells05);
 

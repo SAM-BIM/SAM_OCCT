@@ -581,9 +581,10 @@ namespace SAM.OCCT.IntegrationTests
             var run047 = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.47, fillMargin: 0.4);
             output.WriteLine("gap=0.5: cells={0}; gap=0.47: cells={1}", run05.Cells.Count, run047.Cells.Count);
 
-            // gap 0.47: the 0.474 pair does NOT merge (0.47 < 0.474); 30 cells (the 0.345 pair already merged at
-            // 0.4, eliminating the two sliver cells) with the west strip room apart from the tower.
-            Assert.Equal(30, run047.Cells.Count);
+            // gap 0.47: the 0.474 pair does NOT merge (0.47 < 0.474); 31 cells (the 0.345 pair already merged at
+            // 0.4, eliminating the two sliver cells; +1 the middle towers room the residual cap-edge closure recovers)
+            // with the west strip room apart from the tower.
+            Assert.Equal(31, run047.Cells.Count);
             OcctCell west047 = FindCell(run047, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
             OcctCell east047 = FindCell(run047, NorthStripEastX, NorthStripEastY, NorthStripZ, 0.3);
             int tower047 = NearestCellIndex(run047.Cells, -4.144651, -13.0, 13.765);

@@ -637,6 +637,23 @@ namespace SAM.Geometry.OCCT.Solver
                         FillMargin, DoubleWallGap));
             }
 
+            // Residual cap-edge closure lineage (original sources per clean face, from Stage A's own attribution): only
+            // when Stage A ran (not InputAlreadyClean), the level is untilted (the original faces are world-frame) and
+            // growth is uniform. Everywhere else it stays null and Fill is unchanged.
+            ResidualContactLineage residualContactLineage = null;
+            if (!InputAlreadyClean && !DirectionalCapGrow && toCanonical == null
+                && snapResult.GeometricAttributionPerFace.Count == snapResult.SourceIndicesPerFace.Count)
+            {
+                double maxCapture = new[]
+                {
+                    AlignColinearOffset, DoubleWallGap,
+                    bucketSizes_Adjusted.DefaultIfEmpty(0.0).Max(), consolidationRanges_Adjusted.DefaultIfEmpty(0.0).Max()
+                }.Max();
+                residualContactLineage = new ResidualContactLineage(
+                    face3Ds, snapResult.SourceIndicesPerFace, snapResult.GeometricAttributionPerFace,
+                    System.Math.Max(BucketBetweenLevels, NormalizeCapOffset), maxCapture, ToleranceAngle);
+            }
+
             ConditionStage.Condition(
                 SnappedPanels,
                 new ConditionStage.Settings
@@ -650,10 +667,19 @@ namespace SAM.Geometry.OCCT.Solver
                     FillCapsToWalls = FillCapsToWalls,
                     FillMargin = FillMargin,
                     FillOvershoot = FillOvershoot,
-                    DirectionalCapGrow = DirectionalCapGrow
+                    DirectionalCapGrow = DirectionalCapGrow,
+                    ResidualContactLineage = residualContactLineage
                 },
                 tolerances,
                 extendRecords);
+
+            if (residualContactLineage != null)
+            {
+                foreach (string message in residualContactLineage.Messages)
+                {
+                    Diagnostics.Add(SolverStage.Snap, DiagnosticCode.Gap, OcctDiagnosticSeverity.Info, message);
+                }
+            }
 
             // Plan-closure diagnostic: which wall ends are STILL open after conditioning? These are the panels
             // to upgrade (raise MaxExtend / bucket) before the floors/roofs can fill a closed polysurface.
@@ -2653,6 +2679,16 @@ namespace SAM.Geometry.OCCT.Solver
         /// fallback chain - only ahead of it). Default false.</param>
         public static void Fill(List<SnappedPanel> panels, double verticalAngleTolerance, double margin, double toleranceDistance, double overshoot = 0.05, List<ExtendRecord> records = null, bool directionalCapGrow = false)
         {
+            FillCore(panels, verticalAngleTolerance, margin, toleranceDistance, overshoot, records, directionalCapGrow, null);
+        }
+
+        /// <summary>
+        /// <see cref="Fill(List{SnappedPanel}, double, double, double, double, List{ExtendRecord}, bool)"/> plus, on the
+        /// uniform path only and only when <paramref name="residualContactLineage"/> is supplied (one-step, untilted
+        /// Extend3D), the residual cap-edge closure of <see cref="ResidualContactClosure"/> after every cap's grow.
+        /// </summary>
+        internal static void FillCore(List<SnappedPanel> panels, double verticalAngleTolerance, double margin, double toleranceDistance, double overshoot, List<ExtendRecord> records, bool directionalCapGrow, ResidualContactLineage residualContactLineage)
+        {
             if (panels == null || panels.Count == 0)
             {
                 return;
@@ -2806,6 +2842,21 @@ namespace SAM.Geometry.OCCT.Solver
                     {
                         cap.GrowOutward(margin, toleranceDistance);
                     }
+                }
+            }
+
+            // Residual cap-edge closure (uniform path only): an authored cap/wall contact that conditioning broke and
+            // the whole-cap grow above did not close. Null lineage (every other path) = no change.
+            if (!directionalCapGrow && residualContactLineage != null)
+            {
+                foreach (ResidualContactClosure.Closure closure in ResidualContactClosure.Apply(panels, residualContactLineage, margin, overshoot, toleranceDistance))
+                {
+                    records?.Add(new ExtendRecord(
+                        closure.CapIndex, RepresentativeSource(panels[closure.CapIndex]), ExtendOperationKind.CapGrow,
+                        closure.AreaBefore, closure.AreaAfter, "area",
+                        closure.From, closure.To,
+                        closure.WallIndex, RepresentativeSource(panels[closure.WallIndex]), "walls-source-contact", closure.Message,
+                        overshoot, false));
                 }
             }
         }

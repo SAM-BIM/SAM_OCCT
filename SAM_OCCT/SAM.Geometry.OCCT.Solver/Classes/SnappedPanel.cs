@@ -662,6 +662,38 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
+        /// <see cref="MoveBoundaryRun"/> on a copy of this cap's external loop that already carries the split points
+        /// (<paramref name="splitExternal"/>: the same boundary with extra points inserted on existing edges; holes are
+        /// kept). The result is adopted only when the move succeeds and <paramref name="accept"/> (when supplied)
+        /// approves it; otherwise this cap is left exactly as it was.
+        /// </summary>
+        internal bool MoveSplitBoundaryRun(List<Point3D> splitExternal, int first, int last, double dx, double dy, double angleTolerance, double tolerance, System.Func<Face3D, bool> accept = null)
+        {
+            if (splitExternal == null || splitExternal.Count < 3)
+            {
+                return false;
+            }
+
+            List<IClosedPlanar3D> loops = new List<IClosedPlanar3D> { new Polygon3D(splitExternal) };
+            loops.AddRange(face3D.GetInternalEdge3Ds() ?? new List<IClosedPlanar3D>());
+            Face3D split = Geometry.Spatial.Face3D.Create(loops);
+            if (split == null || !split.IsValid())
+            {
+                return false;
+            }
+
+            Face3D original = face3D;
+            Adopt(split);
+            if (!MoveBoundaryRun(first, last, dx, dy, angleTolerance, tolerance) || (accept != null && !accept(face3D)))
+            {
+                Adopt(original);
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
         /// Smart analogue of <see cref="GrowOutward"/>: instead of growing this cap by a blind fixed
         /// margin, grows it by the <em>measured</em> gap to the walls it is short of. For each in-reach
         /// vertical wall, the smallest perpendicular distance from this cap's boundary to the wall plane is
