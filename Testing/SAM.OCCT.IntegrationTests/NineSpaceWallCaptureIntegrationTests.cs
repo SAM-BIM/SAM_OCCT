@@ -109,6 +109,14 @@ namespace SAM.OCCT.IntegrationTests
             "South2|West1", "West1|West2", "West1|West3", "West2|West3",
         };
 
+        /// <summary>Warnings whose producer says the result may be wrong; the contract rejects any of them (Errors
+        /// always). Their producers emit them only as Warnings. Ordinary Info/Warning diagnostics are allowed.</summary>
+        private static readonly string[] UnreliableResultCodes =
+        {
+            "SAM_OCCT_BUILD_UNRELIABLE", "SAM_OCCT_SEW_BUILD_INVALID", "SAM_OCCT_SEW_VOLUME_CONFLICT",
+            "SAM_OCCT_ANALYTICAL_CELL_SPACE_DELTA", "SAM_OCCT_COVERAGE_UNAVAILABLE",
+        };
+
         private readonly ITestOutputHelper output;
 
         public NineSpaceWallCaptureIntegrationTests(ITestOutputHelper output)
@@ -125,6 +133,11 @@ namespace SAM.OCCT.IntegrationTests
             yield return new object[] { "East1|South1", 0.20 };
             yield return new object[] { "East1|South1", 0.35 };
             yield return new object[] { "West3|North0", CaptureBetweenBandAndWestNorth };
+        }
+
+        public static IEnumerable<object[]> UnreliableWarningCodes()
+        {
+            return UnreliableResultCodes.Select(x => new object[] { x });
         }
 
         public static IEnumerable<object[]> AboveAllCaptures()
@@ -331,6 +344,31 @@ namespace SAM.OCCT.IntegrationTests
             }
         }
 
+        [SkippableTheory]
+        [MemberData(nameof(UnreliableWarningCodes))]
+        public void ContractGate_AcceptedBelowGapResultWithUnreliableWarning_IsRejected(string code)
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange: the 0.45 m control, which meets its contract; an ordinary Info diagnostic must stay harmless.
+            ChainRun run = ChainRun.Full(CaptureBetweenBandAndWestNorth, null, null);
+            List<string> expected = IntendedAdjacencies.Where(x => x != "North0|West3").ToList();
+
+            using (run.Result)
+            {
+                Assert.Empty(ContractViolations(run, expected));
+                run.Result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", "Negative control: an ordinary informational diagnostic.");
+                Assert.Empty(ContractViolations(run, expected));
+
+                // Act: the same result, now declared unreliable by its producer.
+                run.Result.AddDiagnostic(OcctDiagnosticSeverity.Warning, code, "Negative control: injected unreliable-result warning.");
+                List<string> violations = ContractViolations(run, expected);
+
+                // Assert: rejected for that reason alone.
+                Assert.Equal(new[] { "diagnostic Warning " + code }, violations);
+            }
+        }
+
         [SkippableFact]
         public void AcceptanceChain_TwoCapturesAboveEveryPairGap_SameSpatialResult()
         {
@@ -528,8 +566,8 @@ namespace SAM.OCCT.IntegrationTests
                 violations.Add("orphan cluster panel " + orphan);
             }
 
-            string[] unreliable = { "SAM_OCCT_SEW_BUILD_INVALID", "SAM_OCCT_SEW_VOLUME_CONFLICT", "SAM_OCCT_ANALYTICAL_CELL_SPACE_DELTA", "SAM_OCCT_COVERAGE_UNAVAILABLE" };
-            foreach (OcctDiagnostic diagnostic in run.Result.Diagnostics.Where(x => x.Severity == OcctDiagnosticSeverity.Error || unreliable.Contains(x.Code)))
+            foreach (OcctDiagnostic diagnostic in run.Result.Diagnostics.Where(x => x.Severity == OcctDiagnosticSeverity.Error
+                || UnreliableResultCodes.Contains(x.Code)))
             {
                 violations.Add(string.Format(CultureInfo.InvariantCulture, "diagnostic {0} {1}", diagnostic.Severity, diagnostic.Code));
             }
