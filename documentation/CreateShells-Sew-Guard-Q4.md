@@ -1,12 +1,15 @@
-# SAMOCCT.CreateShells sew guard - local change record (2026-10-23)
+# SAMOCCT.CreateShells sew guard - change record (2026-10-23)
 
-Worktree `SAM_OCCT-wt-towers-residual-closure`, branch `fix/towers-residual-closure-q4` (draft SAM-BIM/SAM_OCCT#82,
-head `229f971b73fef057948479206f9d4ef7c82262a9`, base `sow/2026-Q4` at `819962df`). **Uncommitted local diff for
-independent review; not committed, pushed or merged.** It sits beside the reviewed, uncommitted three-file towers
-revision (`TESTING.md`, the towers integration test, `Towers-Residual-Closure-Q4.md`), sealed at diff SHA256
-`4d7ad14ab2b495211d247ee10df8cee6dfda6093358c64391a908083e78d3a18`. That seal no longer covers `TESTING.md`, which
-this change's documentation revision edits (see "Documentation revision"). The towers test and its record are
-untouched. Where this change lands (PR #82 or its own PR) is an owner decision. `PROJECT_PROGRESS.md` is not touched.
+Branch `fix/towers-residual-closure-q4`, published to draft SAM-BIM/SAM_OCCT#82 (base `sow/2026-Q4` at `819962df`;
+ancestry in `Towers-Residual-Closure-Q4.md`, "Dependency"). Owner-approved for publication on 2026-10-23, version
+0.4.0 kept. Not merged.
+- **Commit `804ead6` is this change and the tested content.** It is `229f971` plus the managed-path revision
+  `9441a07` (the sealed three-file diff, SHA256 `4d7ad14ab2b495211d247ee10df8cee6dfda6093358c64391a908083e78d3a18`,
+  committed byte-identical) plus this change.
+- That seal does not cover the `TESTING.md` edits made here (see "Documentation revision").
+- Later commits change records only.
+
+`PROJECT_PROGRESS.md` is not touched.
 
 Evidence (machine-local, outside the repository; copy it before switching machines):
 `SAM-BIM/.createshells-sew-guard-20261023/` (README, harness, before/after exports, logs, TRX).
@@ -152,11 +155,14 @@ native runs above were not repeated.
 
 ## Open
 
-- Owner: the version bump level (0.4.0), where this change lands, and publication.
-- `SAM.OCCT.GrasshopperTests` is not run by CI (`build.yml` runs the unit and integration projects only).
-- `documentation/Towers-Residual-Closure-Q4.md` (sealed revision, not edited here) still lists `SAMOCCTCreateShells`
-  as an unguarded sew consumer under "Risks and limits" and "Owner decisions". That becomes stale if this change
-  lands; correct it on publication.
+- Reviews (machine-local): `SAM-BIM/.review-createshells-independent-20261023/REVIEW.md` (REVISE, wording only,
+  resolved) and `DOC-REVISION-REVIEW.md` (ACCEPT). The owner then approved publication with version 0.4.0.
+- `SAM.OCCT.GrasshopperTests` is not run by CI (`build.yml` runs the unit and integration projects only). CI builds
+  `SAM_OCCT.sln`, which compiles the project, so the hosted Build check covers compilation and package restore
+  only.
+- The towers record's unguarded-consumer risk is reconciled: explicit sewing in CreateShells is guarded; the
+  automatic retry with sewing off, the golden recount and direct API callers without `ValidateSewCoverage` remain
+  unchecked.
 - Not covered by a component fixture: the guard's no-valid-replacement branch (library-level only), `ComputeData`
   scheduling, output Goo conversion, saved-definition round trips and the canvas.
-- Next step: independent check of this documentation revision. No commit, push, merge or deployment is authorised.
+- Next step: owner review of draft #82 and its hosted checks at the final head. No merge or deployment is authorised.

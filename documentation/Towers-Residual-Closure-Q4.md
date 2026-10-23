@@ -8,12 +8,21 @@ Commits:
 - `0dac3f4`: correction, tests, towers pin reconciliation;
 - `119eae0`: the workflow-parity pin found by the full native run;
 - `4b16897`, `229f971`: this record;
-- then the managed-path test/evidence revision (tests, `TESTING.md` and this record only; see "Managed path").
+- `9441a07`: the managed-path test/evidence revision (tests, `TESTING.md` and this record only; see "Managed path"),
+  byte-identical to its independently reviewed diff (SHA256 `4d7ad14a...`);
+- `804ead6`: the `SAMOCCT.CreateShells` sew guard (record `documentation/CreateShells-Sew-Guard-Q4.md`);
+- then a records-only reconciliation (this record and the CreateShells record).
 
-**Production content tested: `119eae0fd695a84e310b43fd66fbdde2d6a098b4`** (unchanged by everything after it). The
-revision's tests were validated on `229f971` plus the revision diff (test file blob
-`b029443f3c4bce6a61e52736ff0918b6dd7a9b1e`); its commit SHA is in the PR description. `PROJECT_PROGRESS.md` is not touched (post-merge
-closeout only).
+**Production content tested: `119eae0fd695a84e310b43fd66fbdde2d6a098b4`** for the towers rule (unchanged by
+everything after it, apart from the Grasshopper component in `804ead6`).
+- The managed-path revision's tests were validated on `229f971` plus that diff (test file blob
+  `b029443f3c4bce6a61e52736ff0918b6dd7a9b1e`).
+- **Tested content of the final local runs: `804ead6`**, whose tree is `229f971` plus both reviewed diffs. Full unit
+  and native ran before the CreateShells description wording was revised (text only); the Grasshopper suite ran on
+  `804ead6` exactly.
+- Later commits change records only.
+
+`PROJECT_PROGRESS.md` is not touched (post-merge closeout only).
 
 Specification and evidence (machine-local, outside the repository; copy them before switching machines):
 - `SAM-BIM/.review-towers-closure-revision-20261023/PROPOSAL-REVISED-2.md`: the validated rule.
@@ -40,7 +49,10 @@ Full native: 496 = 469 passed / 25 failed / 2 not executed. Against the 791bcaa 
 (19 historical + 6 rigid-motion), 23 keep their message and 2 (the towers managed golden masters, which measure an
 unguarded recount; see "Managed path") changed message; the 2 not-executed tests are unchanged.
 
-Not merged. Hosted CI: see the PR description.
+`SAMOCCT.CreateShells` with `sewBeforeBuild_` true now builds through the sew guard (`804ead6`) and keeps the west and
+middle rooms on both managed chains. Its automatic sew retry with sewing off remains unchecked.
+
+Not merged. Hosted CI at the published head: see the PR description.
 
 ## Problem
 
@@ -277,12 +289,17 @@ boundary**. Every non-middle closure leaves the cell set identical (`sweep-diff.
 
 ## Dependency (disclosed)
 
-`origin/sow/2026-Q4` is `819962d`. This branch adds twelve commits on top of it.
+`origin/sow/2026-Q4` is `819962d`. **This branch is not based on that tip.** Its merge-base with Q4 is
+`3523ed264438f9fc7f1dd7a9eb5ee90c71ca8ee2` (on the SAM_OCCT#81 sew-guard branch). The published head is 15 commits
+ahead and 4 behind. The 4 Q4-only commits are #81's publication, merge and closeout commits and change records only
+(`PROJECT_PROGRESS.md`, `documentation/Sew-Guard-Invalid-Cells-Q4.md`), so the sew guard code here is the code #81
+merged. Not rebased (no rebase was authorised; none is needed for a clean merge).
 - **Nine-space wall-capture acceptance test** (record `documentation/Nine-Space-Wall-Capture-Q4.md`): `ef9bf81`,
   `8210c85`, `30e0e27`, `4d77ef4`.
 - **North0 consolidation follow** (record `documentation/North0-Consolidation-Follow-Q4.md`): `ff71a70`, `4b0e53d`,
   `791bcaa`, `2a09f69`.
-- **This correction:** `0dac3f4`, `119eae0`, and this record (two commits), then the managed-path revision.
+- **This correction:** `0dac3f4`, `119eae0`, and this record (two commits), then the managed-path revision
+  (`9441a07`), the CreateShells sew guard (`804ead6`) and the record reconciliation.
 
 A merge into `sow/2026-Q4` delivers all three. The North0 change provides `SnappedPanel.MoveBoundaryRun`, which this
 correction uses. `git merge-tree` reports a clean merge with `origin/sow/2026-Q4`. Neither inherited branch had been
@@ -291,12 +308,17 @@ record ends at "Independent review of 791bcaa").
 
 ## Risks and limits
 
-- **Unguarded sew consumers (pre-existing; not only tests).** Any build of these panels with `SewBeforeBuild = true`
-  and `ValidateSewCoverage` false (its default) sees a deterministic, input-dependent room set on the towers default
-  chain: before, it lost the 76.994 and 155.536 m³ rooms inside an invalid −3767.5 m³ sew cell; now it loses the
-  159.479 m³ room. `SAMOCCTCreateShells` builds its options from the user's sewing inputs without the guard;
-  `SAMOCCTCreateAdjacencyCluster` enables it. Repairing or guarding that path is a separate owner decision, as is any
-  change to the golden recount.
+- **Unguarded sew consumers (pre-existing).** Any build of these panels with `SewBeforeBuild = true` and
+  `ValidateSewCoverage` false (its default) sees a deterministic, input-dependent room set on the towers default
+  chain. Before, it lost the 76.994 and 155.536 m³ rooms inside an invalid −3767.5 m³ sew cell; now it loses the
+  159.479 m³ room. Status of the consumers:
+  - **Explicit sewing is now guarded in both Grasshopper components.** `SAMOCCTCreateAdjacencyCluster` already
+    enabled the guard. `SAMOCCTCreateShells` enables it from 0.4.0 (`804ead6`, `CreateShells-Sew-Guard-Q4.md`).
+  - The guard can still keep a valid but suspect sew build. It then reports a Warning (or an Info for unused faces
+    only) and `Successful` stays true.
+  - **Still unchecked:** the automatic sew retry after a hard direct-build failure with sewing off; the golden
+    recount (test code); and direct API callers that do not set `ValidateSewCoverage`.
+  - Any change to the golden recount remains a separate owner decision.
 - **Managed re-facing:** on both managed chains two neighbouring cells change their face partition (boundaries
   preserved, see "Managed path"). Consumers keyed on output face identity, rather than geometry, see a change.
 - **`Create.Spaces`** still refuses the default forced-managed towers result (13 naked edges, 19 before).
@@ -318,11 +340,14 @@ reconciliation of the directly affected towers count/volume pins. Open:
 - review of this draft PR, including the inherited North0 and nine-space commits and the managed-path revision;
 - acceptance of the two towers goldens as unguarded-recount measurements (left failing, not re-pinned), alongside
   the six rigid-motion and the historical failures;
-- whether the unguarded sew path (golden recount, `SAMOCCTCreateShells`) is addressed by a separate task or only
-  documented.
+- whether the remaining unguarded sew paths (the golden recount; the automatic retry with sewing off) are addressed
+  by a separate task or only documented. `SAMOCCTCreateShells` explicit sewing was approved for guarding and
+  publication here (2026-10-23, version 0.4.0).
 
 ## Next step
 
-Independent review of the managed-path revision, then owner review of the draft PR and the hosted CI result. No
-merge or deployment is authorized. After an approved merge: the `PROJECT_PROGRESS.md` closeout on `sow/2026-Q4`, and
+The managed-path revision and the CreateShells guard have passed independent review
+(`SAM-BIM/.review-towers-managed-revision-20261023/REVIEW.md`, `SAM-BIM/.review-createshells-independent-20261023/`
+`REVIEW.md` and `DOC-REVISION-REVIEW.md`, machine-local) and are published to this draft PR. Next: owner review of the
+draft PR and the hosted CI result at its final head. No merge or deployment is authorized. After an approved merge: the `PROJECT_PROGRESS.md` closeout on `sow/2026-Q4`, and
 cleanup of the merged task branches (including the two inherited local branches, if their content merged here).
