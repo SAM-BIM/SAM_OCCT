@@ -36,6 +36,11 @@ namespace SAM.Geometry.OCCT.Solver
             /// <summary>The source indices attributed to each clean face (index-aligned to <see cref="CleanFace3Ds"/>).</summary>
             public List<List<int>> SourceIndicesPerFace { get; } = new List<List<int>>();
 
+            /// <summary>Per clean face (index-aligned to <see cref="CleanFace3Ds"/>): true when its
+            /// <see cref="SourceIndicesPerFace"/> came from the geometric attribution (same plane, centre inside),
+            /// false when the nearest-panel fallback supplied it. Read by the residual-contact closure only.</summary>
+            internal List<bool> GeometricAttributionPerFace { get; } = new List<bool>();
+
             /// <summary>How many <see cref="Panel3DSnapSolver.Snap"/> passes <see cref="SnapToFixedPoint"/> ran
             /// before no panel changed further (1 when a single pass already converged).</summary>
             public int SnapIterationCount { get; set; }
@@ -231,6 +236,7 @@ namespace SAM.Geometry.OCCT.Solver
             {
                 Face3D cleanFace3D = cleanFace3Ds[k];
                 List<SnappedPanel> contributors = Contributors(cleanFace3D, postSnap);
+                bool geometric = contributors.Count != 0;
                 if (contributors.Count == 0)
                 {
                     SnappedPanel nearest = NearestPanel(cleanFace3D, postSnap);
@@ -266,6 +272,7 @@ namespace SAM.Geometry.OCCT.Solver
                 result.CleanFace3Ds.Add(cleanFace3D);
                 result.CleanMaxExtensions.Add(maxExtension);
                 result.SourceIndicesPerFace.Add(sourceIndices);
+                result.GeometricAttributionPerFace.Add(geometric);
 
                 if (sourceMap != null)
                 {

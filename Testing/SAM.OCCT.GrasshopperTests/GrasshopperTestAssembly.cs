@@ -13,7 +13,8 @@ namespace SAM.OCCT.GrasshopperTests
     /// time when a real Rhino 8 installation is not present, by loading the real managed
     /// DLLs from the NuGet cache.  Native DLLs that RhinoCommon P/Invokes are not
     /// resolved (the resolver returns IntPtr.Zero) so that the test process does not
-    /// show error popups; the tests never call native code paths.
+    /// show error popups; the tests never call Rhino native code paths (the component behaviour
+    /// tests call the OCCT native library only, see <see cref="NativeRuntime"/>).
     /// </summary>
     internal static class GrasshopperTestAssembly
     {
@@ -22,6 +23,42 @@ namespace SAM.OCCT.GrasshopperTests
         {
             AppDomain.CurrentDomain.AssemblyResolve += OnAssemblyResolve;
             NativeLibrary.SetDllImportResolver(typeof(GrasshopperTestAssembly).Assembly, OnDllImportResolve);
+            AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                PrimeComponentServer(assembly);
+            }
+        }
+
+        private static void OnAssemblyLoad(object sender, AssemblyLoadEventArgs args)
+        {
+            PrimeComponentServer(args.LoadedAssembly);
+        }
+
+        /// <summary>
+        /// Constructing a SAM component clones its parameters (SAM.Core.Grasshopper Query.Clone ->
+        /// GH_ComponentParamServer.CreateDuplicate), which creates <c>Instances.ComponentServer</c>. Outside Rhino that
+        /// first scans the Rhino plug-in folders through RhinoCommon native code (rhcommon_c), which fails and shows a
+        /// modal "Grasshopper Loading Error" dialog that blocks the test run. So when Grasshopper loads, an empty server
+        /// is installed: the tests need no plug-in proxies, and parameter duplication works without them. By reflection
+        /// only, so that this initializer never itself requires the Grasshopper assembly.
+        /// </summary>
+        private static void PrimeComponentServer(Assembly assembly)
+        {
+            if (assembly == null || assembly.GetName().Name != "Grasshopper")
+            {
+                return;
+            }
+
+            Type instances = assembly.GetType("Grasshopper.Instances");
+            Type componentServer = assembly.GetType("Grasshopper.Kernel.GH_ComponentServer");
+            foreach (FieldInfo field in instances?.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static) ?? Array.Empty<FieldInfo>())
+            {
+                if (componentServer != null && field.FieldType == componentServer && field.GetValue(null) == null)
+                {
+                    field.SetValue(null, Activator.CreateInstance(componentServer, true));
+                }
+            }
         }
 
         private static IntPtr OnDllImportResolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)

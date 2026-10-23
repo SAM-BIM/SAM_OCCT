@@ -50,7 +50,8 @@ namespace SAM.OCCT.GrasshopperTests
         {
             Assert.Equal("0.7.1", new SAMOCCTSolve3D().LatestComponentVersion);
             Assert.Equal("0.2.1", new SAMOCCTCreateAdjacencyCluster().LatestComponentVersion);
-            Assert.Equal("0.3.1", new SAMOCCTCreateShells().LatestComponentVersion);
+            // 0.3.1 -> 0.4.0: the sew guard changes the computed result of a sewing build (GH_COMPONENT_STANDARDS GH-F2/H2).
+            Assert.Equal("0.4.0", new SAMOCCTCreateShells().LatestComponentVersion);
         }
 
         // ── Existing inputs and outputs are untouched; the new input is appended last ──
