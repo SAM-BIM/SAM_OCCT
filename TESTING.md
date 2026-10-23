@@ -1878,7 +1878,14 @@ MaxExtend revert restores the pre-P3 signatures exactly (all 15 pinned rows pass
   `PR61TowersQuantitativeValidationTests` and `TowersBucketLeverDiagnosticTests`, and
   `WorkflowParityIntegrationTests.WorkflowParity_WholeLevelTowers_FixtureTuning04_Produces32ParityCleanSpaces`
   (renamed from `..._Produces31ParityCleanSpaces`: workflow B now reaches all 32 reference spaces; the missing
-  one it documented near (19.584, -4.909, 13.925) is this room). Record: `documentation/Towers-Residual-Closure-Q4.md`.
+  one it documented near (19.584, -4.909, 13.925) is this room). The forced-managed chains
+  (`Solve3D_ForceManagedTowers_ResidualClosure_KeepsBaselineRoomsAndAddsMiddleRoom`, bucketBetweenLevels 0 / 0.21)
+  are asserted on the complex the solver adopted (`report.ResolvedCellComplex`, cells rebuilt from face
+  `OwnerCellIndices`, zero unkeyed faces) and on a guarded rebuild of the returned non-air panels (golden options +
+  `ValidateSewCoverage`): 24 / 27 cells; the west, far-west, south, south-east, north-east and middle room points
+  each lie in exactly one cell of their chain-specific volume (middle 113.717 / 119.364 m3), no cell holds two of
+  them, and `OcctUnderSplitGuard.ValidateCells` passes. The unguarded golden-master recount is not asserted there.
+  Record: `documentation/Towers-Residual-Closure-Q4.md`.
 
 - `ParameterPrecedenceTests.ResolveConsolidationRanges_*` — Unit tests for the
   `ResolveConsolidationRanges` resolver: stamped BucketSize ⇒ value; unstamped ⇒ 0.

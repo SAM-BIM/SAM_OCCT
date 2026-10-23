@@ -90,6 +90,105 @@ namespace SAM.OCCT.IntegrationTests
             Assert.Equal(0, invalidCells);
         }
 
+        /// <summary>
+        /// The forced-managed Solve3D chains on towers (record: documentation/Towers-Residual-Closure-Q4.md, managed path).
+        /// The middle room closes here too, at a chain-specific volume, and every baseline room survives in the complex
+        /// the solver adopted (<see cref="Solve3DReport.ResolvedCellComplex"/>, which Create.Spaces consumes) and in a
+        /// guarded rebuild of the returned panels. The unguarded golden-master recount of the same panels is measured
+        /// separately (GoldenMasterIntegrationTests) and is not asserted here.
+        /// </summary>
+        [SkippableTheory]
+        [InlineData(0.0, 24)]
+        [InlineData(0.21, 27)]
+        public void Solve3D_ForceManagedTowers_ResidualClosure_KeepsBaselineRoomsAndAddsMiddleRoom(double bucketBetweenLevels, int expectedCellCount)
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+
+            // Arrange
+            List<Panel> panels = LoadPanels(Path.Combine(FixturesDirectory, "whole-level-towers.sam"));
+            OcctBuildOptions guardedOptions = new OcctBuildOptions { AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01, ValidateSewCoverage = true };
+
+            // Act: the golden masters' managed call, then the returned non-air panels rebuilt with the sew guard on.
+            List<Panel> solved = panels.Solve3D(out _, out List<string> diagnostics, out _, out Solve3DReport report, forceManagedPipeline: true, bucketBetweenLevels: bucketBetweenLevels);
+            ResolvedCellComplex complex = report?.ResolvedCellComplex;
+            List<OcctCell> adopted = AdoptedCells(complex);
+            List<string> adoptedFailures = OcctUnderSplitGuard.ValidateCells(adopted, guardedOptions, Tolerance.MacroDistance);
+
+            List<Face3D> face3Ds = solved.Where(x => x != null && x.PanelType != PanelType.Air).Select(x => x.GetFace3D()).Where(x => x != null && x.IsValid()).ToList();
+            SAM.Geometry.OCCT.Create.Shells(face3Ds, out OcctCellComplexResult rebuilt, guardedOptions);
+            List<OcctCell> guarded;
+            List<string> guardedFailures;
+            using (rebuilt)
+            {
+                guarded = rebuilt.Cells.ToList();
+                guardedFailures = OcctUnderSplitGuard.ValidateCells(guarded, guardedOptions, Tolerance.MacroDistance);
+            }
+
+            foreach (string line in diagnostics.Where(x => x.Contains(ClosureMessage))) output.WriteLine(line);
+            foreach (string failure in adoptedFailures.Concat(guardedFailures)) output.WriteLine(failure);
+            output.WriteLine(string.Format(CultureInfo.InvariantCulture, "bucketBetweenLevels {0}: adopted cells {1}, guarded rebuild cells {2}", bucketBetweenLevels, adopted.Count, guarded.Count));
+
+            // Assert: every decoded face of the adopted complex is keyed and owned, so the owned faces are each cell's
+            // whole boundary.
+            Assert.NotNull(complex);
+            Assert.Equal(0, complex.TopologyKeyZeroFaceCount);
+            HashSet<int> cellIndices = new HashSet<int>(complex.Cells.Select(x => x.Index));
+            Assert.All(complex.Faces, face => Assert.InRange(face.OwnerCellIndices.Count, 1, 2));
+            Assert.All(complex.Faces, face => Assert.All(face.OwnerCellIndices, x => Assert.Contains(x, cellIndices)));
+
+            // The rooms first, so a missing room is reported by name; then the counts and the cell validation.
+            AssertManagedRooms("adopted complex", adopted, bucketBetweenLevels);
+            AssertManagedRooms("guarded rebuild", guarded, bucketBetweenLevels);
+            Assert.Equal(expectedCellCount, adopted.Count);
+            Assert.Equal(expectedCellCount, guarded.Count);
+            Assert.All(adopted, x => Assert.True(!double.IsNaN(x.Volume) && !double.IsInfinity(x.Volume) && x.Volume > 0));
+            Assert.Empty(adoptedFailures);
+            Assert.Empty(guardedFailures);
+        }
+
+        /// <summary>The room points of the forced-managed towers chains and each chain's measured room volume (m³).
+        /// The middle room is the one this rule recovers; the others are the baseline rooms around it.</summary>
+        private static readonly (string Name, Point3D Point, double Volume0, double Volume021)[] ManagedRooms =
+        {
+            ("west", new Point3D(14.0, -5.0, 13.8), 159.479, 174.145),
+            ("far-west", new Point3D(9.2, -5.8, 13.8), 76.994, 80.817),
+            ("south", new Point3D(34.4, -21.5, 13.8), 238.960, 250.827),
+            ("south-east", new Point3D(42.5, -22.5, 13.8), 155.536, 163.261),
+            ("north-east", new Point3D(34.5, -5.0, 13.8), 159.373, 159.373),
+            ("middle", RoomPoint, 113.717, 119.364),
+        };
+
+        private static void AssertManagedRooms(string label, List<OcctCell> cells, double bucketBetweenLevels)
+        {
+            List<int> containing = new List<int>();
+            foreach ((string Name, Point3D Point, double Volume0, double Volume021) room in ManagedRooms)
+            {
+                List<int> indices = Enumerable.Range(0, cells.Count).Where(i => cells[i].Shell.Inside(room.Point)).ToList();
+                Assert.True(indices.Count == 1, string.Format(CultureInfo.InvariantCulture, "{0}: the {1} room point {2} lies in {3} cell(s), expected exactly one", label, room.Name, room.Point, indices.Count));
+
+                double volume = bucketBetweenLevels == 0.0 ? room.Volume0 : room.Volume021;
+                Assert.InRange(cells[indices[0]].Volume, volume - 0.05, volume + 0.05);
+                containing.Add(indices[0]);
+            }
+
+            // No cell holds two distinct rooms.
+            Assert.Equal(containing.Count, containing.Distinct().Count());
+        }
+
+        /// <summary>Each adopted cell as an <see cref="OcctCell"/>: the shell is the complex faces that name the cell as an
+        /// owner (as Create.AdjacencyCluster reads them); the volume is the complex's own.</summary>
+        private static List<OcctCell> AdoptedCells(ResolvedCellComplex complex)
+        {
+            List<OcctCell> result = new List<OcctCell>();
+            foreach (ResolvedCell cell in complex?.Cells ?? new List<ResolvedCell>())
+            {
+                List<Face3D> face3Ds = complex.Faces.Where(x => x.OwnerCellIndices.Contains(cell.Index)).Select(x => x.Face3D).ToList();
+                result.Add(new OcctCell(new Shell(face3Ds), cell.Volume, center: cell.Centre));
+            }
+
+            return result;
+        }
+
         private static List<(Shell Shell, double Volume)> Cells(List<Panel> panels, OcctBuildOptions options, out int invalidCells)
         {
             List<(Shell, double)> result = new List<(Shell, double)>();
