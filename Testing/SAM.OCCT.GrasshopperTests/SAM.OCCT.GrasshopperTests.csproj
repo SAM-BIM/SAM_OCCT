@@ -16,6 +16,13 @@
 
   <ItemGroup>
     <PackageReference Include="Grasshopper" Version="8.21.25188.17001" ExcludeAssets="runtime" />
+    <!-- The component behaviour tests skip without the native OCCT library, as the integration tests do. -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+  </ItemGroup>
+
+  <!-- The towers fixture of the integration project, for the CreateShells sew guard component tests. -->
+  <ItemGroup>
+    <None Include="..\SAM.OCCT.IntegrationTests\Fixtures\whole-level-towers.sam" Link="Fixtures\whole-level-towers.sam" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

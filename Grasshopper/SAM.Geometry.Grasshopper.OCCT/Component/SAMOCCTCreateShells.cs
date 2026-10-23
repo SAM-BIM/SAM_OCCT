@@ -18,7 +18,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("89f9c336-e4dc-4908-bb87-b7b10ee84245");
 
-        public override string LatestComponentVersion => "0.3.1";
+        public override string LatestComponentVersion => "0.4.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_ShellPluralCreate;
 
@@ -43,7 +43,7 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 fuzzyTolerance.SetPersistentData(Tolerance.MacroDistance);
                 result.Add(new GH_SAMParam(fuzzyTolerance, ParamVisibility.Voluntary));
 
-                global::Grasshopper.Kernel.Parameters.Param_Boolean sewBeforeBuild = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "sewBeforeBuild_", NickName = "sewBeforeBuild_", Description = "When true, the faces are first sewn+healed (BRepBuilderAPI_Sewing + ShapeFix) and only then closed by MakerVolume (issue #37), so triangulated / near-touching faces close instead of relying on the fuzzy tolerance alone. A hard MakerVolume failure also auto-retries via sew regardless of this flag, using sewingTolerance_.", Access = GH_ParamAccess.item };
+                global::Grasshopper.Kernel.Parameters.Param_Boolean sewBeforeBuild = new global::Grasshopper.Kernel.Parameters.Param_Boolean() { Name = "sewBeforeBuild_", NickName = "sewBeforeBuild_", Description = "When true, the faces are first sewn+healed (BRepBuilderAPI_Sewing + ShapeFix) and only then closed by MakerVolume (issue #37), so triangulated / near-touching faces close instead of relying on the fuzzy tolerance alone. A hard MakerVolume failure also auto-retries via sew regardless of this flag, using sewingTolerance_. With sewBeforeBuild_ true the sewn result is checked against a direct MakerVolume build before it is used. A sewn result with an invalid cell (non-positive volume, or cells not shown disjoint) is replaced by the direct build when that passes its own checks; otherwise the component reports an error and returns no shells. A valid sewn result that leaves faces cutting through or outside its cells, or whose volume disagrees, is replaced only when the direct build is proven a valid and better result; otherwise it is kept, with a warning when spaces may be merged or the volume disagrees, so check the shells against the expected rooms. The automatic retry with sewBeforeBuild_ false is not checked.", Access = GH_ParamAccess.item };
                 sewBeforeBuild.SetPersistentData(false);
                 result.Add(new GH_SAMParam(sewBeforeBuild, ParamVisibility.Voluntary));
 
@@ -146,7 +146,14 @@ namespace SAM.Geometry.Grasshopper.OCCT
                 }
             }
 
-            List<Shell> shells = Geometry.OCCT.Create.Shells(face3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, SewBeforeBuild = sewBeforeBuild, SewingTolerance = sewingTolerance, GlueMode = occtGlueMode });
+            // ValidateSewCoverage: the sew guard (SAM_OCCT#81, OcctCellComplexBuilder.AdoptSewCandidate), as in
+            // SAMOCCT.CreateAdjacencyCluster. It acts only when sewBeforeBuild_ is true; the automatic sew retry after a
+            // hard direct-build failure (sewing off) is not checked. An intrinsically invalid sew build is replaced by a
+            // direct build that passes its own checks, or fails closed with an Error and no shells. A valid but suspect
+            // sew build (incomplete coverage or a volume conflict) is replaced only by a direct build the guard proves
+            // acceptable; otherwise it is kept, with SAM_OCCT_BUILD_UNRELIABLE or SAM_OCCT_SEW_VOLUME_CONFLICT as a
+            // Warning (unused faces alone: Info), and Successful stays true.
+            List<Shell> shells = Geometry.OCCT.Create.Shells(face3Ds, out OcctCellComplexResult result, new OcctBuildOptions { Tolerance = tolerance, FuzzyTolerance = fuzzyTolerance, SewBeforeBuild = sewBeforeBuild, SewingTolerance = sewingTolerance, GlueMode = occtGlueMode, ValidateSewCoverage = true });
 
             // Structured severity: Info is log only, Warning/Error raise the matching runtime message. The
             // Diagnostics output keeps every line (Detailed), so its content is unchanged.

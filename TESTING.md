@@ -11,7 +11,7 @@ C++/OpenCASCADE layer (`SAM.Occt.Native`).
 | --- | --- | --- |
 | `Testing/SAM.OCCT.UnitTests` | Pure-managed logic that runs identically anywhere: `OcctBuildOptions`, `OcctDiagnostic`, the `OcctNativeInputBuilder` serializer, and the `Query` input guard clauses (which return before any native call). | No |
 | `Testing/SAM.OCCT.IntegrationTests` | Real OCCT boolean / cell-complex operations (cells, volumes, face adjacencies), **and** the graceful *native-missing* contract. | Gated on native availability |
-| `Testing/SAM.OCCT.GrasshopperTests` | PR #61 GH component contract tests. Instantiates production Grasshopper components, inspects registered GUIDs, inputs, outputs, access, and persistent defaults. The Grasshopper SDK assembly is resolved at runtime from the restored NuGet package (no Rhino installation needed), so these tests always execute — a resolution failure is a loud test failure, never a silent skip. | No (GH SDK from NuGet) |
+| `Testing/SAM.OCCT.GrasshopperTests` | PR #61 GH component contract tests. Instantiates production Grasshopper components, inspects registered GUIDs, inputs, outputs, access, and persistent defaults. The Grasshopper SDK assembly is resolved at runtime from the restored NuGet package (no Rhino installation needed), so the contract tests always execute — a resolution failure is a loud test failure, never a silent skip. Also six native-gated `SAMOCCT.CreateShells` behaviour cases (`CreateShellsSewGuardComponentTests`, see "Sew guard against invalid cells"), which skip without the native library. Outside Rhino, an empty `Grasshopper.Instances.ComponentServer` is installed when Grasshopper loads; otherwise component construction scans the Rhino plug-in folders through `rhcommon_c` and blocks the run with a modal loading dialog. Not run by CI. | No for the contract tests; gated for the six behaviour cases |
 
 Anything whose outcome depends on whether the native library is loadable lives in
 the integration project, never in the unit project — so the unit suite cannot be
@@ -69,7 +69,8 @@ dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj
 .\build-native.ps1 -SkipVcpkgInstall
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj
 
-# Grasshopper component contract tests — GH SDK resolved from the NuGet cache; always execute
+# Grasshopper component tests — GH SDK resolved from the NuGet cache. The contract tests always execute; the
+# CreateShells behaviour cases need the native library in <repo>/build (found as for the integration tests)
 dotnet test Testing/SAM.OCCT.GrasshopperTests/SAM.OCCT.GrasshopperTests.csproj
 ```
 
@@ -92,8 +93,9 @@ dotnet test Testing/SAM.OCCT.GrasshopperTests/SAM.OCCT.GrasshopperTests.csproj -
 ## Continuous integration
 
 `.github/workflows/build.yml` builds the solution (including sibling SAM
-dependencies) and then runs both test projects with `dotnet test`. Unit tests
-must pass; integration tests skip without the native library. Test results
+dependencies) and then runs the unit and integration test projects with `dotnet test`. Unit tests
+must pass; integration tests skip without the native library. `SAM.OCCT.GrasshopperTests` is not run by
+CI; run it locally with the commands above. Test results
 (`.trx`) and Cobertura coverage are uploaded as the `SAM_OCCT-test-results`
 artifact. Coverage is **report-only** — there is no hard threshold gate yet.
 
@@ -1900,8 +1902,19 @@ MaxExtend revert restores the pre-P3 signatures exactly (all 15 pinned rows pass
 
 ## Sew guard against invalid cells (`fix/sew-guard-invalid-cells-q4`, 2026-10-22)
 
-Applies only with `OcctBuildOptions.ValidateSewCoverage` (opt-in; set by `SAMOCCT.CreateAdjacencyCluster`).
-Record: `documentation/Sew-Guard-Invalid-Cells-Q4.md`.
+Applies only with `OcctBuildOptions.ValidateSewCoverage` (opt-in, default false) together with
+`SewBeforeBuild`. It is set by `SAMOCCT.CreateAdjacencyCluster` and, from component version 0.4.0, by
+`SAMOCCT.CreateShells` when `sewBeforeBuild_` is true. The automatic sew retry after a hard direct-build failure
+(sewing off) is not checked.
+
+Outcomes:
+- An intrinsically invalid sew build is replaced by a direct build that passes its own checks. Otherwise the build
+  fails closed (`SAM_OCCT_BUILD_REJECTED`, no cells).
+- A valid but suspect sew build is replaced only by a direct build the guard proves acceptable
+  (`SAM_OCCT_BUILD_FALLBACK_DIRECT`). Otherwise it is kept as a success, with `SAM_OCCT_BUILD_UNRELIABLE` or
+  `SAM_OCCT_SEW_VOLUME_CONFLICT` (Warning), or `SAM_OCCT_SEW_UNUSED_FACES` (Info).
+
+Records: `documentation/Sew-Guard-Invalid-Cells-Q4.md`, `documentation/CreateShells-Sew-Guard-Q4.md`.
 
 - `SewInvalidCellGuardTests` (unit, native-free): signed-volume rejection (negative, zero, NaN, +/-infinity)
   for sew and direct cells, volume agreement, the disjointness check (`CheckDisjoint`: partial overlap with
@@ -1947,8 +1960,27 @@ Record: `documentation/Sew-Guard-Invalid-Cells-Q4.md`.
   builder (`AdoptSewCandidate`, both candidates holding the pair) failing closed on the 2 mm prism and the 0.9 mm
   L seam and keeping the 1.6 mm and 0.8 mm controls; and a spent proof budget leaving `CommonVolume` undecided
   (null) and the pair failing closed.
+- `CreateShellsSewGuardComponentTests` (`SAM.OCCT.GrasshopperTests`; six native-gated cases plus one contract
+  case). The real `SAMOCCTCreateShells` runs its own `SolveInstance` on Grasshopper's own data access. Voluntary
+  inputs are inserted from the component's declaration; input values are given as volatile data; output writes are
+  recorded as the component passes them. The reference is `Create.Shells` with the component's own options (every
+  voluntary input at its default) plus the guard. Cases:
+  - forced-managed towers, bucketBetweenLevels 0 / 0.21, `sewBeforeBuild_` true: the west and middle room points
+    each lie in exactly one shell, different shells, at 159.479 / 113.717 and 174.145 / 119.364 m3. 24 / 27
+    shells, complete-boundary-identical to the reference. `ValidateCells` passes (internal, reached by reflection).
+    `Successful` true, with the `SAM_OCCT_BUILD_FALLBACK_DIRECT` warning. Before the change the component lost the
+    west room at 0 (20 shells) and five cells at 0.21 (22 shells), with no warning;
+  - sewing off (input absent, or `false`): identical to the direct build, no warning;
+  - two boxes sharing a wall: the valid sew build is kept, identical to the unguarded build, no warning;
+  - boxes without tops: an Error, no shells, `Successful` false (failure mapping; the guard's own fail-closed
+    branch is covered at library level above, not by a component fixture);
+  - declared inputs: names, access, visibility and persistent defaults unchanged.
+
+  Limits: no `ComputeData` scheduling, no output Goo conversion, no saved-definition round trip and no canvas. The
+  automatic sew retry with sewing off is not covered.
 
 ```powershell
+dotnet test Testing/SAM.OCCT.GrasshopperTests/SAM.OCCT.GrasshopperTests.csproj --filter "FullyQualifiedName~CreateShellsSewGuardComponentTests"
 dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~SewInvalidCellGuardTests|FullyQualifiedName~OcctGlueBandProofTests"
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~SewGuardInvalidCellIntegrationTests|FullyQualifiedName~HouseUnderSplitIntegrationTests|FullyQualifiedName~HouseAirAndAtticIntegrationTests"
 ```
