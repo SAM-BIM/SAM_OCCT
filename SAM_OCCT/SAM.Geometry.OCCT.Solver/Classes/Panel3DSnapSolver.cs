@@ -3375,6 +3375,7 @@ namespace SAM.Geometry.OCCT.Solver
             // capped at the gap. Largest-area dominant mirrors NormalizeCaps / SnapOpposedPartitions ordering.
             int moved = 0;
             int movedCapEdges = 0;
+            HashSet<SnappedPanel> insetCapsMoved = new HashSet<SnappedPanel>();
             foreach (var component in Enumerable.Range(0, walls.Count).GroupBy(Find).Where(g => g.Count() > 1))
             {
                 List<SnappedPanel> members = component.Select(k => walls[k]).ToList();
@@ -3414,16 +3415,18 @@ namespace SAM.Geometry.OCCT.Solver
                         movedInStack++;
 
                         // Drag abutting wall ends only for vertical walls (walls have junction partners).
+                        List<Segment3D> sourceFeet = null;
                         if (member.IsVertical(verticalAngleTolerance))
                         {
-                            DragAbuttingWallEnds(walls, member, oldPlane, oldFoot, oldBox, toleranceDistance, diagnostics);
+                            sourceFeet = SourceFeet(member, toleranceDistance);
+                            DragAbuttingWallEnds(walls, member, dominant, oldPlane, oldFoot, oldBox, sourceFeet, toleranceDistance, diagnostics);
                         }
 
                         // The move also vacates the plane for caps (floors/roofs) whose edge abutted the old
                         // plane - without this drag, the cap's edge stays at the old plane, leaving an open
                         // seam the fill pass (capped by fillMargin) may not bridge. Drag the cap edge by the
                         // actual move distance (d + tol), never fillMargin, so the cap follows the wall.
-                        int capDragged = DragAbuttingCapEdges(panels, member, oldPlane, oldBox, distance, toleranceDistance, diagnostics);
+                        int capDragged = DragAbuttingCapEdges(panels, member, oldPlane, oldFoot, oldBox, sourceFeet, distance, toleranceAngle, toleranceDistance, verticalAngleTolerance, insetCapsMoved, diagnostics);
                         movedCapEdges += capDragged;
                     }
                 }
@@ -3465,13 +3468,25 @@ namespace SAM.Geometry.OCCT.Solver
         /// The plan-loop extend cannot substitute for this: it matches wall lines in plan only (Z-ignorant),
         /// so on a model whose storey faces step in plan (the towers) a hanging end reads as already met by
         /// an upper storey's line and is never re-extended.
+        /// <para>
+        /// An earlier plane snap of the PARTNER slides its end along the old plane, possibly past the end of the
+        /// old foot (the nine-space North0 north wall: snapped 0.046 m onto North1's, so its end overshoots the
+        /// foot by 0.046 m). Such an end is still this junction's when the lineage says so
+        /// (<see cref="IsSourceAssociatedEnd"/>): its source end lay on the moved wall's source foot, it has since
+        /// moved only across the partner's own run, and it still lies on the old plane. It follows only when its
+        /// new position lands on the existing wall of the new plane - the stack's <paramref name="dominant"/>, same
+        /// storey, within <see cref="STACK_FOLLOW_END_TOLERANCE"/> of its foot - so the junction it closes exists; an
+        /// end that would land past the end of that wall is left to the extend pass as before.
+        /// </para>
         /// </summary>
         private static void DragAbuttingWallEnds(
             List<SnappedPanel> walls,
             SnappedPanel movedWall,
+            SnappedPanel dominant,
             Plane oldPlane,
             Segment3D oldFoot,
             BoundingBox3D oldBox,
+            List<Segment3D> movedSourceFeet,
             double toleranceDistance,
             SolverDiagnostics diagnostics)
         {
@@ -3482,6 +3497,21 @@ namespace SAM.Geometry.OCCT.Solver
 
             Geometry.Planar.Point2D oldFootStart = new Geometry.Planar.Point2D(oldFoot.GetStart().X, oldFoot.GetStart().Y);
             Geometry.Planar.Point2D oldFootEnd = new Geometry.Planar.Point2D(oldFoot.GetEnd().X, oldFoot.GetEnd().Y);
+            Segment3D dominantFoot = dominant?.GetBaseSegment(toleranceDistance);
+            BoundingBox3D dominantBox = dominant?.GetBoundingBox();
+
+            // A source-associated end follows only onto the existing wall of the new plane (same storey).
+            Geometry.Planar.Point2D OntoDominant(Geometry.Planar.Point2D projected, BoundingBox3D partnerBox)
+            {
+                if (projected == null || dominantFoot == null || dominantBox == null
+                    || partnerBox.Min.Z > dominantBox.Max.Z - toleranceDistance || partnerBox.Max.Z < dominantBox.Min.Z + toleranceDistance)
+                {
+                    return null;
+                }
+
+                double toDominant = PlanDistancePointToSegment(projected.X, projected.Y, dominantFoot.GetStart().X, dominantFoot.GetStart().Y, dominantFoot.GetEnd().X, dominantFoot.GetEnd().Y);
+                return toDominant <= STACK_FOLLOW_END_TOLERANCE ? projected : null;
+            }
 
             foreach (SnappedPanel wall in walls)
             {
@@ -3516,6 +3546,20 @@ namespace SAM.Geometry.OCCT.Solver
                 Geometry.Planar.Point2D newStart = DraggedEnd(start, oldFootStart, oldFootEnd, movedWall.Plane, foot.GetStart().Z);
                 Geometry.Planar.Point2D newEnd = DraggedEnd(end, oldFootStart, oldFootEnd, movedWall.Plane, foot.GetEnd().Z);
 
+                // Lineage fallback, only for an end the geometric test missed.
+                bool sourceAssociated = false;
+                if (newStart == null && IsSourceAssociatedEnd(start, foot, wall, oldPlane, oldFoot, movedSourceFeet, toleranceDistance))
+                {
+                    newStart = OntoDominant(ProjectedEnd(start, movedWall.Plane, foot.GetStart().Z), wallBox);
+                    sourceAssociated = newStart != null;
+                }
+
+                if (newEnd == null && IsSourceAssociatedEnd(end, foot, wall, oldPlane, oldFoot, movedSourceFeet, toleranceDistance))
+                {
+                    newEnd = OntoDominant(ProjectedEnd(end, movedWall.Plane, foot.GetEnd().Z), wallBox);
+                    sourceAssociated |= newEnd != null;
+                }
+
                 if (newStart == null && newEnd == null)
                 {
                     continue;
@@ -3528,10 +3572,98 @@ namespace SAM.Geometry.OCCT.Solver
                 if (wall.SetVerticalFootprint(newStart ?? start, newEnd ?? end, toleranceDistance))
                 {
                     diagnostics?.Add(SolverStage.Snap, DiagnosticCode.ConsolidatedStack, OcctDiagnosticSeverity.Info,
-                        string.Format("Wall-stack consolidation dragged an abutting wall end {0:0.###} m onto the moved plane (junction kept closed).", dragged),
+                        sourceAssociated
+                            ? string.Format("Wall-stack consolidation dragged a source-associated wall end {0:0.###} m onto the moved plane (end displaced by an earlier snap; junction kept closed).", dragged)
+                            : string.Format("Wall-stack consolidation dragged an abutting wall end {0:0.###} m onto the moved plane (junction kept closed).", dragged),
                         face3D: wall.Face3D, toleranceUsed: STACK_FOLLOW_END_TOLERANCE);
                 }
             }
+        }
+
+        /// <summary>
+        /// Lineage test for a partner wall's plan <paramref name="end"/> that is NOT on the moved wall's old foot:
+        /// true only when (1) the end still lies on the old plane (within <see cref="STACK_FOLLOW_END_TOLERANCE"/>),
+        /// (2) one of the partner's SOURCE foot ends lay on one of the moved wall's SOURCE feet (the authored
+        /// junction), (3) since then that end moved only across the partner's own run (a plane snap of the
+        /// partner, not a slide along it), and (4) that displacement accounts for the whole overshoot past the
+        /// old foot. An end of a different junction fails (2); a wall that was lengthened or trimmed fails (3).
+        /// </summary>
+        private static bool IsSourceAssociatedEnd(
+            Geometry.Planar.Point2D end,
+            Segment3D foot,
+            SnappedPanel partner,
+            Plane oldPlane,
+            Segment3D oldFoot,
+            List<Segment3D> movedSourceFeet,
+            double toleranceDistance)
+        {
+            if (end == null || foot == null || partner == null || oldPlane == null || oldFoot == null || movedSourceFeet == null || movedSourceFeet.Count == 0)
+            {
+                return false;
+            }
+
+            if (System.Math.Abs(oldPlane.Distance(new Point3D(end.X, end.Y, foot.GetStart().Z))) > STACK_FOLLOW_END_TOLERANCE)
+            {
+                return false;
+            }
+
+            double runX = foot.GetEnd().X - foot.GetStart().X;
+            double runY = foot.GetEnd().Y - foot.GetStart().Y;
+            double runLength = System.Math.Sqrt((runX * runX) + (runY * runY));
+            if (runLength <= toleranceDistance)
+            {
+                return false;
+            }
+
+            runX /= runLength;
+            runY /= runLength;
+
+            double overshoot = PlanDistancePointToSegment(end.X, end.Y, oldFoot.GetStart().X, oldFoot.GetStart().Y, oldFoot.GetEnd().X, oldFoot.GetEnd().Y);
+            foreach (Segment3D sourceFoot in SourceFeet(partner, toleranceDistance))
+            {
+                foreach (Point3D sourceEnd in new[] { sourceFoot.GetStart(), sourceFoot.GetEnd() })
+                {
+                    if (!movedSourceFeet.Any(x => PlanDistancePointToSegment(sourceEnd.X, sourceEnd.Y, x.GetStart().X, x.GetStart().Y, x.GetEnd().X, x.GetEnd().Y) <= STACK_FOLLOW_END_TOLERANCE))
+                    {
+                        continue;
+                    }
+
+                    double dx = end.X - sourceEnd.X;
+                    double dy = end.Y - sourceEnd.Y;
+                    if (System.Math.Abs((dx * runX) + (dy * runY)) > STACK_FOLLOW_END_TOLERANCE)
+                    {
+                        continue;
+                    }
+
+                    if (overshoot <= System.Math.Sqrt((dx * dx) + (dy * dy)) + STACK_FOLLOW_END_TOLERANCE)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>The plan feet of <paramref name="panel"/>'s original (pre-snap) source faces.</summary>
+        private static List<Segment3D> SourceFeet(SnappedPanel panel, double toleranceDistance)
+        {
+            List<Segment3D> result = new List<Segment3D>();
+            foreach (Face3D sourceFace3D in panel?.SourceFace3Ds ?? new List<Face3D>())
+            {
+                if (sourceFace3D == null || sourceFace3D.GetPlane() == null)
+                {
+                    continue;
+                }
+
+                Segment3D foot = new SnappedPanel(-1, sourceFace3D, 0, 0, 0).GetBaseSegment(toleranceDistance);
+                if (foot != null)
+                {
+                    result.Add(foot);
+                }
+            }
+
+            return result;
         }
 
         /// <summary>
@@ -3542,15 +3674,26 @@ namespace SAM.Geometry.OCCT.Solver
         /// edge stays at the old plane, leaving an open seam the <see cref="Fill"/> pass (capped by
         /// <see cref="FillMargin"/>) may not bridge when the move distance exceeds <see cref="FillMargin"/>.
         /// Reach is move-derived (<paramref name="distance"/> + tol), never <see cref="FillMargin"/>.
+        /// <para>
+        /// A same-storey cap that does not qualify for that drag may still be bounded by the moved wall with an
+        /// authored inset (the nine-space North0 roof: its edge 0.088 m inside the wall's plane). Only that one
+        /// edge follows, by the wall's signed displacement, when <see cref="MoveInsetCapEdge"/> proves the
+        /// association; the inset is kept for the existing fill. Each cap follows that way at most once per pass.
+        /// </para>
         /// </summary>
         /// <returns>Number of cap edges dragged.</returns>
         private static int DragAbuttingCapEdges(
             List<SnappedPanel> panels,
             SnappedPanel movedWall,
             Plane oldPlane,
+            Segment3D oldFoot,
             BoundingBox3D oldBox,
+            List<Segment3D> movedSourceFeet,
             double distance,
+            double toleranceAngle,
             double toleranceDistance,
+            double verticalAngleTolerance,
+            HashSet<SnappedPanel> insetCapsMoved,
             SolverDiagnostics diagnostics)
         {
             if (panels == null || movedWall?.Plane == null || oldPlane == null || oldBox == null || distance <= toleranceDistance)
@@ -3590,18 +3733,25 @@ namespace SAM.Geometry.OCCT.Solver
 
                 // Plan-footprint overlap: the cap must border the moved wall in plan.
                 // Use a generous plan overlap check - the cap's footprint must span the old plane region.
-                if (panelBox.Min.X > oldBox.Max.X + toleranceDistance || panelBox.Max.X < oldBox.Min.X - toleranceDistance ||
-                    panelBox.Min.Y > oldBox.Max.Y + toleranceDistance || panelBox.Max.Y < oldBox.Min.Y - toleranceDistance)
-                {
-                    continue;
-                }
-
                 // Does the cap's boundary touch the old plane? Check the cap's normal-aligned bounding extent.
                 // For a near-horizontal cap and a vertical wall, the cap's bbox in the wall-normal direction
                 // must include the old plane position.
-                double nearestToOldPlane = NearestBoundaryDistanceToPlane(panel, oldPlane, toleranceDistance);
-                if (nearestToOldPlane > toleranceDistance)
+                bool abutting = !(panelBox.Min.X > oldBox.Max.X + toleranceDistance || panelBox.Max.X < oldBox.Min.X - toleranceDistance ||
+                    panelBox.Min.Y > oldBox.Max.Y + toleranceDistance || panelBox.Max.Y < oldBox.Min.Y - toleranceDistance)
+                    && NearestBoundaryDistanceToPlane(panel, oldPlane, toleranceDistance) <= toleranceDistance;
+                if (!abutting)
                 {
+                    if (!insetCapsMoved.Contains(panel)
+                        && MoveInsetCapEdge(panel, panels, movedWall, oldPlane, oldFoot, movedSourceFeet, toleranceAngle, toleranceDistance, verticalAngleTolerance, out double inset, out double moved))
+                    {
+                        insetCapsMoved.Add(panel);
+                        dragged++;
+                        diagnostics?.Add(SolverStage.Snap, DiagnosticCode.ConsolidatedStack, OcctDiagnosticSeverity.Info,
+                            string.Format("Wall-stack consolidation moved an inset cap edge {0:0.###} m with the moved wall (authored inset {1:0.###} m kept for the fill).",
+                                moved, inset),
+                            face3D: panel.Face3D, toleranceUsed: OPPOSED_PARTITION_MAX_SEPARATION);
+                    }
+
                     continue;
                 }
 
@@ -3619,6 +3769,234 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return dragged;
+        }
+
+        /// <summary>
+        /// Moves the one edge of <paramref name="cap"/> that the consolidated wall bounded with an authored inset,
+        /// by the wall's signed plan displacement, leaving the inset itself to the fill. Every condition must hold,
+        /// otherwise nothing moves:
+        /// <list type="bullet">
+        /// <item>Side: the whole cap lies on the side the wall moved AWAY from (the room the move enlarges), clear
+        /// of the old plane.</item>
+        /// <item>Edge: the cap's boundary points nearest the old plane (within <see cref="STACK_FOLLOW_END_TOLERANCE"/>)
+        /// form one contiguous run of at least two points - one edge facing the wall.</item>
+        /// <item>Inset: that edge sits at most <see cref="OPPOSED_PARTITION_MAX_SEPARATION"/> (a wall thickness)
+        /// inside the old plane AND inside a source foot of the moved wall (the authored relationship), never as
+        /// the only evidence.</item>
+        /// <item>Run: the edge lies within the old foot's run and within that source foot's run, each widened by
+        /// <see cref="STACK_FOLLOW_END_TOLERANCE"/> - a cap edge longer than the wall is not this wall's.</item>
+        /// <item>Unique: no other same-storey vertical wall crosses the strip from the edge to its new position, so
+        /// no wall stands between the edge and the moved wall and the edge never crosses one.</item>
+        /// </list>
+        /// </summary>
+        private static bool MoveInsetCapEdge(
+            SnappedPanel cap,
+            List<SnappedPanel> panels,
+            SnappedPanel movedWall,
+            Plane oldPlane,
+            Segment3D oldFoot,
+            List<Segment3D> movedSourceFeet,
+            double toleranceAngle,
+            double toleranceDistance,
+            double verticalAngleTolerance,
+            out double inset,
+            out double moved)
+        {
+            inset = 0;
+            moved = 0;
+            if (cap?.Face3D == null || oldFoot == null || movedSourceFeet == null || movedSourceFeet.Count == 0)
+            {
+                return false;
+            }
+
+            // The wall's signed plan displacement: old foot midpoint onto the new plane.
+            Point3D middle = oldFoot.GetCenter();
+            Vector3D newNormal = movedWall.Plane.Normal.Unit;
+            Point3D newOrigin = movedWall.Plane.Origin;
+            double signed = (newNormal.X * (middle.X - newOrigin.X)) + (newNormal.Y * (middle.Y - newOrigin.Y)) + (newNormal.Z * (middle.Z - newOrigin.Z));
+            double moveX = -signed * newNormal.X;
+            double moveY = -signed * newNormal.Y;
+            moved = System.Math.Sqrt((moveX * moveX) + (moveY * moveY));
+            if (moved <= toleranceDistance)
+            {
+                return false;
+            }
+
+            // Plan frame: u along the move, so g = -(p - middle).u is the depth on the room side of the old plane.
+            double ux = moveX / moved;
+            double uy = moveY / moved;
+            if (!FootRun(oldFoot, ux, uy, toleranceAngle, out double runX, out double runY, out double runMin, out double runMax))
+            {
+                return false;
+            }
+
+            List<Point3D> points = SnappedPanel.BoundaryPoints(cap.Face3D);
+            if (points == null || points.Count < 3)
+            {
+                return false;
+            }
+
+            int count = points.Count;
+            double[] depth = points.Select(p => -(((p.X - middle.X) * ux) + ((p.Y - middle.Y) * uy))).ToArray();
+            double nearest = depth.Min();
+            if (nearest <= toleranceDistance || nearest > OPPOSED_PARTITION_MAX_SEPARATION)
+            {
+                return false;
+            }
+
+            bool[] onEdge = depth.Select(x => x <= nearest + STACK_FOLLOW_END_TOLERANCE).ToArray();
+            int first = Enumerable.Range(0, count).Where(i => onEdge[i] && !onEdge[(i - 1 + count) % count]).DefaultIfEmpty(-1).First();
+            int edgeCount = onEdge.Count(x => x);
+            if (first < 0 || edgeCount < 2 || edgeCount >= count || Enumerable.Range(0, edgeCount).Any(k => !onEdge[(first + k) % count]))
+            {
+                return false; // not one contiguous edge facing the wall
+            }
+
+            int last = (first + edgeCount - 1) % count;
+            List<Point3D> edge = Enumerable.Range(0, edgeCount).Select(k => points[(first + k) % count]).ToList();
+            double edgeMin = edge.Min(p => (p.X * runX) + (p.Y * runY));
+            double edgeMax = edge.Max(p => (p.X * runX) + (p.Y * runY));
+            if (edgeMax - edgeMin <= STACK_FOLLOW_END_TOLERANCE
+                || edgeMin < runMin - STACK_FOLLOW_END_TOLERANCE || edgeMax > runMax + STACK_FOLLOW_END_TOLERANCE)
+            {
+                return false;
+            }
+
+            // Source evidence: the same edge is inset from, and within the run of, one of the wall's authored feet.
+            bool authored = false;
+            foreach (Segment3D sourceFoot in movedSourceFeet)
+            {
+                if (!FootRun(sourceFoot, ux, uy, toleranceAngle, out double sourceRunX, out double sourceRunY, out double sourceMin, out double sourceMax))
+                {
+                    continue;
+                }
+
+                Point3D sourceMiddle = sourceFoot.GetCenter();
+                bool insetFromSource = edge.All(p =>
+                {
+                    double sourceDepth = -(((p.X - sourceMiddle.X) * ux) + ((p.Y - sourceMiddle.Y) * uy));
+                    double along = (p.X * sourceRunX) + (p.Y * sourceRunY);
+                    return sourceDepth > toleranceDistance && sourceDepth <= OPPOSED_PARTITION_MAX_SEPARATION
+                        && along >= sourceMin - STACK_FOLLOW_END_TOLERANCE && along <= sourceMax + STACK_FOLLOW_END_TOLERANCE;
+                });
+
+                if (insetFromSource)
+                {
+                    authored = true;
+                    break;
+                }
+            }
+
+            if (!authored)
+            {
+                return false;
+            }
+
+            // Unique association: no other same-storey wall crosses the swept strip (edge run x depth from the
+            // edge's new position to the edge), shrunk by the tolerance so walls merely touching it do not count.
+            BoundingBox3D capBox = cap.GetBoundingBox();
+            double stripMinDepth = nearest - moved + toleranceDistance;
+            double stripMaxDepth = nearest + STACK_FOLLOW_END_TOLERANCE - toleranceDistance;
+            foreach (SnappedPanel wall in panels)
+            {
+                if (ReferenceEquals(wall, cap) || ReferenceEquals(wall, movedWall) || wall?.Face3D == null || wall.Plane == null || !wall.IsVertical(verticalAngleTolerance))
+                {
+                    continue;
+                }
+
+                BoundingBox3D wallBox = wall.GetBoundingBox();
+                if (wallBox == null || wallBox.Min.Z > capBox.Max.Z + toleranceDistance || wallBox.Max.Z < capBox.Min.Z - toleranceDistance)
+                {
+                    continue;
+                }
+
+                Segment3D foot = wall.GetBaseSegment(toleranceDistance);
+                if (foot == null)
+                {
+                    continue;
+                }
+
+                Point3D a = foot.GetStart();
+                Point3D b = foot.GetEnd();
+                if (SegmentCrossesBox(
+                    (a.X * runX) + (a.Y * runY), -(((a.X - middle.X) * ux) + ((a.Y - middle.Y) * uy)),
+                    (b.X * runX) + (b.Y * runY), -(((b.X - middle.X) * ux) + ((b.Y - middle.Y) * uy)),
+                    edgeMin + toleranceDistance, edgeMax - toleranceDistance, stripMinDepth, stripMaxDepth))
+                {
+                    return false;
+                }
+            }
+
+            inset = nearest;
+            return cap.MoveBoundaryRun(first, last, moveX, moveY, toleranceAngle, toleranceDistance);
+        }
+
+        /// <summary>The plan run direction of <paramref name="foot"/> and its parameter range along it; false when
+        /// the foot is degenerate or not parallel (within <paramref name="toleranceAngle"/>) to a wall whose plan
+        /// normal is (<paramref name="ux"/>, <paramref name="uy"/>).</summary>
+        private static bool FootRun(Segment3D foot, double ux, double uy, double toleranceAngle, out double runX, out double runY, out double runMin, out double runMax)
+        {
+            runX = foot.GetEnd().X - foot.GetStart().X;
+            runY = foot.GetEnd().Y - foot.GetStart().Y;
+            runMin = runMax = 0;
+            double length = System.Math.Sqrt((runX * runX) + (runY * runY));
+            if (length <= Tolerance.Distance)
+            {
+                return false;
+            }
+
+            runX /= length;
+            runY /= length;
+            if (System.Math.Abs((runX * ux) + (runY * uy)) > System.Math.Sin(toleranceAngle))
+            {
+                return false;
+            }
+
+            double start = (foot.GetStart().X * runX) + (foot.GetStart().Y * runY);
+            double end = (foot.GetEnd().X * runX) + (foot.GetEnd().Y * runY);
+            runMin = System.Math.Min(start, end);
+            runMax = System.Math.Max(start, end);
+            return true;
+        }
+
+        /// <summary>True when the segment (s1, t1)-(s2, t2) passes through the open box
+        /// (<paramref name="sMin"/>, <paramref name="sMax"/>) x (<paramref name="tMin"/>, <paramref name="tMax"/>)
+        /// (Liang-Barsky clip); false for an empty box.</summary>
+        private static bool SegmentCrossesBox(double s1, double t1, double s2, double t2, double sMin, double sMax, double tMin, double tMax)
+        {
+            if (sMin >= sMax || tMin >= tMax)
+            {
+                return false;
+            }
+
+            double enter = 0, exit = 1;
+            double ds = s2 - s1, dt = t2 - t1;
+            double[] p = { -ds, ds, -dt, dt };
+            double[] q = { s1 - sMin, sMax - s1, t1 - tMin, tMax - t1 };
+            for (int i = 0; i < 4; i++)
+            {
+                if (p[i] == 0)
+                {
+                    if (q[i] <= 0)
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                double r = q[i] / p[i];
+                if (p[i] < 0)
+                {
+                    enter = System.Math.Max(enter, r);
+                }
+                else
+                {
+                    exit = System.Math.Min(exit, r);
+                }
+            }
+
+            return enter < exit;
         }
 
         /// <summary>
@@ -3668,6 +4046,13 @@ namespace SAM.Geometry.OCCT.Solver
                 return null;
             }
 
+            return ProjectedEnd(end, newPlane, z);
+        }
+
+        /// <summary>The plan position of <paramref name="end"/> slid onto <paramref name="newPlane"/> along its
+        /// normal; null when the slide is negligible.</summary>
+        private static Geometry.Planar.Point2D ProjectedEnd(Geometry.Planar.Point2D end, Plane newPlane, double z)
+        {
             // Slide the end along the NEW plane's normal onto the new plane (in plan - the normal of a
             // vertical wall is horizontal). The signed offset is computed directly (normal dot (end -
             // origin)) - the same convention as SnappedPanel.SignedSeparationTo - so the slide direction

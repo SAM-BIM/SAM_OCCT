@@ -1828,6 +1828,18 @@ MaxExtend revert restores the pre-P3 signatures exactly (all 15 pinned rows pass
   travel cap = max(member, dominant); stamped caps merge while unstamped caps are untouched.
   `SnapStage.Clean` activates on ranges with gap 0. Near-miss emitted + bounded + suppressed
   when overlap/ratio fails. All 15 existing facts unchanged (no-stamp guard).
+  North0 follow (2026-10-23): a partner end displaced past the old foot by its own earlier snap is
+  dragged when its source end lay on the moved wall's source foot and it lands on the dominant wall;
+  not when authored beyond the foot, past the dominant's end or on another storey. An inset cap edge
+  (<= 0.3 m, room side, within the wall's old and source runs, no wall crossing the swept strip) moves
+  alone by the wall's displacement; slanted neighbours get stubs, holes stay; caps on the move side,
+  beyond 0.3 m, longer than the run, without source evidence or behind a same-storey wall stay put;
+  abutting caps keep the uniform growth; an uncaptured 0.474 m void moves nothing.
+
+- `North0ConsolidationFollowIntegrationTests` (native-gated) — the same two follows on the original
+  nine-space fixture at the clean stage (0.55, 0.65, pair-only 0.55), their absence at 0.45 and without
+  stamps, North1 unchanged, and the pair-only chain keeping North0 with the unstamped band's two Extra
+  cells unchanged. Record: `documentation/North0-Consolidation-Follow-Q4.md`.
 
 - `ParameterPrecedenceTests.ResolveConsolidationRanges_*` — Unit tests for the
   `ResolveConsolidationRanges` resolver: stamped BucketSize ⇒ value; unstamped ⇒ 0.

@@ -326,6 +326,254 @@ namespace SAM.OCCT.UnitTests
         }
 
         // ──────────────────────────────────────────────────────────────
+        // Source-associated wall ends and inset cap edges (North0 follow)
+        // Geometry mirrors the nine-space North0 case: B (y=0.345) consolidates 0.345 m onto
+        // dominant A (y=0), moving toward -y; the room is on the +y side.
+        // ──────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ConsolidateWallStacks_EndDisplacedByEarlierSnap_SourceAssociatedEndDragged()
+        {
+            // Arrange: C's authored end (7, 0.345) lay on B's foot end; an earlier snap moved C 0.046 m across its
+            // own run, so its end now overshoots B's old foot - the geometric test alone misses it.
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 7, flip: true);
+            SnappedPanel c = WallNS(7.0, y0: 0.345, y1: 5.0);
+            Assert.True(c.SnapToBacker(new Plane(new Point3D(7.046, 0, 0), Vector3D.WorldX)));
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+
+            // Act
+            Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, c }, 0.4, Angle, Distance, VerticalAngle, diagnostics);
+
+            // Assert: the end reached the new plane; C keeps its snapped plane and its far end.
+            Assert.Equal(0.0, c.GetBoundingBox().Min.Y, 6);
+            Assert.Equal(5.0, c.GetBoundingBox().Max.Y, 6);
+            Assert.Equal(7.046, c.GetBoundingBox().Min.X, 6);
+            Assert.Contains(diagnostics.All, x => x.Message.Contains("source-associated wall end"));
+        }
+
+        [Fact]
+        public void ConsolidateWallStacks_EndAuthoredBeyondFoot_NotDragged()
+        {
+            // Arrange: same final position, but C was AUTHORED 0.046 m past B's foot end - a different junction.
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 7, flip: true);
+            SnappedPanel c = WallNS(7.046, y0: 0.345, y1: 5.0);
+
+            // Act
+            Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, c }, 0.4, Angle, Distance, VerticalAngle);
+
+            // Assert
+            Assert.Equal(0.345, c.GetBoundingBox().Min.Y, 6);
+        }
+
+        [Fact]
+        public void ConsolidateWallStacks_SourceAssociatedEndPastDominantEnd_NotDragged()
+        {
+            // Arrange: the source-associated shape, but the dominant wall A stops at x=7, so C's end would land
+            // 0.046 m past it - a junction with no wall. Left to the extend pass, as before.
+            SnappedPanel a = Wall(0.000, x0: -1, x1: 7);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 7, flip: true);
+            SnappedPanel c = WallNS(7.0, y0: 0.345, y1: 5.0);
+            Assert.True(c.SnapToBacker(new Plane(new Point3D(7.046, 0, 0), Vector3D.WorldX)));
+
+            // Act
+            int moved = Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, c }, 0.4, Angle, Distance, VerticalAngle);
+
+            // Assert
+            Assert.Equal(1, moved);
+            Assert.Equal(0.345, c.GetBoundingBox().Min.Y, 6);
+        }
+
+        [Fact]
+        public void ConsolidateWallStacks_SourceAssociatedEndOnAnotherStorey_NotDragged()
+        {
+            // Arrange: the source-associated shape, but C belongs to the storey above.
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 7, flip: true);
+            SnappedPanel c = WallNS(7.0, y0: 0.345, y1: 5.0, z0: 4.0, z1: 7.0);
+            Assert.True(c.SnapToBacker(new Plane(new Point3D(7.046, 0, 0), Vector3D.WorldX)));
+
+            // Act
+            Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, c }, 0.4, Angle, Distance, VerticalAngle);
+
+            // Assert
+            Assert.Equal(0.345, c.GetBoundingBox().Min.Y, 6);
+        }
+
+        [Fact]
+        public void ConsolidateWallStacks_InsetCapEdge_OnlyThatEdgeMovesByWallDisplacement()
+        {
+            // Arrange: a roof whose edge is authored 0.088 m inside B, on the room side.
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 7, flip: true);
+            SnappedPanel roof = Floor(3.0, xMin: 0.088, xMax: 6.912, yMin: 0.433, yMax: 6);
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+
+            // Act
+            Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, roof }, 0.4, Angle, Distance, VerticalAngle, diagnostics);
+
+            // Assert: the facing edge moved by exactly 0.345 (keeping the 0.088 inset); every other edge stayed.
+            BoundingBox3D box = roof.GetBoundingBox();
+            Assert.Equal(0.088, box.Min.Y, 6);
+            Assert.Equal(6.0, box.Max.Y, 6);
+            Assert.Equal(0.088, box.Min.X, 6);
+            Assert.Equal(6.912, box.Max.X, 6);
+            Assert.Equal(3.0, box.Min.Z, 6);
+            Assert.Equal(4, SnappedPanel.BoundaryPoints(roof.Face3D).Count);
+            Assert.Contains(diagnostics.All, x => x.Message.Contains("inset cap edge"));
+        }
+
+        [Fact]
+        public void ConsolidateWallStacks_InsetCapEdgeWithSlantedNeighbours_StubsAddedNeighboursKept()
+        {
+            // Arrange: a trapezoid roof - its neighbouring edges do not run along the move.
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 7, flip: true);
+            SnappedPanel roof = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(1, 0.433, 3), new Point3D(6, 0.433, 3), new Point3D(6.9, 3, 3), new Point3D(0.1, 3, 3)), 1.0, 0.4, 0.5);
+
+            // Act
+            Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, roof }, 0.4, Angle, Distance, VerticalAngle);
+
+            // Assert: the slanted edges keep both ends; two stubs join them to the moved edge.
+            List<Point3D> points = SnappedPanel.BoundaryPoints(roof.Face3D);
+            Assert.Equal(6, points.Count);
+            foreach (Point3D expected in new[] { new Point3D(1, 0.433, 3), new Point3D(6, 0.433, 3), new Point3D(1, 0.088, 3), new Point3D(6, 0.088, 3), new Point3D(6.9, 3, 3), new Point3D(0.1, 3, 3) })
+            {
+                Assert.Contains(points, x => x.Distance(expected) <= 1e-6);
+            }
+        }
+
+        [Fact]
+        public void ConsolidateWallStacks_InsetCapEdge_HolesKept()
+        {
+            // Arrange
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 7, flip: true);
+            Polygon3D outer = new Polygon3D(new List<Point3D> { new Point3D(0.088, 0.433, 3), new Point3D(6.912, 0.433, 3), new Point3D(6.912, 6, 3), new Point3D(0.088, 6, 3) });
+            Polygon3D hole = new Polygon3D(new List<Point3D> { new Point3D(2, 2, 3), new Point3D(2, 3, 3), new Point3D(3, 3, 3), new Point3D(3, 2, 3) });
+            SnappedPanel roof = new SnappedPanel(0, Face3D.Create(new List<IClosedPlanar3D> { outer, hole }), 1.0, 0.4, 0.5);
+
+            // Act
+            Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, roof }, 0.4, Angle, Distance, VerticalAngle);
+
+            // Assert
+            Assert.Equal(0.088, roof.GetBoundingBox().Min.Y, 6);
+            List<IClosedPlanar3D> holes = roof.Face3D.GetInternalEdge3Ds();
+            Assert.Single(holes);
+            Assert.Equal(2.0, holes[0].GetBoundingBox().Min.X, 6);
+            Assert.Equal(3.0, holes[0].GetBoundingBox().Max.Y, 6);
+        }
+
+        [Fact]
+        public void ConsolidateWallStacks_CapOnTheMoveSide_Untouched()
+        {
+            // Arrange: the wall moves TOWARD this cap (its edge 0.088 m on the -y side of B).
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 7, flip: true);
+            SnappedPanel cap = Floor(3.0, xMin: 0.088, xMax: 6.912, yMin: -6, yMax: 0.257);
+            double before = cap.GetArea();
+
+            // Act
+            Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, cap }, 0.4, Angle, Distance, VerticalAngle);
+
+            // Assert
+            Assert.Equal(before, cap.GetArea(), 9);
+        }
+
+        [Theory]
+        [InlineData(0.35, 0.088, 6.912)] // inset beyond a wall thickness (0.3 m)
+        [InlineData(0.088, -1.0, 6.912)] // edge longer than the wall's run
+        public void ConsolidateWallStacks_InsetCapEdgeNotThisWalls_Untouched(double inset, double xMin, double xMax)
+        {
+            // Arrange
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 7, flip: true);
+            SnappedPanel cap = Floor(3.0, xMin: xMin, xMax: xMax, yMin: 0.345 + inset, yMax: 6);
+            double before = cap.GetArea();
+
+            // Act
+            Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, cap }, 0.4, Angle, Distance, VerticalAngle);
+
+            // Assert
+            Assert.Equal(before, cap.GetArea(), 9);
+        }
+
+        [Theory]
+        [InlineData(0.0, 3.0, false)] // a same-storey wall crosses the strip: not uniquely this wall's edge
+        [InlineData(4.0, 7.0, true)]  // the same wall on another storey does not obstruct
+        public void ConsolidateWallStacks_InsetCapEdge_InterveningWallBlocksOnlyOnItsStorey(double z0, double z1, bool expectMoved)
+        {
+            // Arrange: a short perpendicular wall standing between the roof edge and B.
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 7, flip: true);
+            SnappedPanel stub = WallNS(3.0, y0: 0.2, y1: 0.42, z0: z0, z1: z1);
+            SnappedPanel roof = Floor(3.0, xMin: 0.088, xMax: 6.912, yMin: 0.433, yMax: 6);
+
+            // Act
+            Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, stub, roof }, 0.4, Angle, Distance, VerticalAngle);
+
+            // Assert
+            Assert.Equal(expectMoved ? 0.088 : 0.433, roof.GetBoundingBox().Min.Y, 6);
+        }
+
+        [Fact]
+        public void ConsolidateWallStacks_InsetCapEdgeWithoutSourceEvidence_Untouched()
+        {
+            // Arrange: B was authored at y=0.6 and only reached 0.345 by an earlier snap, so the roof edge at 0.433
+            // was never inset from B's authored position - no source evidence of the relationship.
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(0.6, x0: 0, x1: 7, flip: true);
+            Assert.True(b.SnapToBacker(new Plane(new Point3D(0, 0.345, 0), Vector3D.WorldY)));
+            SnappedPanel roof = Floor(3.0, xMin: 0.088, xMax: 6.912, yMin: 0.433, yMax: 6);
+
+            // Act
+            int moved = Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, roof }, 0.4, Angle, Distance, VerticalAngle);
+
+            // Assert
+            Assert.Equal(1, moved);
+            Assert.Equal(0.433, roof.GetBoundingBox().Min.Y, 6);
+        }
+
+        [Fact]
+        public void ConsolidateWallStacks_AbuttingCap_KeepsUniformGrowth()
+        {
+            // Arrange: a cap eligible under the existing rule (edge ON B's plane) keeps the existing uniform growth -
+            // every edge grows, not only the facing one.
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 7, flip: true);
+            SnappedPanel cap = Floor(0, xMin: 1, xMax: 6, yMin: 0.345, yMax: 6);
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+
+            // Act
+            Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, cap }, 0.4, Angle, Distance, VerticalAngle, diagnostics);
+
+            // Assert
+            Assert.True(cap.GetBoundingBox().Min.X < 1 - 0.3, $"minX={cap.GetBoundingBox().Min.X}");
+            Assert.DoesNotContain(diagnostics.All, x => x.Message.Contains("inset cap edge"));
+        }
+
+        [Fact]
+        public void ConsolidateWallStacks_RealVoidBeyondCapture_NoEndOrEdgeFollows()
+        {
+            // Arrange: a 0.474 m void with a 0.45 m range - nothing consolidates, so nothing follows.
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(0.474, x0: 0, x1: 7, flip: true);
+            SnappedPanel c = WallNS(7.0, y0: 0.474, y1: 5.0);
+            Assert.True(c.SnapToBacker(new Plane(new Point3D(7.046, 0, 0), Vector3D.WorldX)));
+            SnappedPanel roof = Floor(3.0, xMin: 0.088, xMax: 6.912, yMin: 0.562, yMax: 6);
+
+            // Act
+            int moved = Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, c, roof }, 0.45, Angle, Distance, VerticalAngle);
+
+            // Assert
+            Assert.Equal(0, moved);
+            Assert.Equal(0.474, c.GetBoundingBox().Min.Y, 6);
+            Assert.Equal(0.562, roof.GetBoundingBox().Min.Y, 6);
+        }
+
+        // ──────────────────────────────────────────────────────────────
         // Stamped per-panel ranges — Phase 2
         // ──────────────────────────────────────────────────────────────
 

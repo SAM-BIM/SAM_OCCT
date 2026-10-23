@@ -591,6 +591,77 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
+        /// Moves one contiguous run of this cap's external-boundary points, <paramref name="first"/> to
+        /// <paramref name="last"/> (cyclic, at least two), by the plan displacement (<paramref name="dx"/>,
+        /// <paramref name="dy"/>), each moved point kept on the cap's own plane. The neighbouring edges stay: where
+        /// one already runs along the displacement (within <paramref name="angleTolerance"/>) its old end point is
+        /// dropped so that edge simply lengthens; otherwise a stub along the displacement joins it to the moved run.
+        /// Every other point and every hole is kept. The caller guarantees the swept strip lies outside the cap (the
+        /// run is the cap's extreme in that direction). No-op (false) when the result is invalid or not larger.
+        /// </summary>
+        internal bool MoveBoundaryRun(int first, int last, double dx, double dy, double angleTolerance, double tolerance)
+        {
+            List<Point3D> point3Ds = BoundaryPoints(face3D);
+            double length = System.Math.Sqrt((dx * dx) + (dy * dy));
+            if (point3Ds == null || plane == null || length <= tolerance)
+            {
+                return false;
+            }
+
+            int count = point3Ds.Count;
+            int runCount = ((((last - first) % count) + count) % count) + 1;
+            Vector3D normal = plane.Normal.Unit;
+            if (count < 3 || runCount < 2 || runCount >= count || System.Math.Abs(normal.Z) <= tolerance)
+            {
+                return false;
+            }
+
+            double dz = -((normal.X * dx) + (normal.Y * dy)) / normal.Z;
+            double minDot = System.Math.Cos(angleTolerance);
+            bool RunsAlongMove(Point3D a, Point3D b)
+            {
+                double ex = b.X - a.X, ey = b.Y - a.Y;
+                double edgeLength = System.Math.Sqrt((ex * ex) + (ey * ey));
+                return edgeLength > tolerance && System.Math.Abs(((ex * dx) + (ey * dy)) / (edgeLength * length)) >= minDot;
+            }
+
+            Point3D runStart = point3Ds[first];
+            Point3D runEnd = point3Ds[last];
+            List<Point3D> loop = new List<Point3D>();
+            if (!RunsAlongMove(point3Ds[(first - 1 + count) % count], runStart))
+            {
+                loop.Add(runStart);
+            }
+
+            for (int k = 0; k < runCount; k++)
+            {
+                Point3D point3D = point3Ds[(first + k) % count];
+                loop.Add(new Point3D(point3D.X + dx, point3D.Y + dy, point3D.Z + dz));
+            }
+
+            if (!RunsAlongMove(runEnd, point3Ds[(last + 1) % count]))
+            {
+                loop.Add(runEnd);
+            }
+
+            for (int k = 1; k < count - runCount + 1; k++)
+            {
+                loop.Add(point3Ds[(last + k) % count]);
+            }
+
+            List<IClosedPlanar3D> loops = new List<IClosedPlanar3D> { new Polygon3D(loop) };
+            loops.AddRange(face3D.GetInternalEdge3Ds() ?? new List<IClosedPlanar3D>());
+            Face3D moved = Geometry.Spatial.Face3D.Create(loops);
+            if (moved == null || !moved.IsValid() || moved.GetArea() <= face3D.GetArea() + tolerance)
+            {
+                return false;
+            }
+
+            Adopt(moved);
+            return true;
+        }
+
+        /// <summary>
         /// Smart analogue of <see cref="GrowOutward"/>: instead of growing this cap by a blind fixed
         /// margin, grows it by the <em>measured</em> gap to the walls it is short of. For each in-reach
         /// vertical wall, the smallest perpendicular distance from this cap's boundary to the wall plane is
