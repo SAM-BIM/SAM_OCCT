@@ -193,10 +193,12 @@ namespace SAM.OCCT.IntegrationTests
 
         /// <summary>Fixture-specific tuning reported from Grasshopper. This is deliberately not the generic
         /// default: 0.4 crosses the fixture's 0.283/0.363 m level near-misses. It improves workflow B from
-        /// 28 to 31 of the 32 reference spaces with no open wall ends and clean analytical parity. The one
-        /// remaining cell (near 19.584,-4.909,13.925) is an explicit P3 extension gate, not hidden here.</summary>
+        /// 28 to all 32 reference spaces with no open wall ends and clean analytical parity. The last one, the
+        /// cell near (19.584,-4.909,13.925), was a 12-28 mm floor/north-wall slot left by the uniform Fill; the
+        /// residual cap-edge closure (documentation/Towers-Residual-Closure-Q4.md) recovers it (was 31 of 32;
+        /// this test was named ..._Produces31ParityCleanSpaces).</summary>
         [SkippableFact]
-        public void WorkflowParity_WholeLevelTowers_FixtureTuning04_Produces31ParityCleanSpaces()
+        public void WorkflowParity_WholeLevelTowers_FixtureTuning04_Produces32ParityCleanSpaces()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
             List<Panel> inputPanels = LoadPanels(Path.Combine(FixturesDirectory, "whole-level-towers.sam"));
@@ -221,7 +223,7 @@ namespace SAM.OCCT.IntegrationTests
             }
 
             Assert.NotNull(workflow.Cluster);
-            Assert.Equal(31, workflow.Cluster.GetSpaces()?.Count);
+            Assert.Equal(32, workflow.Cluster.GetSpaces()?.Count);
             Assert.Equal(7, report.LevelGroups.Count);
             Assert.Contains(diagnostics, x => x.Contains("SAM_OCCT_EXTEND3D_OPEN_ENDS: 0 wall end"));
             Assert.Equal(OcctDiagnosticSeverity.Info,

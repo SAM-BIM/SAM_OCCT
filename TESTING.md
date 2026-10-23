@@ -1875,8 +1875,10 @@ MaxExtend revert restores the pre-P3 signatures exactly (all 15 pinned rows pass
   (19.5, -5, 13.8)); every cell of the gated-off two-step control keeps its complete boundary (face loops and
   holes, 1e-6 m). Towers pins reconciled by measurement (+1 cell, +119.364 m3, +39.136 m2 cell floor area,
   +0.286 m2 level-datum panel area at every gap; the 0.4 -> 0.5 delta unchanged) in
-  `PR61TowersQuantitativeValidationTests` and `TowersBucketLeverDiagnosticTests`. Record:
-  `documentation/Towers-Residual-Closure-Q4.md`.
+  `PR61TowersQuantitativeValidationTests` and `TowersBucketLeverDiagnosticTests`, and
+  `WorkflowParityIntegrationTests.WorkflowParity_WholeLevelTowers_FixtureTuning04_Produces32ParityCleanSpaces`
+  (renamed from `..._Produces31ParityCleanSpaces`: workflow B now reaches all 32 reference spaces; the missing
+  one it documented near (19.584, -4.909, 13.925) is this room). Record: `documentation/Towers-Residual-Closure-Q4.md`.
 
 - `ParameterPrecedenceTests.ResolveConsolidationRanges_*` — Unit tests for the
   `ResolveConsolidationRanges` resolver: stamped BucketSize ⇒ value; unstamped ⇒ 0.
