@@ -563,9 +563,11 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         // ---------------------------------------------------------------------------------------
-        // Phase 1d: Acceptance test — with the cap-follow fix, gap 0.5 must give 29 cells
-        // (the strip space near (3.706,-5.836) survives), a tower↔strip adjacency appears,
-        // no super-tall wall at the merged plane. At gap 0.47: 29 cells, no merge, near-miss.
+        // Phase 1d: Acceptance test — at gap 0.5 the 0.474 m north-strip pair merges and the strip's
+        // west room survives: same cell count as gap 0.47 (where the pair stays apart), the room
+        // distinct from and adjacent to its east sibling, sharing the merged plane with tower cell 26,
+        // grown by exactly the closed slot. (Before the North0 consolidation follow this room was lost
+        // at 0.5 and this test pinned 29 cells; see documentation/North0-Consolidation-Follow-Q4.md.)
         // ---------------------------------------------------------------------------------------
         [SkippableFact]
         public void Towers_DoubleWallGap_FixAcceptance_Gap05StripSurvives()
@@ -575,16 +577,33 @@ namespace SAM.OCCT.IntegrationTests
             var panels = LoadPanels(Path.Combine(FixturesDirectory, "whole-level-towers.sam"));
             Assert.NotEmpty(panels);
 
-            // gap 0.5: the 0.474 pair merges, the strip space survives, new adjacency.
             var run05 = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.5, fillMargin: 0.4);
-            output.WriteLine("gap=0.5: cells={0}", run05.Cells.Count);
-            Assert.Equal(29, run05.Cells.Count); // strip space survives
-
-            // gap 0.47: the 0.474 pair does NOT merge (0.47 < 0.474), so cells stay at 30
-            // (the 0.345 pair already merged at 0.4, eliminating the two sliver cells).
             var run047 = RunUserChain(panels, bucket: 0.4, align: 0.3, doubleWallGap: 0.47, fillMargin: 0.4);
-            output.WriteLine("gap=0.47: cells={0}", run047.Cells.Count);
-            Assert.Equal(30, run047.Cells.Count); // 0.345 merges (slivers gone), 0.474 pair stays
+            output.WriteLine("gap=0.5: cells={0}; gap=0.47: cells={1}", run05.Cells.Count, run047.Cells.Count);
+
+            // gap 0.47: the 0.474 pair does NOT merge (0.47 < 0.474); 30 cells (the 0.345 pair already merged at
+            // 0.4, eliminating the two sliver cells) with the west strip room apart from the tower.
+            Assert.Equal(30, run047.Cells.Count);
+            OcctCell west047 = FindCell(run047, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
+            OcctCell east047 = FindCell(run047, NorthStripEastX, NorthStripEastY, NorthStripZ, 0.3);
+            int tower047 = NearestCellIndex(run047.Cells, -4.144651, -13.0, 13.765);
+            Assert.NotNull(west047);
+            Assert.NotNull(east047);
+            Assert.False(CellsShareFace(run047, run047.Cells.IndexOf(west047), tower047), "Gap 0.47: the strip room must stay apart from the tower.");
+
+            // gap 0.5: the pair merges; no room lost, the west room keeps its own cell beside its sibling and the tower.
+            Assert.Equal(run047.Cells.Count, run05.Cells.Count);
+            OcctCell west05 = FindCell(run05, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
+            OcctCell east05 = FindCell(run05, NorthStripEastX, NorthStripEastY, NorthStripZ, 0.3);
+            int tower05 = NearestCellIndex(run05.Cells, -4.144651, -13.0, 13.765);
+            Assert.NotNull(west05);
+            Assert.NotNull(east05);
+            Assert.NotSame(west05, east05);
+            Assert.True(CellsShareFace(run05, run05.Cells.IndexOf(west05), run05.Cells.IndexOf(east05)), "Gap 0.5: the strip rooms must stay adjacent.");
+            Assert.True(CellsShareFace(run05, run05.Cells.IndexOf(west05), tower05), "Gap 0.5: the strip room must share the merged plane with the tower.");
+            Assert.InRange(east05.Volume, east047.Volume - 0.05, east047.Volume + 0.05);
+            double slot = ClosedSlotVolume(panels, east047);
+            Assert.InRange(west05.Volume - west047.Volume, slot - 0.05, slot + 0.05);
 
             run05.Dispose();
             run047.Dispose();
@@ -883,6 +902,37 @@ namespace SAM.OCCT.IntegrationTests
                 sep, dot, pair, withinAB || withinBA, ovl, ratio, abut, voidGuard, verdict);
         }
 
+        // The north-strip rooms of the 0.474 m pair, located where the base pipeline keeps them at gap 0.4/0.47
+        // (same points as PR61TowersQuantitativeValidationTests).
+        private const double NorthStripWestX = 1.7164;
+        private const double NorthStripWestY = -5.9059;
+        private const double NorthStripEastX = 5.5283;
+        private const double NorthStripEastY = -5.8367;
+        private const double NorthStripZ = 13.765;
+
+        private static OcctCell FindCell(ChainRun run, double x, double y, double z, double radius)
+        {
+            OcctCell best = run.Cells.OrderBy(c => Dist(c, x, y, z)).FirstOrDefault();
+            return best != null && Dist(best, x, y, z) <= radius ? best : null;
+        }
+
+        private static bool CellsShareFace(ChainRun run, int a, int b)
+        {
+            return a >= 0 && b >= 0 && a != b && (run.Result?.FaceAdjacencies ?? new List<OcctCellFaceAdjacency>())
+                .Any(x => (x.CellIndex1 == a && x.CellIndex2 == b) || (x.CellIndex1 == b && x.CellIndex2 == a));
+        }
+
+        /// <summary>The volume the west strip room gains when the 0.474 m slot closes: the AUTHORED separation of
+        /// the tower face and the strip's west wall times the depth and height of the untouched east sibling.</summary>
+        private static double ClosedSlotVolume(List<Panel> panels, OcctCell sibling)
+        {
+            Panel tower = FindNSPanelAt(panels, targetX: -0.3449);
+            Panel strip = FindNSPanelAt(panels, targetX: +0.1289);
+            double width = System.Math.Abs(tower.GetFace3D().GetPlane().Distance(strip.GetFace3D().GetBoundingBox().GetCentroid()));
+            BoundingBox3D box = sibling.Shell.GetBoundingBox();
+            return width * (box.Max.Y - box.Min.Y) * (box.Max.Z - box.Min.Z);
+        }
+
         private static double Dist(OcctCell c, double x, double y, double z)
         {
             double dx = (c.Center?.X ?? double.MaxValue) - x;
@@ -919,6 +969,8 @@ namespace SAM.OCCT.IntegrationTests
 
             int cellsAt047 = -1, cellsAt05 = -1;
             bool nearMissAt047 = false;
+            bool pairNearMissAt05 = true;
+            double westAt047 = double.NaN, westAt05 = double.NaN;
 
             foreach (double gap in new[] { 0.47, 0.5 })
             {
@@ -930,6 +982,14 @@ namespace SAM.OCCT.IntegrationTests
 
                 if (gap == 0.47) { cellsAt047 = cellCount; }
                 if (gap == 0.5) { cellsAt05 = cellCount; }
+
+                OcctCell west = FindCell(run, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
+                if (gap == 0.47) { westAt047 = west?.Volume ?? double.NaN; }
+                if (gap == 0.5)
+                {
+                    westAt05 = west?.Volume ?? double.NaN;
+                    pairNearMissAt05 = run.ExtendDiagnostics.Any(d => d.Contains("near-miss", StringComparison.OrdinalIgnoreCase) && d.Contains("separated by 0.474"));
+                }
 
                 if (gap == 0.47)
                 {
@@ -948,9 +1008,14 @@ namespace SAM.OCCT.IntegrationTests
                 run.Dispose();
             }
 
-            // Assert: fewer cells at gap=0.5 than at 0.47 (a pair merges).
-            Assert.True(cellsAt05 < cellsAt047,
-                string.Format("Gap 0.5 should reduce cells vs 0.47: {0} < {1}", cellsAt05, cellsAt047));
+            // Assert: the 0.474 pair merges at gap=0.5 (no near-miss for it any more, the strip's west room grows
+            // into the closed slot) without losing a room: the cell count is the one at 0.47. (Before the North0
+            // consolidation follow the merge lost that room and this test asserted fewer cells.)
+            output.WriteLine("west strip room: gap 0.47 {0:0.###} m3, gap 0.5 {1:0.###} m3", westAt047, westAt05);
+            Assert.False(pairNearMissAt05, "Gap=0.5 must merge the 0.474 m pair (no near-miss for it).");
+            Assert.False(double.IsNaN(westAt047) || double.IsNaN(westAt05), "The strip's west room must exist at 0.47 and 0.5.");
+            Assert.True(westAt05 > westAt047 + 1.0, string.Format("Gap 0.5: the west strip room must grow into the closed slot: {0:0.###} > {1:0.###}", westAt05, westAt047));
+            Assert.Equal(cellsAt047, cellsAt05);
 
             // Assert: near-miss emitted at gap=0.47.
             Assert.True(nearMissAt047, "Gap=0.47 must emit a consolidation near-miss diagnostic.");

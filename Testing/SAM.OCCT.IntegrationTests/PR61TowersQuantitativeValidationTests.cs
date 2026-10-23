@@ -7,6 +7,7 @@ using SAM.Analytical.OCCT.Solver;
 using SAM.Core;
 using SAM.Core.OCCT;
 using SAM.Geometry.OCCT;
+using SAM.Geometry.OCCT.Native;
 using SAM.Geometry.Spatial;
 using System;
 using System.Collections.Generic;
@@ -33,12 +34,13 @@ namespace SAM.OCCT.IntegrationTests
     /// +7.427 m³ block-room 22 — the growth that joins it to tower 26). Room topology is preserved.
     /// </para>
     /// <para>
-    /// Gap 0.5 (over-aggressive): consolidating the 0.474 m north-strip wall pair leaves the
-    /// west north-strip room (78.049 m³, 28.809 m² floor — 26× the sliver threshold) unclosed;
-    /// it drops out of the cell complex entirely while its sibling survives with unchanged
-    /// volume (destroyed, not merged), and raising fillMargin to 0.5 does not rescue it
-    /// (Towers_DoubleWallGap_FillMargin_DefectDiagnostic). Net −67.640 m³
-    /// (−78.049 lost room + 10.408 unrelated southeast consolidation growth).
+    /// Gap 0.5: consolidating the 0.474 m north-strip wall pair closes that slot. The west north-strip
+    /// room (78.049 m³ at gap 0.4) survives at its authored location, distinct from its unchanged east
+    /// sibling, grows by exactly the closed slot (source wall-pair separation × the sibling's depth and
+    /// height) and now shares the merged plane with tower cell 26; no gap-0.4 cell loses its successor.
+    /// Until the North0 consolidation follow (documentation/North0-Consolidation-Follow-Q4.md) this room
+    /// was lost at gap 0.5 and these tests pinned that loss (29 cells, −67.640 m³); the history is kept
+    /// in that record, not as acceptance.
     /// </para>
     /// <para>
     /// Fixture: whole-level-towers.sam. Values captured by actual execution.
@@ -69,7 +71,7 @@ namespace SAM.OCCT.IntegrationTests
         private const double Cell26Z = 13.765;
 
         // North-strip pair (created at gap 0.4 by the volume-preserving split; the west member
-        // is destroyed at gap 0.5).
+        // grows into the closed 0.474 m slot at gap 0.5).
         private const double NorthStripParentX = 3.7398;
         private const double NorthStripParentY = -5.8367;
         private const double NorthStripWestX = 1.7164;
@@ -86,18 +88,24 @@ namespace SAM.OCCT.IntegrationTests
         private const double AbsTol = 0.05;
         private const double Volume0 = 9605.396;
         private const double Volume04 = 9620.406;
-        private const double Volume05 = 9552.766;
+        private const double Volume05 = 9641.151; // re-measured 2026-10-23: west north-strip room kept (was 9552.766)
         private const double CellFloorArea0 = 3160.075;
         private const double CellFloorArea04 = 3168.220;
-        private const double CellFloorArea05 = 3142.820;
+        private const double CellFloorArea05 = 3171.799; // re-measured 2026-10-23 (was 3142.820)
         private const double PanelFloorArea0 = 1336.727;
         private const double PanelFloorArea04 = 1335.811;
-        private const double PanelFloorArea05 = 1330.101;
+        private const double PanelFloorArea05 = 1330.101; // unchanged by the restored room
+        private const double VolumeDrift05 = 0.3722; // % vs gap 0, re-measured 2026-10-23 (was about -0.548)
+        private const double VolumeDelta04To05 = 20.745; // m3, re-measured 2026-10-23 (was -67.640)
         private const double Sliver18Volume = 1.095;
         private const double Sliver19Volume = 2.738;
         private const double NorthStripParentVolume = 157.574;
         private const double NorthStripWestVolume = 78.049;
         private const double NorthStripEastVolume = 79.526;
+
+        // The 0.474 m north-strip wall pair (authored): tower east face and north-strip west wall.
+        private static readonly Guid TowerEastFace = new Guid("edb39f15-e5a1-4bae-8481-3aec45ed2b1e");
+        private static readonly Guid NorthStripWestWall = new Guid("ca160254-72b3-4f3e-987e-a15f5ce15db9");
 
         private readonly ITestOutputHelper output;
 
@@ -178,6 +186,24 @@ namespace SAM.OCCT.IntegrationTests
                 if (d < bestDist) { bestDist = d; best = c; }
             }
             return bestDist <= radius ? best : null;
+        }
+
+        /// <summary>The volume the west north-strip room gains when the 0.474 m slot to the tower closes: the
+        /// AUTHORED separation of the wall pair times the depth and height of the east sibling room at
+        /// <paramref name="sibling"/> (same north/south walls and storey, untouched by the consolidation).</summary>
+        private static double ClosedSlotVolume(OcctCell sibling)
+        {
+            var panels = LoadPanels();
+            Face3D tower = panels.Single(x => x.Guid == TowerEastFace).GetFace3D();
+            Face3D strip = panels.Single(x => x.Guid == NorthStripWestWall).GetFace3D();
+            double width = System.Math.Abs(tower.GetPlane().Distance(strip.GetBoundingBox().GetCentroid()));
+            BoundingBox3D box = sibling.Shell.GetBoundingBox();
+            return width * (box.Max.Y - box.Min.Y) * (box.Max.Z - box.Min.Z);
+        }
+
+        private static int IndexOf(CellRun run, OcctCell cell)
+        {
+            return cell == null ? -1 : run.Cells.IndexOf(cell);
         }
 
         private static bool CellsShareFace(CellRun run, int a, int b)
@@ -401,22 +427,22 @@ namespace SAM.OCCT.IntegrationTests
             }
         }
 
-        // ── Gap 0.5 (over-aggressive: north-strip west room destroyed) ──
+        // ── Gap 0.5 (the 0.474 m north-strip pair also closes; the west north-strip room survives) ──
 
         [SkippableFact]
-        public void Towers_Gap05_OverAggressive_QuantitativeValidation()
+        public void Towers_Gap05_WestNorthStripRoomSurvives_QuantitativeValidation()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
 
             using (var run0 = RunTowersChain(0.0))
+            using (var run04 = RunTowersChain(0.4))
             using (var run05 = RunTowersChain(0.5))
             {
-                int cells0 = run0.Cells.Count;
+                int cells04 = run04.Cells.Count;
                 int cells05 = run05.Cells.Count;
                 double vol0 = run0.Cells.Sum(c => c.Volume);
                 double vol05 = run05.Cells.Sum(c => c.Volume);
 
-                double cellArea0 = CellFloorArea(run0);
                 double cellArea05 = CellFloorArea(run05);
                 double panelArea0 = FloorAreaEstimate(run0.ExtendedPanels, 12.24);
                 double panelArea05 = FloorAreaEstimate(run05.ExtendedPanels, 12.24);
@@ -425,64 +451,67 @@ namespace SAM.OCCT.IntegrationTests
                 double panelAreaDrift = (panelArea05 - panelArea0) / panelArea0 * 100;
 
                 int slivers05 = run05.Cells.Count(c => c.Volume > 0 && c.Volume < SliverVolumeThreshold);
-                var removed = RemovedCells(run0, run05);
+                var removed = RemovedCells(run04, run05);
 
                 int i22 = NearestCellIndex(run05.Cells, Cell22X, Cell22Y, Cell22Z);
                 int i26 = NearestCellIndex(run05.Cells, Cell26X, Cell26Y, Cell26Z);
                 bool adjacency05 = CellsShareFace(run05, i22, i26);
 
-                output.WriteLine("GAP=0.5 (over-aggressive):");
-                output.WriteLine("  cells: {0} → {1}", cells0, cells05);
+                var west04 = FindCell(run04, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
+                var east04 = FindCell(run04, NorthStripEastX, NorthStripEastY, NorthStripZ, 0.3);
+                var west05 = FindCell(run05, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
+                var east05 = FindCell(run05, NorthStripEastX, NorthStripEastY, NorthStripZ, 0.3);
+
+                output.WriteLine("GAP=0.5:");
+                output.WriteLine("  cells: gap 0.4 {0} → gap 0.5 {1}", cells04, cells05);
                 output.WriteLine("  total volume: {0:F3} → {1:F3} m³ (drift {2:+0.####;-0.####}%)", vol0, vol05, volDrift);
-                output.WriteLine("  cell floor area: {0:F3} → {1:F3} m²", cellArea0, cellArea05);
+                output.WriteLine("  cell floor area: {0:F3} m²", cellArea05);
                 output.WriteLine("  panel floor area (Z≈12.24): {0:F3} → {1:F3} m² (drift {2:+0.####;-0.####}%)", panelArea0, panelArea05, panelAreaDrift);
                 output.WriteLine("  slivers (vol < {0} m³): {1}", SliverVolumeThreshold, slivers05);
-                output.WriteLine("  removed cells: {0}", removed.Count);
-                foreach (var c in removed)
-                    output.WriteLine("    center=({0:F3},{1:F3},{2:F3}) vol={3:0.####} m³",
-                        c.Center?.X ?? double.NaN, c.Center?.Y ?? double.NaN, c.Center?.Z ?? double.NaN, c.Volume);
+                output.WriteLine("  gap-0.4 cells without a gap-0.5 successor: {0}", removed.Count);
+                output.WriteLine("  west north-strip room: {0:0.###} → {1:0.###} m³; east sibling {2:0.###} → {3:0.###} m³",
+                    west04?.Volume ?? double.NaN, west05?.Volume ?? double.NaN, east04?.Volume ?? double.NaN, east05?.Volume ?? double.NaN);
                 output.WriteLine("  22↔26 adjacency: {0}", adjacency05);
 
-                // Exact deterministic assertions (verified by actual execution).
-                Assert.Equal(29, cells05);
-                Assert.InRange(vol05, Volume05 - AbsTol, Volume05 + AbsTol);
-                Assert.InRange(cellArea05, CellFloorArea05 - AbsTol, CellFloorArea05 + AbsTol);
-                Assert.InRange(panelArea05, PanelFloorArea05 - AbsTol, PanelFloorArea05 + AbsTol);
+                // Topology first. The authored west north-strip room (the base's surviving room at gap 0.4) keeps
+                // its own cell at gap 0.5, distinct from and adjacent to its east sibling.
+                Assert.NotNull(west04);
+                Assert.NotNull(east04);
+                Assert.InRange(west04.Volume, NorthStripWestVolume - AbsTol, NorthStripWestVolume + AbsTol);
+                Assert.NotNull(west05);
+                Assert.NotNull(east05);
+                Assert.NotSame(west05, east05);
+                Assert.True(CellsShareFace(run05, IndexOf(run05, west05), IndexOf(run05, east05)), "Gap 0.5: the north-strip rooms must stay adjacent.");
+
+                // No room is lost or merged: every gap-0.4 cell has a gap-0.5 successor, the count is unchanged.
+                Assert.Empty(removed);
+                Assert.Equal(cells04, cells05);
                 Assert.Equal(0, slivers05);
                 Assert.True(adjacency05, "Gap 0.5: cells 22 and 26 must share a face.");
 
-                // Gap 0.5 is OVER-AGGRESSIVE: volume drifts −0.548% vs baseline and the
-                // level-datum floor area drops −0.496% (vs −0.069% at gap 0.4) — a legitimate
-                // room's floor is gone, not an artifact's.
-                Assert.InRange(volDrift, -0.60, -0.45);
+                // The closed slot joins the west room to tower cell 26 (they share the merged plane).
+                Assert.True(CellsShareFace(run05, IndexOf(run05, west05), i26), "Gap 0.5: the west north-strip room must share the merged plane with tower cell 26.");
+
+                // Accounting: the sibling is untouched, the west room gains exactly the closed slot.
+                Assert.InRange(east05.Volume, east04.Volume - AbsTol, east04.Volume + AbsTol);
+                double slot = ClosedSlotVolume(east04);
+                Assert.InRange(west05.Volume - west04.Volume, slot - AbsTol, slot + AbsTol);
+
+                Assert.All(run05.Cells, c => Assert.True(c.Volume > 0 && !double.IsNaN(c.Volume), "non-positive cell volume"));
+                Assert.Empty(OcctUnderSplitGuard.ValidateCells(run05.Cells, new OcctBuildOptions { AvoidInternalShapes = false, SewBeforeBuild = true, SewingTolerance = 0.01 }, Tolerance.MacroDistance));
+
+                // Quantities re-measured after the checks above (directly affected by the restored room).
+                Assert.InRange(vol05, Volume05 - AbsTol, Volume05 + AbsTol);
+                Assert.InRange(cellArea05, CellFloorArea05 - AbsTol, CellFloorArea05 + AbsTol);
+                Assert.InRange(panelArea05, PanelFloorArea05 - AbsTol, PanelFloorArea05 + AbsTol);
+                Assert.InRange(volDrift, VolumeDrift05 - 0.01, VolumeDrift05 + 0.01);
+                // The level-datum panel floor area is the unchanged PR #61 value (-0.496%): it never measured the
+                // lost room, so it keeps its original range.
                 Assert.InRange(panelAreaDrift, -0.60, -0.40);
-
-                // The destroyed geometry: the west north-strip room (78.049 m³ — 26× the sliver
-                // threshold, a legitimate room) exists at gap 0.4 but has NO successor at gap 0.5,
-                // while its pair sibling survives with unchanged volume. The room is destroyed
-                // (left unclosed by the 0.474 m wall-pair consolidation; fillMargin=0.5 does not
-                // rescue it), not merged into the sibling.
-                using (var run04 = RunTowersChain(0.4))
-                {
-                    var west04 = FindCell(run04, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
-                    Assert.NotNull(west04);
-                    Assert.InRange(west04.Volume, NorthStripWestVolume - AbsTol, NorthStripWestVolume + AbsTol);
-                    Assert.True(west04.Volume > 25 * SliverVolumeThreshold,
-                        "The gap-0.5 casualty must be a legitimate room, far above the sliver threshold.");
-
-                    var west05 = FindCell(run05, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
-                    Assert.Null(west05);
-
-                    var east04 = FindCell(run04, NorthStripEastX, NorthStripEastY, NorthStripZ, 0.3);
-                    var east05 = FindCell(run05, NorthStripEastX, NorthStripEastY, NorthStripZ, 0.3);
-                    Assert.NotNull(east04);
-                    Assert.NotNull(east05);
-                    Assert.InRange(east05.Volume, east04.Volume - AbsTol, east04.Volume + AbsTol);
-                }
             }
         }
 
-        // ── Cross-gap comparison (0.4 vs 0.5): 0.5 destroys one legitimate room ──
+        // ── Cross-gap comparison (0.4 vs 0.5): every room kept, the delta fully attributed ──
 
         [SkippableFact]
         public void Towers_Gap04Vs05_QuantitativeDelta()
@@ -503,10 +532,7 @@ namespace SAM.OCCT.IntegrationTests
                 output.WriteLine("GAP 0.4 vs 0.5:");
                 output.WriteLine("  cells: {0} → {1}", cells04, cells05);
                 output.WriteLine("  volume: {0:F3} → {1:F3} m³ (delta {2:+0.###;-0.###} m³)", vol04, vol05, volDelta);
-                output.WriteLine("  removed cells: {0}", removed.Count);
-                foreach (var c in removed)
-                    output.WriteLine("    center=({0:F3},{1:F3},{2:F3}) vol={3:0.####} m³",
-                        c.Center?.X ?? double.NaN, c.Center?.Y ?? double.NaN, c.Center?.Z ?? double.NaN, c.Volume);
+                output.WriteLine("  gap-0.4 cells without a gap-0.5 successor: {0}", removed.Count);
 
                 int i22_04 = NearestCellIndex(run04.Cells, Cell22X, Cell22Y, Cell22Z);
                 int i26_04 = NearestCellIndex(run04.Cells, Cell26X, Cell26Y, Cell26Z);
@@ -519,19 +545,22 @@ namespace SAM.OCCT.IntegrationTests
                 Assert.Equal(0, run04.Cells.Count(c => c.Volume > 0 && c.Volume < SliverVolumeThreshold));
                 Assert.Equal(0, run05.Cells.Count(c => c.Volume > 0 && c.Volume < SliverVolumeThreshold));
 
-                // Exact assertions: 30 at gap 0.4, 29 at gap 0.5 — exactly one cell lost.
+                // No cell lost: 30 at gap 0.4 and every one of them has a gap-0.5 successor.
                 Assert.Equal(30, cells04);
-                Assert.Equal(29, cells05);
+                Assert.Empty(removed);
+                Assert.Equal(cells04, cells05);
 
-                // The −67.640 m³ delta is fully attributed: −78.049 (west north-strip room
-                // destroyed) + 10.408 (unrelated southeast consolidation growth).
-                Assert.InRange(volDelta, -67.640 - AbsTol, -67.640 + AbsTol);
-
-                Assert.Single(removed);
-                var casualty = removed[0];
-                Assert.InRange(casualty.Volume, NorthStripWestVolume - AbsTol, NorthStripWestVolume + AbsTol);
-                Assert.True(Dist(casualty, NorthStripWestX, NorthStripWestY, NorthStripZ) < 0.3,
-                    "The gap-0.5 casualty must be the west north-strip room.");
+                // The delta is fully attributed to two growths: the west north-strip room gains the closed
+                // 0.474 m slot (derived from the authored wall pair and the untouched east sibling), and the
+                // unrelated southeast consolidation gains 10.408 m³ (unchanged since PR #61).
+                var west04 = FindCell(run04, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
+                var west05 = FindCell(run05, NorthStripWestX, NorthStripWestY, NorthStripZ, 0.3);
+                var east04 = FindCell(run04, NorthStripEastX, NorthStripEastY, NorthStripZ, 0.3);
+                Assert.NotNull(west04);
+                Assert.NotNull(west05);
+                Assert.NotNull(east04);
+                double westGrowth = west05.Volume - west04.Volume;
+                Assert.InRange(westGrowth, ClosedSlotVolume(east04) - AbsTol, ClosedSlotVolume(east04) + AbsTol);
 
                 var southeast04 = FindCell(run04, 42.5574, -22.5386, 13.765, 0.3);
                 var southeast05 = FindCell(run05, 42.7708, -22.5386, 13.765, 0.3);
@@ -539,9 +568,8 @@ namespace SAM.OCCT.IntegrationTests
                 Assert.NotNull(southeast05);
                 Assert.InRange(southeast05.Volume - southeast04.Volume, 10.408 - AbsTol, 10.408 + AbsTol);
 
-                // Attribution completeness: casualty + southeast growth ≈ the whole delta.
-                Assert.InRange(-casualty.Volume + (southeast05.Volume - southeast04.Volume),
-                    volDelta - AbsTol, volDelta + AbsTol);
+                Assert.InRange(westGrowth + (southeast05.Volume - southeast04.Volume), volDelta - AbsTol, volDelta + AbsTol);
+                Assert.InRange(volDelta, VolumeDelta04To05 - AbsTol, VolumeDelta04To05 + AbsTol);
             }
         }
     }

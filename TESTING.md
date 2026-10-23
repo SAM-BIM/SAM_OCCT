@@ -1834,7 +1834,18 @@ MaxExtend revert restores the pre-P3 signatures exactly (all 15 pinned rows pass
   (<= 0.3 m, room side, within the wall's old and source runs, no wall crossing the swept strip) moves
   alone by the wall's displacement; slanted neighbours get stubs, holes stay; caps on the move side,
   beyond 0.3 m, longer than the run, without source evidence or behind a same-storey wall stay put;
-  abutting caps keep the uniform growth; an uncaptured 0.474 m void moves nothing.
+  abutting caps keep the uniform growth; an uncaptured 0.474 m void moves nothing. An edge authored
+  against another wall (its source foot on the edge, snapped away earlier - the towers South1 roof) does
+  not follow; the same shape without that wall, or with it on another storey, does. With the dominant
+  covering only part of the moved wall's run, an edge on the moved wall's own run follows; past it, not.
+
+- Towers reconciliation (2026-10-23): `PR61TowersQuantitativeValidationTests.Towers_Gap05_WestNorthStripRoomSurvives_QuantitativeValidation`
+  (renamed from `Towers_Gap05_OverAggressive_QuantitativeValidation`), `...Towers_Gap04Vs05_QuantitativeDelta`,
+  `TowersBucketLeverDiagnosticTests.Towers_DoubleWallGap_FixAcceptance_Gap05StripSurvives` and
+  `...Towers_NorthStripPair_GapSweep_MergedAt05_NearMissAt047` no longer pin the lost west north-strip room at
+  doubleWallGap 0.5: they assert it survives at its gap-0.4 location beside its unchanged sibling and tower
+  cell 26, grows by the closed slot (authored wall-pair separation x sibling depth x height), and that no
+  gap-0.4/0.47 cell loses its successor; then the re-measured 0.5 totals.
 
 - `North0ConsolidationFollowIntegrationTests` (native-gated) — the same two follows on the original
   nine-space fixture at the clean stage (0.55, 0.65, pair-only 0.55), their absence at 0.45 and without

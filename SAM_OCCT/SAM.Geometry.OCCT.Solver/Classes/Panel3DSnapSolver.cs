@@ -3785,6 +3785,8 @@ namespace SAM.Geometry.OCCT.Solver
         /// the only evidence.</item>
         /// <item>Run: the edge lies within the old foot's run and within that source foot's run, each widened by
         /// <see cref="STACK_FOLLOW_END_TOLERANCE"/> - a cap edge longer than the wall is not this wall's.</item>
+        /// <item>Authored: no other same-storey vertical wall's SOURCE foot lies along the edge's run between the edge and
+        /// the old plane - an edge authored against a wall that an earlier snap moved away is that wall's, not this one's.</item>
         /// <item>Unique: no other same-storey vertical wall crosses the strip from the edge to its new position, so
         /// no wall stands between the edge and the moved wall and the edge never crosses one.</item>
         /// </list>
@@ -3892,9 +3894,45 @@ namespace SAM.Geometry.OCCT.Solver
                 return false;
             }
 
+            // Authored uniqueness: the edge must not have been authored against another wall. No other same-storey
+            // wall's SOURCE foot may lie, along the edge's run, between the edge and the moved wall's old plane - an
+            // earlier snap can carry that wall away (the towers South1 roof edge sat on its own north wall, snapped
+            // onto the band before this pass), leaving no CURRENT wall for the strip test below to see.
+            BoundingBox3D capBox = cap.GetBoundingBox();
+            foreach (SnappedPanel other in panels)
+            {
+                if (ReferenceEquals(other, cap) || ReferenceEquals(other, movedWall) || other?.Face3D == null || !other.IsVertical(verticalAngleTolerance))
+                {
+                    continue;
+                }
+
+                BoundingBox3D otherBox = other.GetBoundingBox();
+                if (otherBox == null || otherBox.Min.Z > capBox.Max.Z + toleranceDistance || otherBox.Max.Z < capBox.Min.Z - toleranceDistance)
+                {
+                    continue;
+                }
+
+                foreach (Segment3D otherFoot in SourceFeet(other, toleranceDistance))
+                {
+                    if (!FootRun(otherFoot, ux, uy, toleranceAngle, out _, out _, out _, out _))
+                    {
+                        continue;
+                    }
+
+                    Point3D otherMiddle = otherFoot.GetCenter();
+                    double otherDepth = -(((otherMiddle.X - middle.X) * ux) + ((otherMiddle.Y - middle.Y) * uy));
+                    double alongStart = (otherFoot.GetStart().X * runX) + (otherFoot.GetStart().Y * runY);
+                    double alongEnd = (otherFoot.GetEnd().X * runX) + (otherFoot.GetEnd().Y * runY);
+                    double runOverlap = System.Math.Min(System.Math.Max(alongStart, alongEnd), edgeMax) - System.Math.Max(System.Math.Min(alongStart, alongEnd), edgeMin);
+                    if (runOverlap > STACK_FOLLOW_END_TOLERANCE && otherDepth >= -STACK_FOLLOW_END_TOLERANCE && otherDepth <= nearest + STACK_FOLLOW_END_TOLERANCE)
+                    {
+                        return false;
+                    }
+                }
+            }
+
             // Unique association: no other same-storey wall crosses the swept strip (edge run x depth from the
             // edge's new position to the edge), shrunk by the tolerance so walls merely touching it do not count.
-            BoundingBox3D capBox = cap.GetBoundingBox();
             double stripMinDepth = nearest - moved + toleranceDistance;
             double stripMaxDepth = nearest + STACK_FOLLOW_END_TOLERANCE - toleranceDistance;
             foreach (SnappedPanel wall in panels)

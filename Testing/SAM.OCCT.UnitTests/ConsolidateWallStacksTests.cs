@@ -536,6 +536,55 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(0.433, roof.GetBoundingBox().Min.Y, 6);
         }
 
+        [Theory]
+        [InlineData("same storey", 0.392)] // the towers case: the edge was authored against C, not B
+        [InlineData("none", 0.198)]        // control: no such wall, the edge follows B by 0.194
+        [InlineData("other storey", 0.198)] // control: C's source on another storey does not block
+        public void ConsolidateWallStacks_InsetEdgeAuthoredAgainstSnappedAwayWall_FollowsOnlyWithoutIt(string authoredWall, double expectedEdgeDepth)
+        {
+            // Arrange (towers band shape, mirrored to these axes): dominant A at y=0; member B at y=-0.194 moves +y onto
+            // it; the roof's edge at y=-0.392 is 0.198 inside B on the side B moves away from. C is the roof's own wall,
+            // AUTHORED on that edge and snapped onto A's plane before consolidation, so no current wall marks the edge.
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 8);
+            SnappedPanel b = Wall(-0.194, x0: 0, x1: 7, flip: true);
+            SnappedPanel roof = Floor(3.0, xMin: 0.088, xMax: 6.912, yMin: -6, yMax: -0.392);
+            List<SnappedPanel> panels = new List<SnappedPanel> { a, b, roof };
+            if (authoredWall != "none")
+            {
+                SnappedPanel c = authoredWall == "same storey" ? Wall(-0.392, x0: 0, x1: 7) : Wall(-0.392, x0: 0, x1: 7, z0: 4, z1: 7);
+                Assert.True(c.SnapToBacker(new Plane(new Point3D(0, 0, 0), Vector3D.WorldY)));
+                panels.Add(c);
+            }
+
+            // Act
+            Panel3DSnapSolver.ConsolidateWallStacks(panels, 0.4, Angle, Distance, VerticalAngle);
+
+            // Assert: the edge stays on C's authored line, or follows B by exactly its 0.194 m move.
+            Assert.Equal(-expectedEdgeDepth, roof.GetBoundingBox().Max.Y, 6);
+            Assert.Equal(-6.0, roof.GetBoundingBox().Min.Y, 6);
+        }
+
+        [Theory]
+        [InlineData(5.0, 6.0, true)]  // edge beyond the dominant's run but on the moved wall's own run: supported
+        [InlineData(5.0, 6.5, false)] // edge past the moved wall's run too: no wall will support it
+        public void ConsolidateWallStacks_InsetEdgeWithPartialDominantOverlap_FollowsWhereTheMovedWallSupportsIt(double edgeX0, double edgeX1, bool expectMoved)
+        {
+            // Arrange: dominant A (taller, so larger) runs x 0..4.8 only; B runs x 0..6 and keeps that run on A's plane
+            // after the move, so the final support for an edge is B's own footprint, not A's.
+            SnappedPanel a = Wall(0.000, x0: 0, x1: 4.8, z1: 4);
+            SnappedPanel b = Wall(0.345, x0: 0, x1: 6, flip: true);
+            SnappedPanel roof = Floor(3.0, xMin: edgeX0, xMax: edgeX1, yMin: 0.433, yMax: 6);
+
+            // Act
+            int moved = Panel3DSnapSolver.ConsolidateWallStacks(new List<SnappedPanel> { a, b, roof }, 0.4, Angle, Distance, VerticalAngle);
+
+            // Assert
+            Assert.Equal(1, moved);
+            Assert.Equal(0.0, b.GetBoundingBox().Min.Y, 6);
+            Assert.Equal(6.0, b.GetBoundingBox().Max.X, 6);
+            Assert.Equal(expectMoved ? 0.088 : 0.433, roof.GetBoundingBox().Min.Y, 6);
+        }
+
         [Fact]
         public void ConsolidateWallStacks_AbuttingCap_KeepsUniformGrowth()
         {
