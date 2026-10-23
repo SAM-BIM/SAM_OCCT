@@ -1,26 +1,71 @@
 # Sew guard against invalid cells (Scope 1) - branch record
 
-Branch: `fix/sew-guard-invalid-cells-q4` (local only: not pushed, no PR, not merged). Base: `sow/2026-Q4` at
-`dc871f7e6ee7d0e53adb826a2b597645e2eab4cb` (fetched 2026-10-22, unchanged). SAM and SAM_Solver are not changed.
+Branch: `fix/sew-guard-invalid-cells-q4`, pushed to `SAM-BIM/SAM_OCCT`; PR
+[SAM-BIM/SAM_OCCT#81](https://github.com/SAM-BIM/SAM_OCCT/pull/81) into `sow/2026-Q4` is open and ready for review
+(not a draft); not merged. Base: `sow/2026-Q4` at `dc871f7e6ee7d0e53adb826a2b597645e2eab4cb` (unchanged when the
+hosted checks ran on 2026-10-23). SAM and SAM_Solver are not changed. Hosted checks passed on PR head
+`0718dbcf58cc196f1bd71b30a3ca689b8af3e7ea` (section "Hosted CI"). The PR head after this record commit is stated in
+the PR description, not here (a record cannot name its own SHA).
 Commits: `63be627` (guard), `ac212bd` (replacement judged on its own merits, after the real-fixture validation),
 `599ed75` (record), then the R1/R2 corrections from the independent review: `45e307f` (always check sew-cell
 disjointness; establish disjointness soundly) and `8d4beff` (unit test pinning the separating-face-plane path),
 `e7bb5e2` (record), then the R3 correction from the second review: `cb1a719` (one glue-band policy for every
 overlap test, with tests), `1726f0d` (record), then the R4 correction from the third review: `63067b5`, `0498a24`,
 `a135c5f` (glue-band proof replaces the coarse kernel pass).
-Tested content SHA: `a135c5f` (full SHA in "R4 correction"). The commit after it changes only this record and
-`TESTING.md` (docs only). The earlier tested content SHAs `ac212bd`, `8d4beff` and `cb1a719` are superseded; their
-results are kept below where marked.
+Tested production content SHA: `a135c5f4a6e25dd1c40a11a4881219c1271bc4a3` (see "R4 correction"; local native and
+managed evidence). Commits after it, none of which changes production code, tests or workflows:
+`3523ed264438f9fc7f1dd7a9eb5ee90c71ca8ee2` (record and `TESTING.md`; it carried a CI-skip marker, so it had no
+checks), `0718dbcf58cc196f1bd71b30a3ca689b8af3e7ea` (empty commit, tree identical to `3523ed2`, raised the hosted
+checks) and the record-only commit that updates this file with the hosted results. The earlier tested content SHAs
+`ac212bd`, `8d4beff` and `cb1a719` are superseded; their results are kept below where marked.
 Source of the task: Scope 1 of `.review-occt-integration19-20261022/ATTRIBUTION.md` (machine-local, owner workspace).
 Independent reviews: `SAM-BIM/.review-sew-guard-independent-20261022/REVIEW.md` (findings R1, R2), `REVIEW-R2.md`
-(finding R3) and `REVIEW-R3.md` (finding R4), machine-local. `PROJECT_PROGRESS.md` is not touched (post-merge
-closeout only).
+(finding R3) and `REVIEW-R3.md` (finding R4), machine-local. An independent review of the CI-trigger commit
+(2026-10-23, identical-tree check; not a new geometry review) accepted it and found no new code defect, and asked for
+this record and the PR description to be corrected. `PROJECT_PROGRESS.md` is not touched (post-merge closeout only).
 
 ## Status
 
 Implementation, tests and local validation are complete, including the corrections for review findings R1, R2
-(section "R1/R2 corrections"), R3 ("R3 correction") and R4 ("R4 correction"). Awaiting a fourth independent review.
-Not pushed; no PR; no hosted CI has run. Open owner decisions are listed under "Unresolved".
+(section "R1/R2 corrections"), R3 ("R3 correction") and R4 ("R4 correction"). The branch is pushed and PR #81 is
+open and ready for review. Hosted Build (Windows) and SPDX passed on PR head `0718dbc` (section "Hosted CI"); the
+hosted run exercises managed code only, so the native guard behaviour still rests on the machine-local evidence
+below. No merge is authorised: the PR awaits a final review and the owner decisions listed under "Next step". No
+owner acceptance of any of those decisions is recorded.
+
+## Hosted CI (PR #81, 2026-10-23)
+
+Both runs were triggered by the `pull_request` `synchronize` event of `0718dbc` (an empty commit whose parent is
+`3523ed2` and whose tree `2cd205d901a01ce06efbecaa3872fd216a8c4f2f` is identical to it). `3523ed2` itself had no runs:
+its message carried a CI-skip marker and `pull_request` triggers do not include `ready_for_review`.
+
+| Check | Result | Run |
+|---|---|---|
+| Build (Windows) | success | https://github.com/SAM-BIM/SAM_OCCT/actions/runs/39920956168 |
+| SPDX + Copyright header check | success | https://github.com/SAM-BIM/SAM_OCCT/actions/runs/39920956200 |
+
+- **PR head versus merge ref.** PR head `0718dbcf58cc196f1bd71b30a3ca689b8af3e7ea`. The runner checked out the PR
+  merge ref `c8ff83b962676f7f00cc48b9a06bd3865497acc8` (parents `dc871f7` and `0718dbc`, tree `2cd205d9...`, the same
+  as the PR head's). The PR head is not what was literally checked out; the merge ref is.
+- **Unit tests:** 975 passed, 0 failed, 0 skipped, including 275 managed guard and proof cases
+  (`OcctGlueBandProofTests`, `SewInvalidCellGuardTests`).
+- **Integration tests:** 31 passed, 0 failed, 422 skipped. Every skip reports "Native SAM.Occt.Native library is not
+  available." (`SAM_OCCT_SKIP_NATIVE_BUILD=true`; the runner has no native layer), including all 171
+  `SewGuardInvalidCellIntegrationTests` cases. None of the guard's native integration tests ran on GitHub.
+- **Build and provenance:** SAM, SAM_Solver and SAM_OCCT rebuilt with `msbuild /t:Rebuild` in Release; the H12
+  provenance assertion passed for the 8 managed assemblies at `2026.4.296.0+c8ff83b`.
+- **Dependency refs.** The workflow clones SAM and SAM_Solver at the newest `sow/yyyy-Qn` branch; the log shows
+  `Cloning SAM @ sow/2026-Q4` and `Cloning SAM_Solver @ sow/2026-Q4`, with no fallback warning, but not their commit
+  SHAs. **Inferred, not proven by those logs:** the `sow/2026-Q4` tips at the clone time (2026-10-23 07:54:57Z), read
+  afterwards from the GitHub API, were SAM `0168d03f7e9e56775868aecaca73d8224a2034c5` and SAM_Solver
+  `fd63b4670cd4baeb20a74312aacc17eb177ecc18`. The local validation used SAM `ba686d24` (an unstamped local build)
+  and the same SAM_Solver `fd63b467`, so the hosted SAM differs from the local one.
+- **Not covered by the hosted run:** the native kernel (fixtures, rigid-motion invariance, fail-closed integration
+  test, the 19 historical native failures below), Grasshopper, and the full solution. The 19 full-native failures
+  were recorded as identical by name and message to the base `dc871f7` and earlier saved runs (local, see "Test
+  suites"); the guard neither fixes nor adds any, and fixing them is outside this PR.
+- Hosted results for the final PR head (after the record-only commit that adds this section) are reported in the PR
+  description; the content is identical to `0718dbc` apart from this file.
 
 ## R4 correction (2026-10-22)
 
@@ -388,7 +433,7 @@ Tests and inputs:
   smaller. Tests compare against the direct build (cell by cell, after inverse translation), not a room count. The
   observed total of 215.993 m3 is pinned with a comment.
 
-## Validation (local, Windows, this machine; no hosted CI)
+## Validation (local, Windows, this machine; hosted CI is in "Hosted CI")
 
 Environment:
 - **Native:** frozen copy of `SAM_OCCT\build` (SAM.Occt.Native.dll SHA256 438089F8..., TKBO.dll 1FA732FE..., ABI 4), the
@@ -720,12 +765,24 @@ and any output that is not a new `.txt` file.
 
 ## Next step
 
-Fourth independent review of the R4 correction: diff `1726f0d..a135c5f` (and `dc871f7..HEAD` for context), this
-record, `r4-corrections/` evidence and the ported review probe (`reviewer-probe-port/`). Focus: the soundness of
-`OcctGlueBandProof` (corner-maximum bound over convex faces, verified triangles and edges; empty-box rule with its
-exact box-polygon test and ray parity; witness; the 1e-9 threshold allowance; region margin), whether any path
-accepts a seam without the proof, the L-seam behaviour change at the band edge, and the unexercised-on-real-data
-limit. Then the owner decides on the closure band for the #76 route, on the fail-closed stance for undecidable pairs
-(now including a spent proof budget), on the strict L-seam reading, on restoring the damaged evidence files from the
-reconstructions, and on pushing and opening a PR to `sow/2026-Q4` (hosted `build` and `spdx` must pass). Recommended
-reviewer: Opus, high effort, new session, Plan mode: the review is a geometric soundness proof plus evidence.
+Final review, then the owner's merge decision. Do not merge before both. PR #81 is open and ready for review; the
+hosted `build` and `spdx` checks passed on `0718dbc` and must also be green on the final PR head (named in the PR
+description). After a merge, `PROJECT_PROGRESS.md` gets its post-merge closeout with the merge SHA (CI-skip
+marker as in AGENTS.md; direct docs-only commit on `sow/2026-Q4`); not before.
+
+Owner decisions still open (none is recorded as accepted):
+1. **Ball-diameter tolerance semantics**, including the strict reading of L-shaped seams 0.86 to 1 mm wide (accepted
+   at R3, overlaps since R4). Reviewer recommendation, not an owner acceptance: keep the reviewed rule.
+2. **Fail-closed stance for undecidable pairs** (kernel-undecidable sew pairs, a spent proof budget, unusable
+   geometry) and its runtime cost (a spent budget took 0.6 to 1.5 s on synthetic pieces; the proof never ran on the
+   six real sets). Reviewer recommendation: keep fail-closed.
+3. **Fine-kernel completeness assumption:** the fine pass (fuzzy b/10) is trusted to find and locate every common
+   piece holding a band-wide ball. Reviewer recommendation: acknowledge the documented limit.
+4. **Closure band for the #76 route** (judge closure at the glue band?). Out of this PR; the reviewer recommends
+   leaving it unchanged.
+5. **Damaged machine-local evidence files** (`02_July_...105-panels.sam`, `03_Current_...131-panels.sam`): restore
+   from the staged reconstructions, described as reconstructions.
+
+Out of scope here and unchanged: the 19 historical native failures (same by name and message as base; separate
+follow-up), `Solve3D` end-to-end instability (Scope 2) and the nine-space/North0 branch. The native behaviour of the
+guard has no hosted evidence; it rests on the machine-local runs recorded above.
