@@ -21,3 +21,8 @@ output.
 - `Extend3D-Regression/`: PR #49's original bug-report models (real exports with
   gaps between panels - "walls disappear after SAMOCCT.Extend3D") - deliberately
   not watertight raw, exercised by `Extend3DRegressionIntegrationTests`.
+- `Revit-Reconstruction/`: two fixed `Solve3D` outputs of `Revit-home-panels.sam`
+  (current stack: 131 panels incl. 18 Air; July stack: 105 panels), stored as one
+  AnalyticalModel each. They are reconstruction inputs, not solver inputs: their
+  sew build changes with a rigid translation (inverted and duplicated envelope
+  cells). Exercised by `SewGuardInvalidCellIntegrationTests`.

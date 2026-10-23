@@ -5,8 +5,10 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-// Expose internal helpers (e.g. OcctNativeInputBuilder) to the unit test assembly.
+// Expose internal helpers (e.g. OcctNativeInputBuilder) to the unit test assembly, and to the native integration
+// tests (the sew guard's exact overlap test against the real kernel).
 [assembly: InternalsVisibleTo("SAM.OCCT.UnitTests")]
+[assembly: InternalsVisibleTo("SAM.OCCT.IntegrationTests")]
 [assembly: AssemblyTitle("SAM.Geometry.OCCT")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]

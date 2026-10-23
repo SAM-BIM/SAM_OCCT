@@ -318,8 +318,9 @@ namespace SAM.Geometry.OCCT.Native
                 OcctCellComplexResult sewCandidate = new OcctCellComplexResult();
                 if (TrySewThenMakeVolume(face3DList, options, sewCandidate))
                 {
-                    AdoptSewCandidate(face3DList, input, options, sewCandidate, result);
-                    return true;
+                    // False only when the guard proved the sew build invalid and found no acceptable replacement:
+                    // fail closed instead of falling through to another build.
+                    return AdoptSewCandidate(face3DList, options, sewCandidate, (OcctCellComplexResult candidate, out bool decoded) => TryDirectBuild(input, options, candidate, out decoded), result);
                 }
 
                 result.NativeAvailable = sewCandidate.NativeAvailable;
@@ -430,12 +431,168 @@ namespace SAM.Geometry.OCCT.Native
         }
 
         /// <summary>
-        /// Adopts a successful sew-then-MakerVolume candidate, unless its input-face coverage shows faces cutting
-        /// through a cell (an under-split) or unused entirely. In that case a direct MakerVolume build is tried in
-        /// isolation and adopted only when <see cref="OcctUnderSplitGuard"/> proves it a valid, strictly better
-        /// refinement. Every outcome other than a clean sew build leaves an explicit Warning.
+        /// The volume common to two closed shells beyond the glue band, by the native boolean Common behind
+        /// <see cref="TryIntersection"/> (sam_occt_shells_intersection), measured by the sew guard's one glue-band
+        /// policy (<see cref="OcctUnderSplitGuard.CheckDisjoint"/>): each common piece is classified by
+        /// <see cref="OcctUnderSplitGuard.ExceedsBand"/>, and only pieces holding a ball thicker than the band count.
+        /// <para>
+        /// The kernel runs with a fine fuzzy value, a tenth of the band, and a decode threshold far below the volume
+        /// of a band-wide ball, so that no compact piece thicker than the band is lost: at the band itself the kernel
+        /// also glues away compact pieces up to a few bands wide, depending on their orientation, and the decoder
+        /// drops solids whose volume is below Tolerance (in m3). A piece that the managed tests can neither place in
+        /// a band-thin slab nor show to hold a band-wide ball (e.g. an L-shaped seam, or a compact piece whose
+        /// candidate points all lie too near its boundary) is decided on the two cells themselves by
+        /// <see cref="OcctGlueBandProof"/>. Whether the kernel at a coarser fuzzy value still finds the piece is not
+        /// evidence: a 2 mm triangular prism holding a 1.17 mm ball vanishes at fuzzy = band.
+        /// </para>
+        /// 0 when nothing beyond the band is common; null when it cannot be decided (shell not serializable, kernel
+        /// error, native library missing, or a piece that neither test can classify). Used by the sew guard's overlap
+        /// test only. Self-contained: it frees its own result handles and touches no build or retained topology.
+        /// proofBudget: the work budget of the proof per piece (tests lower it).
         /// </summary>
-        private static void AdoptSewCandidate(List<Face3D> face3Ds, OcctNativeInput input, OcctBuildOptions options, OcctCellComplexResult sewCandidate, OcctCellComplexResult result)
+        internal static double? CommonVolume(Shell first, Shell second, OcctBuildOptions options, int proofBudget = OcctGlueBandProof.DefaultBudget)
+        {
+            options = options ?? new OcctBuildOptions();
+            double band = OcctUnderSplitGuard.GlueBand(options);
+            double fuzzyTolerance = System.Math.Max(options.Tolerance, band / 10);
+            List<OcctCell> pieces = CommonPieces(first, second, options, fuzzyTolerance);
+            if (pieces == null)
+            {
+                return null;
+            }
+
+            double volume = 0;
+            bool undecided = false;
+            foreach (OcctCell piece in pieces)
+            {
+                double pieceVolume = System.Math.Abs(piece?.Volume ?? double.NaN);
+                if (double.IsNaN(pieceVolume) || double.IsInfinity(pieceVolume))
+                {
+                    return null;
+                }
+
+                // The proof covers the piece enlarged by the kernel's fuzzy value: the decoded piece may differ from
+                // the exact common region by that much.
+                bool? exceeds = OcctUnderSplitGuard.ExceedsBand(piece.Shell, piece.Center, options)
+                    ?? OcctGlueBandProof.Exceeds(first, second, piece.Shell, fuzzyTolerance + options.Tolerance, options, proofBudget);
+                if (exceeds == true)
+                {
+                    volume += pieceVolume;
+                }
+                else if (exceeds == null)
+                {
+                    undecided = true;
+                }
+            }
+
+            if (volume > 0)
+            {
+                return volume;
+            }
+
+            return undecided ? (double?)null : 0;
+        }
+
+        // The decoded pieces of the native Common of two shells at the given fuzzy value (empty for status 40, no
+        // common solid), or null when the kernel cannot decide. The decode threshold (native tolerance, applied to
+        // solid volumes) is kept below a thousandth of the volume of a band-wide cube.
+        private static List<OcctCell> CommonPieces(Shell first, Shell second, OcctBuildOptions options, double fuzzyTolerance)
+        {
+            OcctCellComplexResult scratch = new OcctCellComplexResult();
+            IntPtr resultHandle = IntPtr.Zero;
+            try
+            {
+                if (first == null || second == null
+                    || !OcctNativeInputBuilder.TryBuild(new[] { first }, options, scratch, "SAM_OCCT_INTERSECTION_TARGET_EMPTY", "No serializable target shell geometry was found.", out OcctNativeInput firstInput)
+                    || !OcctNativeInputBuilder.TryBuild(new[] { second }, options, scratch, "SAM_OCCT_INTERSECTION_TOOL_EMPTY", "No serializable tool shell geometry was found.", out OcctNativeInput secondInput))
+                {
+                    return null;
+                }
+
+                double band = OcctUnderSplitGuard.GlueBand(options);
+                int status = OcctNativeMethods.sam_occt_shells_intersection(
+                    firstInput.Coordinates,
+                    firstInput.Coordinates.Length / 3,
+                    firstInput.LoopPointCounts,
+                    firstInput.LoopPointCounts.Length,
+                    firstInput.FaceLoopCounts,
+                    firstInput.FaceCount,
+                    firstInput.ShellFaceCounts,
+                    firstInput.ShellCount,
+                    secondInput.Coordinates,
+                    secondInput.Coordinates.Length / 3,
+                    secondInput.LoopPointCounts,
+                    secondInput.LoopPointCounts.Length,
+                    secondInput.FaceLoopCounts,
+                    secondInput.FaceCount,
+                    secondInput.ShellFaceCounts,
+                    secondInput.ShellCount,
+                    System.Math.Min(options.Tolerance, 1e-3 * band * band * band),
+                    fuzzyTolerance,
+                    options.RunParallel ? 1 : 0,
+                    out resultHandle);
+
+                if (status == 40)
+                {
+                    return new List<OcctCell>();
+                }
+
+                if (status != 0 || !DecodeResult(resultHandle, scratch))
+                {
+                    return null;
+                }
+
+                return scratch.Cells.ToList();
+            }
+            catch (DllNotFoundException)
+            {
+                return null;
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return null;
+            }
+            finally
+            {
+                if (resultHandle != IntPtr.Zero)
+                {
+                    try
+                    {
+                        OcctNativeMethods.sam_occt_free_result(resultHandle);
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                scratch.Dispose();
+            }
+        }
+
+        /// <summary>The isolated direct MakerVolume build used as the sew guard's alternative (see <see cref="TryDirectBuild"/>).</summary>
+        internal delegate int DirectBuild(OcctCellComplexResult candidate, out bool decoded);
+
+        /// <summary>
+        /// Adopts a successful sew-then-MakerVolume candidate. With <see cref="OcctBuildOptions.ValidateSewCoverage"/>
+        /// it is first checked against a direct MakerVolume build made in isolation:
+        /// <list type="bullet">
+        /// <item>A sew build with a non-finite or non-positive signed cell volume, or with cells that are not shown
+        /// disjoint (<see cref="OcctUnderSplitGuard.CheckOverlap"/>, always run), is invalid. The direct build
+        /// replaces it only if it passes its own cell and coverage checks
+        /// (<see cref="OcctUnderSplitGuard.EvaluateReplacement"/>); otherwise the build fails closed with an Error and
+        /// no cells.</item>
+        /// <item>A valid sew build whose coverage shows faces cutting through a cell or unused, or whose total volume
+        /// disagrees with the direct build, is suspect. The direct build replaces it only when
+        /// <see cref="OcctUnderSplitGuard.Evaluate"/> proves it a valid, strictly better refinement. When the sew
+        /// build is both suspect and in volume conflict (not a pure under-split), a direct build that passes
+        /// <see cref="OcctUnderSplitGuard.EvaluateReplacement"/> on its own may also replace it. Otherwise the valid sew
+        /// build is kept with a Warning.</item>
+        /// </list>
+        /// The direct build is made on every validated call, so a volume disagreement is found even when the sew
+        /// coverage looks clean (an inverted or duplicated envelope cell covers every face).
+        /// Returns false only when the build failed closed.
+        /// </summary>
+        internal static bool AdoptSewCandidate(List<Face3D> face3Ds, OcctBuildOptions options, OcctCellComplexResult sewCandidate, DirectBuild directBuild, OcctCellComplexResult result)
         {
             const string sewSuccess = "Built the cell complex via native sew-and-heal before MakerVolume (SewBeforeBuild).";
             double minArea = global::SAM.Core.Tolerance.MacroDistance;
@@ -445,97 +602,245 @@ namespace SAM.Geometry.OCCT.Native
                 result.AdoptFrom(sewCandidate);
                 sewCandidate.Dispose();
                 result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
-                return;
-            }
-
-            FaceCoverageReport sewCoverage = null;
-            try
-            {
-                sewCoverage = Query.FaceCoverage(face3Ds, sewCandidate.Cells.Select(x => x?.Shell), minArea, options.Tolerance, options.FuzzyTolerance);
-            }
-            catch (Exception exception)
-            {
-                result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_COVERAGE_UNAVAILABLE", string.Format("Input-face coverage of the sew build could not be measured ({0}); the sew build was kept unchecked.", exception.Message));
-            }
-
-            if (!OcctUnderSplitGuard.IsSuspect(sewCoverage))
-            {
-                result.AdoptFrom(sewCandidate);
-                sewCandidate.Dispose();
-                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
-                return;
-            }
-
-            if (sewCoverage.InteriorArea > 0)
-            {
-                List<FaceCoverageEntry> suspects = sewCoverage.Entries.Where(x => x.InteriorArea > 0).OrderByDescending(x => x.InteriorArea).ToList();
-                result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_SEW_UNDER_SPLIT_SUSPECTED", string.Format(
-                    "The sew build left {0} input face(s) ({1:0.###} area) cutting through a cell instead of bounding it - a likely under-split (merged spaces). Faces: {2}{3}. Coverage: {4}.",
-                    suspects.Count, sewCoverage.InteriorArea, string.Join("; ", suspects.Take(10).Select(x => x.ToString())), suspects.Count > 10 ? "; ..." : string.Empty, sewCoverage.Summary()));
-            }
-
-            // RetainTopology needs the sew path's live handle (the direct build frees its handle), so the
-            // alternative cannot be adopted there: keep the sew build, flagged.
-            if (options.RetainTopology)
-            {
-                result.AdoptFrom(sewCandidate);
-                sewCandidate.Dispose();
-                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
-                if (sewCoverage.InteriorArea > 0)
-                {
-                    result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_BUILD_UNRELIABLE", "The sew build is suspected of under-splitting, but RetainTopology requires the sew path, so no direct alternative was tried. Cell count may be too low.");
-                }
-
-                return;
+                return true;
             }
 
             OcctCellComplexResult directCandidate = new OcctCellComplexResult();
             try
             {
-                int status = TryDirectBuild(input, options, directCandidate, out bool decoded);
-                OcctUnderSplitGuard.Evaluation evaluation = status == 0 && decoded
-                    ? OcctUnderSplitGuard.Evaluate(face3Ds, sewCandidate.Cells, directCandidate.Cells, options, minArea, sewCoverage)
-                    : new OcctUnderSplitGuard.Evaluation(false, new List<string> { string.Format("direct build returned status {0} ({1})", status, OcctOpenShellAnalysis.DescribeBuildStatus(status)) }, sewCoverage, null);
+                FaceCoverageReport sewCoverage = null;
+                try
+                {
+                    sewCoverage = Query.FaceCoverage(face3Ds, sewCandidate.Cells.Select(x => x?.Shell), minArea, options.Tolerance, options.FuzzyTolerance);
+                }
+                catch (Exception exception)
+                {
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_COVERAGE_UNAVAILABLE", string.Format("Input-face coverage of the sew build could not be measured ({0}); only its cell volumes and overlaps were checked.", exception.Message));
+                }
+
+                // Intrinsic invalidity first: it needs no alternative and is never hidden by clean coverage.
+                List<string> invalidity = OcctUnderSplitGuard.CheckSignedVolumes(sewCandidate.Cells, "sew cell");
+
+                // The direct build is the volume reference and supplies probe points for the overlap check. It is not
+                // trusted because it is different: it must pass its own checks before it can be adopted.
+                List<string> directFailures = new List<string>();
+                try
+                {
+                    int status = directBuild(directCandidate, out bool decoded);
+                    if (status != 0 || !decoded)
+                    {
+                        directFailures.Add(string.Format("direct build returned status {0} ({1})", status, OcctOpenShellAnalysis.DescribeBuildStatus(status)));
+                    }
+                    else if (directCandidate.Cells.Count == 0)
+                    {
+                        directFailures.Add("direct build produced no cells");
+                    }
+                }
+                catch (DllNotFoundException exception)
+                {
+                    directFailures.Add(string.Format("direct build unavailable ({0})", exception.Message));
+                }
+                catch (EntryPointNotFoundException exception)
+                {
+                    directFailures.Add(string.Format("direct build unavailable ({0})", exception.Message));
+                }
+
+                IReadOnlyList<OcctCell> directCells = directFailures.Count == 0 ? directCandidate.Cells : null;
+                if (directCells != null)
+                {
+                    directFailures.AddRange(OcctUnderSplitGuard.CheckSignedVolumes(directCells, "direct cell"));
+                }
+
+                string volumeConflict = null;
+                if (invalidity.Count == 0 && directFailures.Count == 0)
+                {
+                    double inputArea = face3Ds.Sum(x => { double area = x?.GetArea() ?? 0; return double.IsNaN(area) ? 0 : area; });
+                    volumeConflict = OcctUnderSplitGuard.CheckVolumeAgreement(sewCandidate.Cells, directCells, inputArea, options);
+                }
+
+                bool suspect = OcctUnderSplitGuard.IsSuspect(sewCoverage);
+
+                // Disjointness of the sew cells, always: clean coverage and an agreeing total volume prove nothing
+                // (both builds can hold the same duplicated cells). A pair that cannot be shown disjoint makes the sew
+                // build invalid.
+                if (invalidity.Count == 0)
+                {
+                    IEnumerable<Point3D> probes = directCells == null ? null : OcctUnderSplitGuard.InternalPoints(directCells, options);
+                    invalidity.AddRange(OcctUnderSplitGuard.CheckOverlap(sewCandidate.Cells, probes, options, "sew cells"));
+                }
+
+                if (invalidity.Count != 0)
+                {
+                    return ReplaceInvalidSew(face3Ds, options, sewCandidate, directCandidate, directCells, invalidity, directFailures, minArea, result);
+                }
+
+                if (!suspect && volumeConflict == null)
+                {
+                    result.AdoptFrom(sewCandidate);
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
+                    return true;
+                }
+
+                bool interior = sewCoverage != null && sewCoverage.InteriorArea > 0;
+                if (interior)
+                {
+                    List<FaceCoverageEntry> suspects = sewCoverage.Entries.Where(x => x.InteriorArea > 0).OrderByDescending(x => x.InteriorArea).ToList();
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_SEW_UNDER_SPLIT_SUSPECTED", string.Format(
+                        "The sew build left {0} input face(s) ({1:0.###} area) cutting through a cell instead of bounding it - a likely under-split (merged spaces). Faces: {2}{3}. Coverage: {4}.",
+                        suspects.Count, sewCoverage.InteriorArea, string.Join("; ", suspects.Take(10).Select(x => x.ToString())), suspects.Count > 10 ? "; ..." : string.Empty, sewCoverage.Summary()));
+                }
+
+                // RetainTopology needs the sew path's live handle (the direct build frees its handle), so the
+                // alternative cannot be adopted there: keep the valid sew build, flagged.
+                if (options.RetainTopology)
+                {
+                    result.AdoptFrom(sewCandidate);
+                    result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
+                    if (interior)
+                    {
+                        result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_BUILD_UNRELIABLE", "The sew build is suspected of under-splitting, but RetainTopology requires the sew path, so no direct alternative was tried. Cell count may be too low.");
+                    }
+
+                    AddVolumeConflict(volumeConflict, "RetainTopology requires the sew path", result);
+                    return true;
+                }
+
+                OcctUnderSplitGuard.Evaluation evaluation;
+                if (directFailures.Count != 0)
+                {
+                    evaluation = new OcctUnderSplitGuard.Evaluation(false, directFailures, sewCoverage, null);
+                }
+                else
+                {
+                    try
+                    {
+                        evaluation = OcctUnderSplitGuard.Evaluate(face3Ds, sewCandidate.Cells, directCells, options, minArea, sewCoverage);
+                    }
+                    catch (Exception exception)
+                    {
+                        evaluation = new OcctUnderSplitGuard.Evaluation(false, new List<string> { string.Format("evaluation failed ({0})", exception.Message) }, sewCoverage, null);
+                    }
+                }
 
                 if (evaluation.Adopt)
                 {
                     result.AdoptFrom(directCandidate);
                     result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_BUILD_FALLBACK_DIRECT", string.Format(
                         "Adopted the direct MakerVolume build instead of the sew build: {0} cell(s) instead of {1}, and it passed the closure, overlap, refinement and coverage checks. Sew coverage: {2}. Direct coverage: {3}.",
-                        directCandidate.Cells.Count, sewCandidate.Cells.Count, sewCoverage.Summary(), evaluation.DirectCoverage?.Summary()));
-                    return;
+                        directCandidate.Cells.Count, sewCandidate.Cells.Count, evaluation.SewCoverage?.Summary(), evaluation.DirectCoverage?.Summary()));
+                    return true;
+                }
+
+                // Incomplete coverage AND a total-volume conflict: the sew build lost or gained volume, so it is not a
+                // pure under-split (merging rooms keeps the volume) and refining it proves nothing. The direct build may
+                // still replace it, but only on its own merits, exactly as for an invalid sew build.
+                if (suspect && volumeConflict != null && directFailures.Count == 0)
+                {
+                    OcctUnderSplitGuard.Evaluation replacement;
+                    try
+                    {
+                        replacement = OcctUnderSplitGuard.EvaluateReplacement(face3Ds, directCells, options, minArea);
+                    }
+                    catch (Exception exception)
+                    {
+                        replacement = new OcctUnderSplitGuard.Evaluation(false, new List<string> { string.Format("evaluation failed ({0})", exception.Message) }, null, null);
+                    }
+
+                    if (replacement.Adopt)
+                    {
+                        result.AdoptFrom(directCandidate);
+                        result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_BUILD_FALLBACK_DIRECT", string.Format(
+                            "Adopted the direct MakerVolume build instead of the sew build: the sew build's coverage is incomplete and its volume disagrees ({0}), so it is not an under-split to refine. The direct build ({1} cell(s)) passed the closure, positive-volume, sliver, overlap and complete-coverage checks on its own. Sew coverage: {2}. Direct coverage: {3}.",
+                            volumeConflict, directCandidate.Cells.Count, sewCoverage?.Summary(), replacement.DirectCoverage?.Summary()));
+                        return true;
+                    }
+
+                    evaluation.Failures.AddRange(replacement.Failures.Select(x => "as a replacement: " + x));
                 }
 
                 result.AdoptFrom(sewCandidate);
                 result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
-                if (sewCoverage.InteriorArea > 0)
+                if (interior)
                 {
                     result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_BUILD_UNRELIABLE", string.Format(
                         "The sew build is suspected of under-splitting and the direct alternative was rejected ({0}). The sew build was kept; check the space count against the expected rooms.",
                         string.Join("; ", evaluation.Failures.Take(8))));
                 }
-                else
+                else if (suspect)
                 {
                     result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_UNUSED_FACES", string.Format(
                         "{0:0.###} area of input faces bounds no cell and lies outside every cell; a direct build did not use them either ({1}). Coverage: {2}.",
                         sewCoverage.UnusedArea, string.Join("; ", evaluation.Failures.Take(4)), sewCoverage.Summary()));
                 }
-            }
-            catch (DllNotFoundException)
-            {
-                result.AdoptFrom(sewCandidate);
-                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
-            }
-            catch (EntryPointNotFoundException)
-            {
-                result.AdoptFrom(sewCandidate);
-                result.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_SEW_SUCCESS", sewSuccess);
+
+                AddVolumeConflict(volumeConflict, string.Format("the direct alternative was rejected: {0}", string.Join("; ", evaluation.Failures.Take(4))), result);
+                return true;
             }
             finally
             {
                 sewCandidate.Dispose();
                 directCandidate.Dispose();
             }
+        }
+
+        /// <summary>
+        /// The sew build is demonstrably invalid. Adopts the direct build when it passes its own cell and coverage
+        /// checks; otherwise fails closed: an Error, no cells and false, so no downstream cluster is built from it.
+        /// The caller disposes both candidates, including the sew build's retained topology.
+        /// </summary>
+        private static bool ReplaceInvalidSew(List<Face3D> face3Ds, OcctBuildOptions options, OcctCellComplexResult sewCandidate, OcctCellComplexResult directCandidate, IReadOnlyList<OcctCell> directCells, List<string> invalidity, List<string> directFailures, double minArea, OcctCellComplexResult result)
+        {
+            result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_SEW_BUILD_INVALID", string.Format(
+                "The sew build failed validation and cannot be used: {0}{1}. Sew: {2} cell(s), total volume {3:0.###} m3.",
+                string.Join("; ", invalidity.Take(8)), invalidity.Count > 8 ? "; ..." : string.Empty, sewCandidate.Cells.Count, OcctUnderSplitGuard.TotalVolume(sewCandidate.Cells)));
+
+            List<string> failures = new List<string>(directFailures);
+            OcctUnderSplitGuard.Evaluation evaluation = null;
+            if (options.RetainTopology)
+            {
+                // The direct build frees its native handle, so it cannot honour the RetainTopology contract.
+                failures.Insert(0, "RetainTopology requires the sew build's topology, so no direct alternative can be adopted");
+            }
+            else if (failures.Count == 0)
+            {
+                try
+                {
+                    evaluation = OcctUnderSplitGuard.EvaluateReplacement(face3Ds, directCells, options, minArea);
+                    failures.AddRange(evaluation.Failures);
+                }
+                catch (Exception exception)
+                {
+                    failures.Add(string.Format("evaluation failed ({0})", exception.Message));
+                }
+            }
+
+            if (failures.Count == 0 && evaluation != null && evaluation.Adopt)
+            {
+                result.AdoptFrom(directCandidate);
+                result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_BUILD_FALLBACK_DIRECT", string.Format(
+                    "Adopted the direct MakerVolume build instead of the invalid sew build: {0} cell(s), total volume {1:0.###} m3. It passed the closure, positive-volume, sliver, overlap and complete-coverage checks; refinement of the sew build and coverage gain were not required because the sew build is not a valid reference. Direct coverage: {2}.",
+                    directCandidate.Cells.Count, OcctUnderSplitGuard.TotalVolume(directCandidate.Cells), evaluation.DirectCoverage?.Summary()));
+                return true;
+            }
+
+            result.NativeAvailable = sewCandidate.NativeAvailable;
+            result.NativeVersion = sewCandidate.NativeVersion;
+            result.AddDiagnostic(OcctDiagnosticSeverity.Error, "SAM_OCCT_BUILD_REJECTED", string.Format(
+                "The sew build is invalid and no acceptable replacement exists ({0}{1}). No cells were returned.",
+                string.Join("; ", failures.Take(8)), failures.Count > 8 ? "; ..." : string.Empty));
+            return false;
+        }
+
+        private static void AddVolumeConflict(string volumeConflict, string reason, OcctCellComplexResult result)
+        {
+            if (volumeConflict == null)
+            {
+                return;
+            }
+
+            result.AddDiagnostic(OcctDiagnosticSeverity.Warning, "SAM_OCCT_SEW_VOLUME_CONFLICT", string.Format(
+                "The sew build was kept although its volume disagrees with a direct build ({0}); {1}. Its cells are valid, so the disagreement does not show which build is right: check the spaces.",
+                volumeConflict, reason));
         }
 
         internal static bool CanAttemptSew(List<Face3D> face3Ds, OcctBuildOptions options, OcctCellComplexResult result = null)

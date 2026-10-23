@@ -53,6 +53,9 @@
     <!-- Two-storey house mid-surface panels (23 panels, metres) plus 11 seed spaces (10 labelled rooms and
          the attic) - the sew-before-build under-split regression. Exercised by HouseUnderSplitIntegrationTests. -->
     <None Update="Fixtures\House-Regression\*.sam" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Revit-home Solve3D outputs (current 131 panels, July 105 panels) as fixed reconstruction inputs: their sew build
+         is translation-chaotic (inverted and duplicated envelope cells). Exercised by SewGuardInvalidCellIntegrationTests. -->
+    <None Update="Fixtures\Revit-Reconstruction\*.sam" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- P1 (docs/CELLCOMPLEX_FIRST_HANDOVER.md): disables xUnit's default cross-class test-collection
