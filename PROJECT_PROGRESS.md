@@ -1,5 +1,79 @@
 # Project Progress - SAM_OCCT (2026-Q4)
 
+## Q4 towers residual closure, CreateShells sew guard (+ nine-space / North0) closeout - 2026-10-23
+
+- **PR**: SAM-BIM/SAM_OCCT#82 -> `sow/2026-Q4`, **merged 2026-10-23**, merge commit `e5efa67946e2384b5da8fca1b967ce48b6a7e42e`.
+  - Parents: base `819962df361fb7037a5ef762330ed196357f938c` and the final head.
+  - Pinned to final PR head `f9f9547118392660f6cee158a301ff88991426d3` (`--match-head-commit`, merge commit).
+  - The branch was not based on the Q4 tip: merge-base `3523ed2`, 15 ahead / 4 behind. The 4 Q4-only commits were
+    #81 records only. Clean merge; not rebased.
+- **Status**: complete.
+  - Merge authorised by the owner in chat after independent reviews (towers managed-path revision: accept;
+    CreateShells: wording revision, then accept).
+  - `sow/2026-Q4` has no branch protection or required reviews; none bypassed. The PR had no submitted reviews and no
+    review or bot comments.
+- **Work** (three streams; first publication of the two inherited ones):
+  - **Towers rule E** (`ResidualContactClosure`, `0dac3f4`/`119eae0`): recovers the middle towers room (119.364 m³)
+    on the one-step, untilted, uniform Extend3D path, and in the forced-managed adopted complex (113.717 / 119.364 m³
+    at bucketBetweenLevels 0 / 0.21). Fails closed on every ambiguous case; directional, two-step and tilted paths
+    unchanged. Managed-path tests (`9441a07`, byte-identical to the reviewed diff `4d7ad14a...`). Record
+    `documentation/Towers-Residual-Closure-Q4.md`.
+  - **`SAMOCCT.CreateShells` sew guard** (`804ead6`, version 0.3.1 -> 0.4.0): `ValidateSewCoverage = true` when
+    `sewBeforeBuild_` is true. Before, on the forced-managed towers outputs, the component lost the west room (20 of
+    24 shells) and five cells at 0.21 (22 of 27), reported as success; now it matches the guarded reference. GUID and
+    parameters unchanged; the tooltip states every guard outcome. Record `documentation/CreateShells-Sew-Guard-Q4.md`.
+  - **Inherited, first published here:** nine-space wall-capture acceptance test (`ef9bf81`..`4d77ef4`, record
+    `Nine-Space-Wall-Capture-Q4.md`); North0 consolidation follow (`ff71a70`..`2a09f69`, production change in
+    `Panel3DSnapSolver.ConsolidateWallStacks` and `SnappedPanel.MoveBoundaryRun`, record
+    `North0-Consolidation-Follow-Q4.md`).
+- **Files changed** (24): Solver `Panel3DSnapSolver.cs`, `ResidualContactClosure.cs` (new), `SnapStage.cs`,
+  `SnappedPanel.cs`, `ConditionStage.cs`; Grasshopper `SAMOCCTCreateShells.cs`; unit tests
+  `ResidualContactClosureTests.cs`, `ConsolidateWallStacksTests.cs` (new); integration tests (towers residual, nine-space,
+  North0 new; PR61 towers, bucket-lever, workflow-parity pins reconciled by measurement); Grasshopper tests
+  `CreateShellsSewGuardComponentTests.cs`, `NativeRuntime.cs` (new), `GrasshopperTestAssembly.cs`,
+  `DiagnosticsContractTests.cs`, csproj; `TESTING.md`; four records. No SAM, SAM_Solver, native, fixture, golden,
+  tolerance or CI change.
+- **SHAs**: rule-E production content tested `119eae0fd695a84e310b43fd66fbdde2d6a098b4`. Final tested content
+  `804ead6`, i.e. `229f971` + both reviewed diffs. `f9f9547` is records-only.
+- **Hosted evidence (managed code only)**:
+  - Final head `f9f9547`, checked-out merge ref `76d6e53`: Build (Windows) run `40005815034` succeeded, with unit
+    1032 / 0 / 0 and integration 31 passed / 465 skipped (no native on the runner); the Grasshopper test project
+    compiled but is not run by CI. SPDX run `40005814882` succeeded.
+  - Post-merge Build (Windows) run `40006919879` on `e5efa67`: still in progress when this closeout was written;
+    its result is not recorded here.
+- **Local evidence (machine-local; frozen native SAM.Occt.Native 438089F8..., TKBO 1FA732FE..., ABI 4)**:
+  - unit 1032 / 0;
+  - full native 496 = 469 passed / 25 failed / 2 not executed, with non-passing names and messages identical to
+    the reviewed managed-path run;
+  - `SAM.OCCT.GrasshopperTests` 33 / 33, and 30 / 3 with the component change reverted (the intended failures);
+  - nine-space owner exports identical to `791bcaa`;
+  - builds at baseline warning counts.
+  - Evidence: `SAM-BIM/.evidence-towers-managed-tests-20261023/`, `SAM-BIM/.createshells-sew-guard-20261023/`, and
+    the review folders named in the records.
+- **Remaining failures and limits**:
+  - 25 native failures (19 historical + 6 rigid-motion). Among them the two already-failing towers golden masters
+    (`Solve3D_ManagedPath`, `..._021`) changed message: they measure an unguarded sew recount (now 23 vs 21
+    expected, 27 vs 25) and were left failing, not re-pinned; their disposition is open. 2 not-executed
+    (unchanged).
+  - `Create.Spaces` still refuses the default forced-managed towers result (13 naked edges).
+  - Two neighbouring managed cells per chain are re-faced (boundaries preserved).
+  - Only towers fires rule E in the suite; two-step and tilted chains keep the leak by design.
+  - Sew guard: explicit sewing is guarded in both Grasshopper components. A valid but suspect sew build may be kept
+    with a Warning and `Successful` true. Still unchecked: the automatic sew retry with sewing off, the golden
+    recount, and API callers without `ValidateSewCoverage`.
+  - The Grasshopper test project is not in CI. The guard's no-valid-replacement branch has no component fixture.
+- **Cleanup**: remote `fix/towers-residual-closure-q4` deleted after confirming head `f9f9547`, fully merged, no
+  open PR, unprotected. Kept, because each is checked out in a worktree (worktrees are never removed automatically),
+  though fully merged:
+  - local `fix/towers-residual-closure-q4` (`SAM_OCCT-wt-towers-residual-closure`);
+  - local `fix/north0-consolidation-follow-q4` (`SAM_OCCT-wt-north0-consolidation-follow`);
+  - local `test/nine-space-wall-capture-q4` (`SAM_OCCT-wt-nine-space-wall-capture`).
+
+  The last two were never pushed. Scratch folder `SAM-BIM/SAM_OCCT-base-229f971-ghcheck` (an archive copy) can be
+  deleted.
+- **Next step**: owner disposition of the two towers golden masters; optionally a separate task for the remaining
+  unguarded sew paths. Removing the three merged worktrees and their local branches is a separate cleanup decision.
+
 ## Q4 sew guard against invalid cells (Scope 1) closeout - 2026-10-23
 
 - **PR**: SAM-BIM/SAM_OCCT#81 -> `sow/2026-Q4`, **merged 2026-10-23**, merge commit `a6ed4a9569280dd4d0e0162090c06c859a5bcaca` (parents `dc871f7e6ee7d0e53adb826a2b597645e2eab4cb` and the final head), pinned to final PR head `6c259cd788ece4fc476125ad586bb5e38ebaf5ba` (`--match-head-commit`, merge commit). The merge tree equals the head tree `de4ca310...`. Base before merge `dc871f7`.
