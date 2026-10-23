@@ -7,7 +7,7 @@ that are not on `origin/sow/2026-Q4` (see "Dependency").
 Commits:
 - `0dac3f4`: correction, tests, towers pin reconciliation;
 - `119eae0`: the workflow-parity pin found by the full native run;
-- then this record.
+- then this record (`4b16897` and a wording follow-up).
 
 **Tested content: `119eae0fd695a84e310b43fd66fbdde2d6a098b4`.** `PROJECT_PROGRESS.md` is not touched (post-merge
 closeout only).
@@ -180,17 +180,17 @@ boundary**. Every non-middle closure leaves the cell set identical (`sweep-diff.
 
 ## Dependency (disclosed)
 
-`origin/sow/2026-Q4` is `819962d`. This branch adds eleven commits on top of it.
+`origin/sow/2026-Q4` is `819962d`. This branch adds twelve commits on top of it.
 - **Nine-space wall-capture acceptance test** (record `documentation/Nine-Space-Wall-Capture-Q4.md`): `ef9bf81`,
   `8210c85`, `30e0e27`, `4d77ef4`.
 - **North0 consolidation follow** (record `documentation/North0-Consolidation-Follow-Q4.md`): `ff71a70`, `4b0e53d`,
   `791bcaa`, `2a09f69`.
-- **This correction:** `0dac3f4`, `119eae0`, and this record.
+- **This correction:** `0dac3f4`, `119eae0`, and this record (two commits).
 
 A merge into `sow/2026-Q4` delivers all three. The North0 change provides `SnappedPanel.MoveBoundaryRun`, which this
 correction uses. `git merge-tree` reports a clean merge with `origin/sow/2026-Q4`. Neither inherited branch had been
-pushed or had its own PR. Their review status is in their records: North0 awaited independent review; the
-nine-space test is the accepted contract.
+pushed or had its own PR; this PR is their first publication. Their review status is in their own records (the North0
+record ends at "Independent review of 791bcaa").
 
 ## Risks and limits
 
