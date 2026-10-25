@@ -205,14 +205,25 @@ namespace SAM.Geometry.OCCT.Solver
 
             // The post-snap panels still carry their source identity (SourceIndices) and MaxExtension - the merge
             // below is the only step that collapses several into one face, so attribution is measured against them.
-            List<SnappedPanel> postSnap = panels.Where(x => x?.Face3D != null && x.Face3D.IsValid() && x.Plane != null).ToList();
+            // A face with no area (collapsed to a line by an upstream snap, yet still IsValid) counts as degenerate: it has
+            // no internal point, and one such face makes the coplanar union below return nothing, which would leave
+            // every panel of the model unmerged.
+            bool Usable(SnappedPanel x) => x?.Face3D != null && x.Face3D.IsValid() && x.Plane != null && x.Face3D.GetArea() > tol.Distance;
+            List<SnappedPanel> postSnap = panels.Where(Usable).ToList();
             List<Face3D> face3Ds = postSnap.Select(x => x.Face3D).ToList();
 
-            // Drops: a panel that turned invalid/degenerate during snap (no valid face/plane) is dropped from the
-            // clean output - recorded so a vanished panel is never silent (§4.4 DroppedInvalid).
+            // Drops: a panel that turned invalid/degenerate during snap (no valid face/plane, or no area) is dropped from
+            // the clean output - recorded so a vanished panel is never silent (§4.4 DroppedInvalid).
+            int zeroArea = panels.Count(x => x?.Face3D != null && x.Face3D.IsValid() && x.Plane != null && !Usable(x));
+            if (zeroArea != 0)
+            {
+                diagnostics?.Add(SolverStage.Snap, DiagnosticCode.SliverFace, OcctDiagnosticSeverity.Warning,
+                    string.Format("Dropped {0} panel face(s) with no area (collapsed to a line) before the coplanar merge.", zeroArea));
+            }
+
             if (cleanRecords != null)
             {
-                foreach (SnappedPanel dropped in panels.Where(x => x != null && (x.Face3D == null || !x.Face3D.IsValid() || x.Plane == null)))
+                foreach (SnappedPanel dropped in panels.Where(x => x != null && !Usable(x)))
                 {
                     Panel3DSnapSolver.RecordClean(cleanRecords, dropped, null, CleanRecordKind.DroppedInvalid, 0.0);
                 }

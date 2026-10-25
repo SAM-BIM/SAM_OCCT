@@ -974,6 +974,7 @@ namespace SAM.Analytical.OCCT
             int centerLocationCount = 0;
             int boundingBoxLocationCount = 0;
             int fallbackLocationCount = 0;
+            List<int> faceOffsetLocations = new List<int>();
             Stopwatch fallbackStopwatch = new Stopwatch();
 
             for (int i = 0; i < cellComplexResult.Cells.Count; i++)
@@ -1016,6 +1017,18 @@ namespace SAM.Analytical.OCCT
                     if (location != null)
                     {
                         fallbackLocationCount++;
+                    }
+                }
+
+                // A strongly non-convex cell (an L-shaped room) can defeat all three: its centres fall outside it and
+                // the shell's internal-point search finds nothing. Without a location the whole direct rebuild would be
+                // abandoned for one cell, so try just inside each of its faces.
+                if (location == null)
+                {
+                    location = FaceOffsetLocation(cell, shell, options);
+                    if (location != null)
+                    {
+                        faceOffsetLocations.Add(i);
                     }
                 }
 
@@ -1078,8 +1091,50 @@ namespace SAM.Analytical.OCCT
             }
 
             cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_SPACE_LOCATIONS", string.Format("Used {0} OCCT cell center location(s), {1} decoded shell bounding-box center location(s), and {2} SAM fallback internal point location(s). Fallback location search took {3:0.000}s.", centerLocationCount, boundingBoxLocationCount, fallbackLocationCount, fallbackStopwatch.Elapsed.TotalSeconds));
+            if (faceOffsetLocations.Count != 0)
+            {
+                cellComplexResult.AddDiagnostic(OcctDiagnosticSeverity.Info, "SAM_OCCT_ANALYTICAL_FACE_OFFSET_LOCATIONS", string.Format("{0} non-convex cell(s) ({1}) had no centre or internal point inside; each space location was taken just inside one of its faces.", faceOffsetLocations.Count, string.Join(", ", faceOffsetLocations)));
+            }
 
             return result;
+        }
+
+        /// <summary>
+        /// A point inside <paramref name="shell"/> found just off one of its faces: each face's internal point moved a
+        /// short distance along its normal, both ways (largest faces first). Null when none is inside.
+        /// </summary>
+        private static Point3D FaceOffsetLocation(OcctCell cell, Shell shell, OcctBuildOptions options)
+        {
+            return FaceOffsetLocation(cell?.Faces?.Select(x => x?.Face3D) ?? shell?.Face3Ds, shell, options);
+        }
+
+        internal static Point3D FaceOffsetLocation(IEnumerable<Face3D> face3Ds, Shell shell, OcctBuildOptions options)
+        {
+            if (face3Ds == null || shell == null)
+            {
+                return null;
+            }
+
+            foreach (Face3D face3D in face3Ds.Where(x => x != null).OrderByDescending(x => x.GetArea()))
+            {
+                Point3D point3D = face3D.InternalPoint3D(options.Tolerance);
+                Vector3D normal = face3D.GetPlane()?.Normal?.Unit;
+                if (point3D == null || normal == null)
+                {
+                    continue;
+                }
+
+                foreach (double offset in new[] { 0.05, -0.05, 0.01, -0.01 })
+                {
+                    Point3D candidate = point3D.GetMoved(normal * offset) as Point3D;
+                    if (candidate != null && shell.Inside(candidate, options.FuzzyTolerance, options.Tolerance))
+                    {
+                        return candidate;
+                    }
+                }
+            }
+
+            return null;
         }
 
         private static Point3D BoundingBoxCenter(OcctCell cell)
