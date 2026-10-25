@@ -1,5 +1,14 @@
 # Project Progress - SAM_OCCT (2026-Q4)
 
+## Q4 closeout: SAM_OCCT#83 (chain degenerate robustness) - 2026-10-25
+
+- **PR/status:** SAM-BIM/SAM_OCCT#83 merged into `sow/2026-Q4` as `9794a52fbf7c306ed20b9443a013adc6a7ea7856` (parents base `ac9bbc98`, approved head `49e6cf9af03a049d6528b16c1bfe82a0e3989b2b`) with `--merge --match-head-commit`, no auto-merge or bypass, after owner authorisation in chat and the SAM merges #220/#222/#221 (SAM Q4 tip `945eea51`).
+- **Completed:** `AdjacencyCluster.cs` and `SnapStage.cs` degenerate-geometry robustness (mean-width test, length vs distance tolerance), with `FaceOffsetLocationTests.cs`, `SnapStageTests.cs` and record `documentation/OCCT-Chain-Degenerate-Robustness-Q4.md`. Merge diff against base: 5 files, +321/-4.
+- **Validation:** final-head Build run `40223907896` was re-run (attempt 2) after the SAM merges: success; SAM and SAM_Solver cloned at `sow/2026-Q4` (SAM tip `945eea51`, SAM_Solver tip `fd63b467`); unit 1038/1038, integration 31 passed/465 skipped (native tests skip on hosted CI - this is not a native full-suite pass). Post-merge Q4 Build `40226066541` on `9794a52f` success. Saved native run (reviewer-compared): 469 passed/25 failed/2 not executed, all 27 non-passing names/outcomes/messages match the baseline. Independent reviewer: OCCT unit 1038/1038. No engine, simulation, deployment, native rebuild or fixture/golden/tolerance change.
+- **Unresolved / limits:** the record's older Fix paragraph still describes the superseded area guard (later Review correction section is current); not changed here. Native baseline failures and the Softhouse limits (ownership miss, two missing relations, six not-enclosed cells) remain; no full Softhouse/simulation acceptance is claimed.
+- **Cleanup:** remote `fix/occt-chain-degenerate-robustness-q4` deleted with a lease on `49e6cf9a` after the merged/unprotected/no-open-PR checks; local branch kept because worktree `SAM_OCCT-wt-clean3d-degenerate` uses it.
+- **Next step:** owner decision on the next Softhouse step (open-plan virtual boundaries).
+
 ## Q4 towers residual closure, CreateShells sew guard (+ nine-space / North0) closeout - 2026-10-23
 
 - **PR**: SAM-BIM/SAM_OCCT#82 -> `sow/2026-Q4`, **merged 2026-10-23**, merge commit `e5efa67946e2384b5da8fca1b967ce48b6a7e42e`.
