@@ -28,8 +28,32 @@ namespace SAM.OCCT.UnitTests
             return new SnappedPanel(sourceIndex, face3D, weight: 1, bucketSize: 0.3, maxExtension: maxExtension);
         }
 
-        [Fact]
-        public void Clean_ZeroAreaFaceFirst_IsDroppedAndTheOtherWallsStillMerge()
+        [Theory]
+        [InlineData(0.02, 0.001)]
+        [InlineData(0.0005, 1e-6)]
+        public void Clean_LoneSmallFace_IsKeptAndNotReported(double size, double tolerance)
+        {
+            // Arrange: a valid small square (20 mm at 1 mm, 0.5 mm at 1e-6 m). Its area (4e-4 and 2.5e-7 m2) is below the
+            // distance tolerance read as a number, yet it is many tolerances wide and has an internal point.
+            Face3D face3D = TestGeometry.CreatePlanarFace(new Point3D(0, 0, 0), new Point3D(size, 0, 0), new Point3D(size, 0, size), new Point3D(0, 0, size));
+            List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(0, face3D, weight: 1, bucketSize: 0.3, maxExtension: 0.4) };
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+            List<CleanRecord> records = new List<CleanRecord>();
+
+            // Act
+            SnapStage.Result result = SnapStage.Clean(panels, new ToleranceBudget { Distance = tolerance }, 0, 0, diagnostics, null, 0.0, records);
+
+            // Assert
+            Face3D kept = Assert.Single(result.CleanFace3Ds);
+            Assert.Equal(size * size, kept.GetArea(), 12);
+            Assert.DoesNotContain(records, x => x.Kind == CleanRecordKind.DroppedInvalid);
+            Assert.DoesNotContain(diagnostics.All, x => x.Code == DiagnosticCode.SliverFace);
+        }
+
+        [Theory]
+        [InlineData(1e-6)]
+        [InlineData(0.001)]
+        public void Clean_ZeroAreaFaceFirst_IsDroppedAndTheOtherWallsStillMerge(double tolerance)
         {
             // Arrange: a wall face collapsed to 7e-15 m wide (valid, no internal point), exactly as junction snapping left
             // one in the Softhouse model, first in the list; then two edge-adjacent coplanar walls at y = 0. Before the
@@ -52,7 +76,7 @@ namespace SAM.OCCT.UnitTests
             List<CleanRecord> records = new List<CleanRecord>();
 
             // Act
-            SnapStage.Result result = SnapStage.Clean(panels, DefaultTolerances, 0.3, 0.3, diagnostics, null, 0.0, records);
+            SnapStage.Result result = SnapStage.Clean(panels, new ToleranceBudget { Distance = tolerance }, 0.3, 0.3, diagnostics, null, 0.0, records);
 
             // Assert
             Face3D merged = Assert.Single(result.CleanFace3Ds);
