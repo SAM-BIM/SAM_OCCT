@@ -205,14 +205,26 @@ namespace SAM.Geometry.OCCT.Solver
 
             // The post-snap panels still carry their source identity (SourceIndices) and MaxExtension - the merge
             // below is the only step that collapses several into one face, so attribution is measured against them.
-            List<SnappedPanel> postSnap = panels.Where(x => x?.Face3D != null && x.Face3D.IsValid() && x.Plane != null).ToList();
+            // A face collapsed to a line by an upstream snap (yet still IsValid) counts as degenerate: its mean width - twice
+            // its area over its perimeter, a length - is within the distance tolerance. It has no internal point, and one
+            // such face makes the coplanar union below return nothing, which would leave every panel of the model
+            // unmerged. A small but real face is many tolerances wide and is kept.
+            bool Usable(SnappedPanel x) => x?.Face3D != null && x.Face3D.IsValid() && x.Plane != null && MeanWidth(x.Face3D) > tol.Distance;
+            List<SnappedPanel> postSnap = panels.Where(Usable).ToList();
             List<Face3D> face3Ds = postSnap.Select(x => x.Face3D).ToList();
 
-            // Drops: a panel that turned invalid/degenerate during snap (no valid face/plane) is dropped from the
-            // clean output - recorded so a vanished panel is never silent (§4.4 DroppedInvalid).
+            // Drops: a panel that turned invalid/degenerate during snap (no valid face/plane, or collapsed) is dropped from
+            // the clean output - recorded so a vanished panel is never silent (§4.4 DroppedInvalid).
+            int collapsed = panels.Count(x => x?.Face3D != null && x.Face3D.IsValid() && x.Plane != null && !Usable(x));
+            if (collapsed != 0)
+            {
+                diagnostics?.Add(SolverStage.Snap, DiagnosticCode.SliverFace, OcctDiagnosticSeverity.Warning,
+                    string.Format("Dropped {0} panel face(s) collapsed to a line (mean width within the {1:G3} m distance tolerance) before the coplanar merge.", collapsed, tol.Distance));
+            }
+
             if (cleanRecords != null)
             {
-                foreach (SnappedPanel dropped in panels.Where(x => x != null && (x.Face3D == null || !x.Face3D.IsValid() || x.Plane == null)))
+                foreach (SnappedPanel dropped in panels.Where(x => x != null && !Usable(x)))
                 {
                     Panel3DSnapSolver.RecordClean(cleanRecords, dropped, null, CleanRecordKind.DroppedInvalid, 0.0);
                 }
@@ -288,6 +300,24 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Mean width of a face [m]: twice its area over the length of its boundary (outer and inner loops). Zero for a face
+        /// collapsed to a line; positive infinity when a loop has no measurable length (never treated as collapsed).
+        /// </summary>
+        private static double MeanWidth(Face3D face3D)
+        {
+            List<IClosedPlanar3D> loops = new List<IClosedPlanar3D> { face3D.GetExternalEdge3D() };
+            loops.AddRange(face3D.GetInternalEdge3Ds() ?? new List<IClosedPlanar3D>());
+
+            double perimeter = loops.Sum(x => (x as ISegmentable3D)?.GetLength() ?? double.NaN);
+            if (double.IsNaN(perimeter))
+            {
+                return double.PositiveInfinity;
+            }
+
+            return perimeter > 0 ? 2 * face3D.GetArea() / perimeter : 0;
         }
 
         /// <summary>The post-snap panels whose (coplanar) face centre lies inside <paramref name="cleanFace3D"/>.</summary>

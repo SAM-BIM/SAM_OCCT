@@ -28,6 +28,63 @@ namespace SAM.OCCT.UnitTests
             return new SnappedPanel(sourceIndex, face3D, weight: 1, bucketSize: 0.3, maxExtension: maxExtension);
         }
 
+        [Theory]
+        [InlineData(0.02, 0.001)]
+        [InlineData(0.0005, 1e-6)]
+        public void Clean_LoneSmallFace_IsKeptAndNotReported(double size, double tolerance)
+        {
+            // Arrange: a valid small square (20 mm at 1 mm, 0.5 mm at 1e-6 m). Its area (4e-4 and 2.5e-7 m2) is below the
+            // distance tolerance read as a number, yet it is many tolerances wide and has an internal point.
+            Face3D face3D = TestGeometry.CreatePlanarFace(new Point3D(0, 0, 0), new Point3D(size, 0, 0), new Point3D(size, 0, size), new Point3D(0, 0, size));
+            List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(0, face3D, weight: 1, bucketSize: 0.3, maxExtension: 0.4) };
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+            List<CleanRecord> records = new List<CleanRecord>();
+
+            // Act
+            SnapStage.Result result = SnapStage.Clean(panels, new ToleranceBudget { Distance = tolerance }, 0, 0, diagnostics, null, 0.0, records);
+
+            // Assert
+            Face3D kept = Assert.Single(result.CleanFace3Ds);
+            Assert.Equal(size * size, kept.GetArea(), 12);
+            Assert.DoesNotContain(records, x => x.Kind == CleanRecordKind.DroppedInvalid);
+            Assert.DoesNotContain(diagnostics.All, x => x.Code == DiagnosticCode.SliverFace);
+        }
+
+        [Theory]
+        [InlineData(1e-6)]
+        [InlineData(0.001)]
+        public void Clean_ZeroAreaFaceFirst_IsDroppedAndTheOtherWallsStillMerge(double tolerance)
+        {
+            // Arrange: a wall face collapsed to 7e-15 m wide (valid, no internal point), exactly as junction snapping left
+            // one in the Softhouse model, first in the list; then two edge-adjacent coplanar walls at y = 0. Before the
+            // guard the coplanar union returned nothing and the clean kept all three faces unmerged.
+            Plane plane = new Plane(new Point3D(16.51, -2.749457597732544, 8), new Vector3D(0, -1, 0));
+            List<Point3D> collapsed = new List<Point3D>
+            {
+                new Point3D(16.510114669799805, -2.749457597732544, 6.475000143051148), new Point3D(16.510114669799805, -2.749457597732544, 9.449999809265135),
+                new Point3D(16.510114669799798, -2.749457597732544, 9.449999809265135), new Point3D(16.510114669799798, -2.749457597732544, 6.475000143051148),
+            };
+            Face3D zeroArea = new Face3D(new Polygon3D(plane, collapsed.ConvertAll(x => plane.Convert(x))));
+            Assert.True(zeroArea.IsValid());
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                new SnappedPanel(0, zeroArea, weight: 1, bucketSize: 0.3, maxExtension: 0.4),
+                Wall(1, y: 0, x0: 0, x1: 2, maxExtension: 0.4),
+                Wall(2, y: 0, x0: 2, x1: 4, maxExtension: 0.4),
+            };
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+            List<CleanRecord> records = new List<CleanRecord>();
+
+            // Act
+            SnapStage.Result result = SnapStage.Clean(panels, new ToleranceBudget { Distance = tolerance }, 0.3, 0.3, diagnostics, null, 0.0, records);
+
+            // Assert
+            Face3D merged = Assert.Single(result.CleanFace3Ds);
+            Assert.Equal(12.0, merged.GetArea(), 6);
+            Assert.Contains(diagnostics.All, x => x.Code == DiagnosticCode.SliverFace && x.Severity == OcctDiagnosticSeverity.Warning);
+            Assert.Contains(records, x => x.Kind == CleanRecordKind.DroppedInvalid && x.SourceIndex == 0);
+        }
+
         [Fact]
         public void Clean_TwoOverlappingCoplanarWallsMerge_MergedFaceCarriesMaxOfSourceMaxExtends()
         {
