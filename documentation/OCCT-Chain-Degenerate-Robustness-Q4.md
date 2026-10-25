@@ -1,6 +1,6 @@
 # OCCT chain robustness: zero-area faces in Clean3D, non-convex cells in the direct rebuild — Q4 (2026-10-25)
 
-Status: implemented locally on `fix/occt-chain-degenerate-robustness-q4` (base `sow/2026-Q4` at `ac9bbc9`). PR SAM-BIM/SAM_OCCT#83 into `sow/2026-Q4` (opened 2026-10-25 on owner go-ahead). Tested content `5f2a8d7`; later commits change this record only, and the PR description holds the final head and hosted checks. Step C of the Softhouse "SAM model from solids" task. No dependency on the SAM
+Status: implemented locally on `fix/occt-chain-degenerate-robustness-q4` (base `sow/2026-Q4` at `ac9bbc9`). PR SAM-BIM/SAM_OCCT#83 into `sow/2026-Q4` (opened 2026-10-25 on owner go-ahead). Tested content `506fda7` (after the review correction below; previously `5f2a8d7`); later commits change this record only, and the PR description holds the final head and hosted checks. Step C of the Softhouse "SAM model from solids" task. No dependency on the SAM
 branches: the unit tests run against the current `..\SAM\build` (sow/2026-Q4 SAM).
 
 ## Problems (both "one bad item cancels everything")
