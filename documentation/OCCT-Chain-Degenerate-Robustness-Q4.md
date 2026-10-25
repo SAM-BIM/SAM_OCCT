@@ -59,6 +59,28 @@ CreatePanelsBySolids (minThickness_ 0.04) -> Clean3D -> Extend3D -> CreateAdjace
 6 "not enclosed (1e-6)" warnings, all for the house A/B open-plan cells (GF kitchen + circulation, 1F double-height
 region, two 2F rooms), whose SAM shells are not closed at 1e-6 (volume NaN) although OCCT closes them.
 
+## Review correction (R2) — 2026-10-25
+
+Independent review of head `5c2d22f` (`SAM-BIM/.review-four-pr-20261025/REVIEW.md`, machine-local) found that the
+SnapStage guard compared an area with a distance (`GetArea() > tol.Distance`) and so deleted valid small faces: a
+20 x 20 mm face at 1 mm and a 0.5 x 0.5 mm face at 1e-6 m were dropped and reported as having no area. Corrected in
+`506fda7` (tested content): a face is collapsed when its mean width - twice its area over its boundary length (outer and
+inner loops), a length - is within the distance tolerance (`MeanWidth`; a loop without measurable length is never
+treated as collapsed). The SliverFace Warning now states the condition and the tolerance. SAM's dimensionless
+`ThinnessRatio` was considered and not used (it would reject long, legitimate strips).
+
+Tests: `Clean_LoneSmallFace_IsKeptAndNotReported` (20 mm @ 1 mm, 0.5 mm @ 1e-6 m); the zero-area test now runs at
+1e-6 and 1e-3 m. Evidence (machine-local, `SAM-BIM/.evidence-r1r2-20261025/`):
+- Review probe before / after: `occt-probe-before.txt` (both faces dropped) / `occt-probe-after.txt` (both kept, no
+  DroppedInvalid).
+- New tests on the reviewed production code: 2 failed / 10 passed (`occt83-fail-before.trx`, the small-face rows);
+  after: 12 / 12 (`occt83-pass-after.trx`).
+- Full, on `506fda7`: unit 1038 / 1038 (`occt83-unit-full.trx`; 1035 + 3 rows), Grasshopper tests 33 / 33
+  (`occt83-gh.trx`), integration 469 passed / 25 failed / 2 not executed (`occt83-integration.trx`); the 27
+  non-passing tests are identical to the SAM_OCCT#82 baseline (`.evidence-towers-managed-tests-20261023/native-full.trx`)
+  by full name, outcome and complete message (`occt83-integration-non-passing.txt`). `SAM_OCCT.sln` and the OCCT
+  Grasshopper project build clean. Commands as in Validation above (`--no-build` after a redirected build).
+
 ## Open
 
 - Parity 671 / 673 (2 relations short) and the 6 not-enclosed cells: not diagnosed further.
