@@ -1,10 +1,11 @@
 # Extend3D: walls extend to their own cap, never through another storey — Q4 (2026-10-26)
 
-Status: implemented locally on `fix/extend3d-no-invented-walls-q4` (base `sow/2026-Q4` at `22e4fd0`). Not committed, not
-pushed, no PR. Step 1 of the Softhouse "Dining 1" stage investigation (owner, 2026-10-26: SAM_OCCT Extend3D first, the SAM
-extraction fix as a separate PR). Revised after an independent review (bounding-box coverage made equivalent single and
-split floors give different walls) and after the fixture-by-fixture review below. The Clean3D kink candidate is kept out
-of this branch (patch only, see "Separate").
+Status: revision 2 implemented locally on `fix/extend3d-no-invented-walls-q4` (base `sow/2026-Q4` at `22e4fd0`), local
+commits `639ef12` (revision 1), `1408b93`, `696dce0` (revision 2). Not pushed, no PR. Step 1 of the Softhouse "Dining 1"
+stage investigation (owner, 2026-10-26: SAM_OCCT Extend3D first, the SAM extraction fix as a separate PR). Revision 2
+answers the independent review of 2026-10-26 (`SAM-BIM/.review-extend3d-revision2-20261026/REVIEW.md`, machine-local:
+REVISE - cap splitting moved the clip level; MaxExtension used as evidence of a junction and of a split level; room
+merger and Revit-home measurements unresolved). The Clean3D kink candidate stays out of this branch (see "Separate").
 
 ## Problem
 
@@ -13,66 +14,66 @@ input has none, which changes room identity. Softhouse: +555 m2 of panel area, w
 mechanisms, each reproduced synthetically:
 
 - **M1 - a cap the wall already passes is skipped.** `NearestCoveringCap` accepted only caps at or beyond the wall extreme.
-  A wall whose base passes its floor by a few centimetres (a mid-surface wall snapped to a slab that Clean3D normalised
-  25 mm higher; a foundation wall ending 5 cm above the ground slab; an attic wall starting 5 cm below the ceiling; or
-  Extend3D's own output) was grown to the next cap, a storey away: vertical reach is uncapped by policy.
-- **M2 - extending a non-rectangular wall fills every notch.** Non-rectangular walls extend through
-  `SAM.Geometry.Spatial.Query.Extend` (or the column-wise sloped-cap polygon), which fill everything between the outline
-  and the target line. A wall merged across storeys by Clean3D whose lower storey is narrower became a full rectangle.
+  A wall whose base passes its floor by a few centimetres was grown to the next cap, a storey away (vertical reach is
+  uncapped by policy).
+- **M2 - extending a non-rectangular wall fills every notch.** `SAM.Geometry.Spatial.Query.Extend` (and the column-wise
+  sloped-cap polygon) fill everything between the outline and the target line: a wall merged across storeys by Clean3D
+  whose lower storey is narrower became a full rectangle.
 
 ## Change (`SAM_OCCT/SAM.Geometry.OCCT.Solver`)
 
-1. **M1** `Panel3DSnapSolver.NearestCoveringCap` (new `out bool passed`) / `ExtendWallToNearestCap`: when the cap surface
-   nearest the wall extreme is one the wall already passes by at most the flat extend overshoot, the wall already meets
-   its cap: it is not extended (record `AlreadyMeetsTarget`, "already passes its cap by at most the overshoot"). It never
-   counts when it lies below the wall's mid-height (the floor a short wall stands on, seen from its top), nor when another
-   cap lies within the wall's reach (`MaxExtension`) on the grow side (a split-level floor beside the wall). Otherwise the
-   previous nearest-cap rule applies unchanged (a cap exactly at the extreme still gets the overshoot).
-2. **M2** `Panel3DSnapSolver.ClipBeyondIntermediateCaps` + `SnappedPanel.ClipBeyondLevels`: after a vertical extend, the
-   extension grown past an intermediate flat cap (between the wall's opposite extreme and the target) is removed over the
-   free columns of the wall: columns where the original wall does not continue past that level (material within the
-   overshoot of the level does not count).
-   - Where a level covers the wall is read from the caps' **actual outlines** (concave parts and openings kept) within
-     the wall's capture half-width (`BucketSize`) of its plan line; caps within the overshoot of one elevation are
-     merged, so a floor split into pieces covers the wall exactly as the floor in one piece (review finding).
-   - A free stretch narrower than the wall's lateral reach (`MaxExtension`) is a junction gap (the wall stopping short of a
-     crossing wall) that the lateral extend exists to close: it keeps its fill.
-   - A level within the wall's reach of the target is a step of the target's own level (split-level floors either side of
-     a wall, 0.144 m apart in whole-level-towers), not another storey: it does not stop the extension.
-   - Only the extension is clipped: the original face is united back whole, so no material the wall had is removed.
-   - Each clip is reported: `SAM_OCCT_EXTEND3D_LEVEL_CLIP` (area removed, levels, extent), surfaced through
-     `SolverReportFormat.FormatExtendPanelDiagnostics`. Census counter `LevelClipCount`.
+Every rule reads the caps' actual geometry beside the wall; the wall's reach (`MaxExtension`) only bounds a move that the
+geometry justifies, it is never the evidence.
+
+1. **Side coverage** (`Panel3DSnapSolver.SideCoverage`, `LevelCoverage`, new `PlanIntervals`): for each side of the wall,
+   the stretches of its plan line beside which a cap lies (the band from the wall's capture half-width `BucketSize` to
+   twice that, from the cap's outline with its openings). Interval sets, so the result depends only on the area covered.
+2. **Levels are surfaces** (`SameSurface`, `GroupSameSurface`): caps coplanar at the wall (same plane within the distance
+   tolerance) form one level, coverage united; no elevation averaging. A floor in one piece, in unequal pieces or listed
+   twice clips identically; caps at 3.00 and 3.04 stay two levels (review finding 1). The clip uses the level's extreme
+   towards the wall's own part.
+3. **Coverage aligned to the room boundaries** (`AlignToCrossings`): a coverage end within the capture half-width of a
+   wall crossing this one (where this wall stands) is moved onto that wall's line. Caps are modelled to wall faces; read
+   as they are, the clip stepped a wall's base 0.05-0.1 m beside a junction and left an open sliver (towers #142, #139).
+4. **M1** (`NearestCoveringCap` lists the passed caps; `RestsOnPassedCaps`): a wall whose extreme passes caps by at most the
+   overshoot rests on them, and is not extended, when they cover its whole line and nowhere does the space beside it
+   continue past them to the next cap within its reach. Otherwise it is extended and the passed caps clip it column by
+   column (item 5).
+5. **M2** (`ClipBeyondIntermediateCaps` + `SnappedPanel.ClipBeyondLevels`): after a vertical extend, the extension grown
+   past an intermediate flat level is removed in the columns the level covers and the original wall does not continue
+   past (material within the overshoot of the level does not count), except:
+   - **continuation** (`ContinuationStretches`): where the target covers a side of the wall and the level does not (a
+     split level, or a floor stacked over the target on one side only), the space beside the wall continues past the
+     level to the target: the extension is kept if the growth past the level is within the wall's reach. A level on
+     every side the target covers always clips, however close (review finding 2: distinct levels kept);
+   - **junction**: the stretch from where the original continues up to the line of a wall crossing this one in the
+     storey beyond the level (the wall stopping short of it there), within the wall's reach; the fill stops at that
+     wall's line (no overshoot fin). A stretch without a crossing wall is an intentional set-back or void and is clipped
+     whatever `MaxExtension` is (review finding 2). The lateral extend (`ExtendWalls`) does not see such a gap: it reads
+     the merged wall's whole plan extent.
+   - Only the extension is clipped: the original face is united back whole. Each clip reports
+     `SAM_OCCT_EXTEND3D_LEVEL_CLIP` (area, levels, extent); census `LevelClipCount`.
 
 Plain rectangles never have free columns (fast path unchanged). No public API, parameter, default, Grasshopper component
-or native change.
+or native change. `SolverReportFormat.cs`: doc comment only.
 
 ## Tests
 
-- `Testing/SAM.OCCT.UnitTests/ExtendIntermediateCapTests.cs` (new, 34 cases): set-back upper wall 25 mm below / at Extend's
-  output / on / 25 mm above its floor; top 25 mm above its ceiling; a base 0.2 m below the floor still extends (unchanged
-  rule); short wall stubs (0.05, 0.095 m) standing on a floor still reach the ceiling; run twice = no change; merged L wall
-  keeps its notch, also translated and rotated; a 0.15 m junction gap stays filled; a split-level floor 0.15 m above the
-  target beside the wall stops neither the extend nor counts as the cap reached; a wall continuous through the first
-  floor and a door notch within one storey keep the previous extend; plain rectangles unchanged. **Equivalence**: the
-  first floor as one outline or split into pieces (full cover, a concave double-height corner at the wall, a stair
-  opening over the wall line), each also translated and rotated, gives the same wall (area and a 31 x 31 inside grid),
-  and the floor's actual geometry decides where the notch stays (under the corner and the opening the previous extend
-  applies). With bounding-box coverage 5 of these fail.
-- `ExtendCensusCollection.cs` (new): `Panel3DSnapSolverTests` and `ExtendIntermediateCapTests` share an xUnit collection;
-  the census assertions in `Panel3DSnapSolverTests` failed intermittently when the new class ran `Extend` in parallel.
-  `SqueezeAndAngledExtendTests` and `ResidualContactClosureTests` also call `Extend` outside the collection (pre-existing
-  risk, unchanged).
-- `Testing/SAM.OCCT.IntegrationTests/Extend3DIntermediateCapIntegrationTests.cs` (new, native-gated): room volumes through
-  Clean3D -> Extend3D -> AdjacencyCluster. Set-back upper storey: base 30 + 150 + 150 m3 (ground floor split by the
-  invented wall), fix 150 + 180. Party wall upstairs only with a 2 m ground-floor stub: base four 90 m3 rooms, fix 90 +
-  90 + 180.
+- `Testing/SAM.OCCT.UnitTests/ExtendIntermediateCapTests.cs` (49 cases), revision 1 cases plus: the review's
+  reproductions - nearby floors 3.00/3.04 with the lower one whole, split equally, split unequally and listed twice (same
+  boundary, review probe point outside); a 0.15 m set-back without a crossing wall stays open at reach 0.1, 0.5, 2.0;
+  junction closed with a crossing wall in that storey and kept open with it upstairs only or beyond reach; junction
+  fill stops at the crossing wall's line; split level kept within reach (0.5, 2.0) and not beyond it (0.05); the same
+  raised floor under both sides is a distinct level at every reach; floor stacked over the target on one side (towers)
+  reaches the target at reach 0.4, not at 0.1; clip step at the crossing wall's line, not the floor's edge. With the
+  revision-1 binary the review's harness reproduces findings 1 and 2; with revision 2 it gives equal results.
+- `ExtendCensusCollection.cs`, `Testing/SAM.OCCT.IntegrationTests/Extend3DIntermediateCapIntegrationTests.cs`: as in
+  revision 1 (2 native room-volume tests).
 
-## Validation (local, machine `michal`, 2026-10-26; identical conditions for base and fix)
+## Validation (local, machine `michal`; identical conditions; base = `SAM_OCCT-wt-extend3d-base` at `22e4fd0` + new tests)
 
-Base = detached worktree `SAM_OCCT-wt-extend3d-base` at `22e4fd0` with only the new test files added; fix = this
-worktree. Both use `..\SAM\build` (SAM `sow/2026-Q4` `fe5bbce4`) and a copy of the same native `build` folder; built with
-APPDATA/USERPROFILE redirected (the GH PostBuild deploys to `%APPDATA%\SAM`), tests run one after the other with the
-real APPDATA and `--no-build` (HouseAirAndAttic needs the default internal-condition library from it).
+Built with APPDATA/USERPROFILE redirected (GH PostBuild deploys to `%APPDATA%\SAM`); tests with the real APPDATA,
+`--no-build`, one suite at a time. SAM from `..\SAM\build` (`sow/2026-Q4` `fe5bbce4`).
 
 ```powershell
 dotnet build Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj -c Debug
@@ -81,65 +82,93 @@ dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj -c Debug --no-b
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj -c Debug --no-build
 ```
 
-| suite | base | fix |
-| --- | --- | --- |
-| unit | 12 failed / 1060 passed (the 12 new defect cases) | **1072 / 1072** |
-| integration (native) | 27 failed / 469 passed / 2 skipped | 25 failed / 471 passed / 2 skipped |
+Tested content: `696dce0` (code and tests; this record is the only later change).
 
-The integration runs differ in exactly five tests; every other test has the same outcome and message:
-
-| test | pinned | base | fix |
+| suite | base `22e4fd0` | revision 1 `639ef12` | revision 2 `696dce0` |
 | --- | --- | --- | --- |
-| Extend3DIntermediateCap SetBack (new) | 2 rooms | 3 (fail) | pass |
-| Extend3DIntermediateCap PartyWall (new) | 3 rooms | 4 (fail) | pass |
-| Extend3DPlaneTarget RevitHome | 14 | 22 | 7 |
-| GoldenMaster managed whole-level-towers | 21 | 23 | 24 |
-| WorkflowParity Revit-home A-solver-matched spaces | - | 22 | 7 |
+| unit | 12 failed / 1060 passed | 1072 / 1072 | **1090 / 1090** (52 in `ExtendIntermediateCapTests`) |
+| integration (native) | 27 failed / 469 / 2 skipped | 25 failed / 471 / 2 skipped | 25 failed / 471 / 2 skipped |
 
-The other 23 non-passing tests (the 2026-10-25 recorded set) fail identically on both. No re-baseline is proposed until
-the open items below are traced. Evidence (machine-local):
-`SAM_daily/2026-10-25-Softthouse/handover/evidence/2026-10-26-stage/occt-final` (trx, logs, fixture probes, Softhouse).
-`git diff --check` clean; SPDX headers on the new files. Not run: GrasshopperTests, hosted CI (nothing pushed).
+Revision 2 fails the same 25 tests as revision 1 (base's 27 minus the two new Extend3D tests). Messages that differ from
+base (other 23 messages identical to base):
 
-## Moved fixture results, explained (managed `Solve3D(forceManagedPipeline)`, probe = cells from `Create.Shells` on the solved faces)
+| test | pinned | base | rev. 1 | rev. 2 | explained |
+| --- | --- | --- | --- | --- | --- |
+| Extend3DIntermediateCap SetBack / PartyWall (new) | 2 / 3 rooms | 3 / 4 (fail) | pass | pass | intended |
+| Extend3DPlaneTarget RevitHome (solver cells) | 14 | 22 | 7 | 7 | trace item 2 |
+| WorkflowParity Revit-home (message prints solver cells) | - | 22 | 7 | 7 | trace item 2 |
+| GoldenMaster managed whole-level-towers | 21 | 23 | 24 | 23 | trace item 3 |
+| GoldenMaster managed 0.21 two-level-tilted | 9 | 16 | 16 | 17 | trace item 1 |
+| Extend3DPlaneTarget AdjacencyCluster-home naked | 4 | 6 | 6 | **9** | trace item 4 - open |
+| NineSpaceWallCapture translate 0.45/0.55/0.65 West2 (West3 at 0.45) | - | 298.502 / 290.673 m3 | 298.506 / 290.675 | 298.506 / 290.675 (West3 654.700 / 646.114, base 654.697 / 646.110) | numerical deltas, < 0.005 m3, still failing for the pre-existing reason |
 
-| fixture (bbl) | base cells / naked | fix cells / naked | why |
-| --- | --- | --- | --- |
-| whole-level-flat, whole-level-tilted, tilted-two-spaces (0, 0.21) | 22/0, 22/0, 2/0 | identical cell lists | no wall passes a cap; no clip |
-| Face3D-home (0) / (0.21) | 15/0, 18/8 | identical cell lists | no extend geometry change |
-| two-level-tilted (0) | 13/8 | identical cell list | four walls whose top passes their roof by 2.6 cm stay as they are (as in base) |
-| two-level-tilted (0.21) | 16/3 | 16/3, two cells differ | **open**: one clip (a wall at y -17.49 whose top extension crossed a level, 23.8 m2) is the only extend geometry change, yet two upper rooms at x 30.5..40.8, y -7.6..1.3 that the input separates by a double wall ([65]/[79], 0.12 m apart) come out as one 245.9 m3 cell; not traced (global resolve / GapFill effect suspected) |
-| whole-level-towers (0) | 23/13 | 24/7 | base grows a wall top 12.1 m through four levels (15.41 -> 27.54); the fix stops it at the next level (one clip, 73.2 m2). One more room closes (x 11.07..17.14, level 12.38..15.44, 159.5 m3); four walls passing their cap by <= 5 cm are no longer grown on |
-| whole-level-towers (0.21) | 27/0 | identical cell list | one clip |
-| Revit-home (0, 0.21) | 11/5 | 5/8 | see below |
+Review harness (`SAM-BIM/.review-extend3d-revision2-20261026`, `dotnet run`): revision 1 binary reproduces the findings
+(nearby floors 24.520004 vs 24.546672 m2, probe in/out; set-back filled at reach 0.5 only); revision 2 gives 24.440004 m2
+for both representations with the probe outside, and the set-back open at reach 0.10 and 0.50 (36.150000 m2 both). The
+original concave-floor case is unchanged (36.6 m2 both, notch filled under no floor). `git diff --check` clean.
+Not run: GrasshopperTests, hosted CI (nothing pushed), Softhouse chain with revision 2.
 
-Revit-home ground floor (input cut at z 1.3 has no wall at x 0.535 and none across the south strip): base split the south
-strip into four cells with attic walls carried down to the ground floor (x 0.535, -2.69, 8.135; bottom 2.6 -> -0.005) and
-added three 4-44 mm sliver cells with foundation walls pulled up through the ground floor (top 0.095 -> 2.7) beside the
-real wall. The fix gives the strip as one 44.2 m3 room, no slivers, and the three small rooms unchanged. The west room
-(x -3.09..4.235) is open in both (base only closed its eastern part behind the invented x 0.535 wall). The east room
-(x 8.135..11.535, 53.5 m3) closed in base only as part of a merged 85.7 m3 cell; in the fix two of its wall faces (x 11.535;
-x 8.135, y 2.62..4.575) come out of the native resolve with all four edges naked. Cause in the resolve not yet traced.
+## Where rooms change, traced (open items of revision 1)
 
-Softhouse (same extracted panels, identical setups): base 70 spaces, 1 reference room outside a space; fix 52, 7 outside
-(all house D) and the ground floors of houses A-C in one cell. The invented walls had masked a Clean3D kink defect and
-extraction junction-block defects (see the SAM extraction task and the Clean3D candidate); total extend growth 555 -> 311 m2.
+Probes (machine-local tools, see "Evidence"): the managed `Solve3D` configured as `Modify.Solve3D` does, stopped after
+conditioning, resolve-only on saved conditioned faces, the solver's own cells (`Solve3DReport.Cells`), and rebuilds of
+the solver's output faces with the measurement options (`Create.Shells`, sew 0.01) - with and without exact duplicates.
+
+1. **two-level-tilted (bbl 0.21), upper rooms merged in revision 1** - not an Extend3D stage. The solver's own cells are
+   identical in base, revision 1 and revision 2 (33 cells, same volumes). The merger (245.9 m3) appears only when the
+   solver's output faces are rebuilt (the golden-master / probe measurement), in revision 1 only. Revision 1 and 2 output
+   faces are identical to 1e-4 m (same 416 faces, 8 permuted); 35 differ by 1e-9..1e-7 m (resolve noise), and the
+   rebuild result follows the face set, not the order (both orders tried) nor the sew tolerance (0.005-0.015 m). The
+   output carries 45 exact duplicate faces (base 49), including the separator between the two rooms (two coincident
+   copies). Removing exact duplicates, base, revision 1 and revision 2 all rebuild to the same 23 cells with the rooms
+   separate. Responsible stage: the solver's output assembly - it emits coincident duplicates (the consolidation rebuild
+   is adopted in all three runs and its faces are flattened from shells, `Panel3DSnapSolver.cs` FinalizeAndValidate,
+   `shells.SelectMany(x => x.Face3Ds)`; RetainDropped also re-adds faces - the exact source is to be confirmed) - and a
+   rebuild of coincident duplicates is numerically unstable. Revision 2 rebuilds the two rooms separately (83.9 + 162.0
+   m3; the 162 m3 room, open in base, closes): 17 cells vs base 16.
+2. **Revit-home east room and 7 spaces vs 5 cells** - reconciled. Both tests report the solver's own count: the
+   plane-target test asserts `ResolvedCellCount` and the parity message prints `spaces=={resolvedCellCount}` (the parity
+   comparison itself counts AdjacencyCluster spaces). On one solve (revision 1 and 2 alike): solver 7 cells; parity
+   A-solver-matched 5 spaces; probe `Create.Shells` 5 cells. The rebuild merges the south strip the solver splits at
+   x 8.135 (33.96 + 10.29 -> 44.24 m3) and does not close the east room the solver closes (x 8.135..11.535, 53.09 m3).
+   The output has 12 exact duplicate faces; without them the south split returns (6 cells) but the east room still
+   merges with its neighbour. Responsible stage: output/rebuild, as item 1, not Extend3D.
+3. **whole-level-towers** - the solver's own cells are identical in revision 1 and 2 (24 cells, same list); room counts
+   measured on the rebuilt output swing with nm-level differences (26 exact duplicate faces in every build). Without
+   duplicates: base 18, revision 1 18, revision 2 19 (one more room separated, 100.3 m3 at x 21.9..26.7).
+
+4. **AdjacencyCluster-home naked 6 -> 9 (open, owner decision)** - caused by Extend3D, a single conditioning difference
+   from revision 1: clip `#20` removes a 0.675 m2 stub below the first floor at the north wall's end (y 4.8, x -3.09..
+   -2.865), where the upper storey overhangs the ground-floor corner wall (x -2.865) and no wall crosses the line below
+   the floor there. Revision 1 kept it by the reach rule the review rejected. The solver's own cells are identical
+   (18); its naked count rises 6 -> 9 at that corner; the rebuilt measurement goes from one invalid cell spanning both
+   storeys (-329 m3, base and revision 1) to six separate ground-floor rooms, with two first-floor cells not closed.
+   Whether the stub is an intended overhang (keep the clip) or a modelling gap to close needs the owner's call; no reach
+   exemption was added to recover the count.
+
+So the golden-master, plane-target and parity counts on these fixtures measure the rebuild of an output with coincident
+duplicates, not Extend3D's geometry alone; no re-baseline is proposed on them.
 
 ## Separate (not on this branch)
 
-- Clean3D kink candidate: `clean3d-kink-jog-candidate.patch` (machine-local evidence folder) - the jog alignment requires
-  parallel pieces (0.3 degrees); `SnapStageTests` kink test fails before, passes after. Applies to `22e4fd0`.
+- Clean3D kink candidate: `clean3d-kink-jog-candidate.patch` (machine-local evidence folder of 2026-10-26).
 - SAM extraction fix (junction blocks shorter than the wall thickness): SAM worktree `SAM-wt-junctions`, empty.
+- New: solver output with exact duplicate faces (item 1 above) - its own bounded task in the output assembly
+  (`FinalizeAndValidate` / heal), with a determinism test (rebuild invariant to 1e-7 m perturbation).
 
-## Open before any re-baseline
+## Evidence (machine-local, copy before switching machines)
 
-1. two-level-tilted (bbl 0.21): two upper rooms separated in the input by a double wall merge although the only extend
-   geometry change is a clip on a wall in another block; trace through the native resolve / GapFill.
-2. Revit-home east room: two wall faces leave the resolve with all edges naked (base closed the room only merged with its
-   neighbour); trace in the resolve.
-3. Revit-home 7 spaces in the plane-target / parity tests vs 5 cells in the probe: reconcile the two measurements.
+`SAM_daily/2026-10-25-Softthouse/handover/evidence/2026-10-26-r2/`: `runs/` (integration logs and trx, probe outputs:
+`tlt/` two-level-tilted, `rh/` Revit-home, `fx/` and `towers/` whole-level-towers), `tools/pipe` (probe sources:
+`Stage.cs` staged solver, `Recon.cs` three measurements, `Reorder.cs` rebuild with order / substitution / dedup /
+sew tolerance, `Compare.cs` face-set comparison, `Chain.cs` towers chain, `Replay.cs` vertical extend replay),
+`tools/stage.sh`, `tools/safebuild.sh`, `reviewed-dll/` (the reviewed revision-1 solver DLL, SHA256 `E63A58A3...DF4`).
+Comparison worktrees (detached, do not commit): `SAM_OCCT-wt-extend3d-base` (`22e4fd0` + tests), `SAM_OCCT-wt-extend3d-fix1`
+(`639ef12`).
 
 ## Next step
 
-Owner review of the explanations and the three open items; trace them (same branch); then commit, PR, and the order with
-the Clean3D candidate and the SAM extraction PR (Softhouse alone: 70 -> 52 spaces until those land).
+Owner review of revision 2, the trace (items 1-3) and the decision on item 4; an independent re-review against the same
+harness; rerun the Softhouse chain with revision 2 (revision 1: 70 -> 52 spaces, masked kink/extraction defects). Then:
+the output duplicate-face task as its own bounded change (before any golden re-baseline, since those counts measure it),
+then push and draft PR for this branch, the Clean3D candidate, and the SAM extraction PR.
