@@ -83,7 +83,7 @@ dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj -c Debug --no-b
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj -c Debug --no-build
 ```
 
-Tested content: `696dce0` (code and tests; this record is the only later change).
+Tested content: `696dce0` (table below) and `76f6f22` (code = `ce8e45d`; identical results, see "Re-run on `76f6f22`").
 
 | suite | base `22e4fd0` | revision 1 `639ef12` | revision 2 `696dce0` |
 | --- | --- | --- | --- |
@@ -107,8 +107,18 @@ Review harness (`SAM-BIM/.review-extend3d-revision2-20261026`, `dotnet run`): re
 (nearby floors 24.520004 vs 24.546672 m2, probe in/out; set-back filled at reach 0.5 only); revision 2 gives 24.440004 m2
 for both representations with the probe outside, and the set-back open at reach 0.10 and 0.50 (36.150000 m2 both). The
 original concave-floor case is unchanged (36.6 m2 both, notch filled under no floor). `git diff --check` clean.
-Not run: GrasshopperTests, hosted CI (nothing pushed). After `ce8e45d` (side-coverage robustness, below): unit
-1091/1091; the native integration suite was not re-run on that content (owner, 2026-10-26: Softhouse validation only).
+Not run: GrasshopperTests, hosted CI (nothing pushed).
+
+**Re-run on `76f6f22` (owner 2026-10-26).** `76f6f22` = `ce8e45d` (side-coverage robustness, see "Softhouse") plus one
+record-only commit (`git diff --name-only ce8e45d 76f6f22` lists only this record). Same configuration as the `696dce0` run:
+built with APPDATA/USERPROFILE redirected, tests with the real APPDATA, `--no-build`, no other native process running,
+`%APPDATA%\SAM` unchanged (deployment of 06:55). Commands as above, with
+`--logger "trx;LogFileName=integ-76f6f22.trx"`. Results: unit 1091/1091; integration 25 failed / 471 passed / 2 skipped.
+Against the `696dce0` run: the same 498 test identities, no outcome changes, the same 25 failing tests with identical
+failure messages, and the captured output of every test identical once fresh GUIDs and timings are masked (raw
+differences: 3293 lines in 19 tests, all GUIDs or timings). The side-coverage change had no observable effect on the
+native suite; no new failure or geometry change to investigate. The table above therefore also holds for `76f6f22`.
+Evidence: `evidence/2026-10-26-r2/runs/integ-76f6f22.log|trx`, `msg-76f6f22.txt`, `nonpass-76f6f22.txt`.
 
 ## Softhouse (owner request 2026-10-26: same inputs and settings as the 70 -> 52 comparison)
 
@@ -156,7 +166,27 @@ The 70 -> 52 change persists (70 -> 54). Material room changes, base -> revision
   and adds one 0.01 m3 sliver space at z 4.975 (x 4.9, y -2.71; revision 1 already had one at x 10.7).
 
 Evidence: `evidence/2026-10-26-r2/softhouse/` (`base`, `fix1`, `fix`, `fix-crash`: chain/leak logs, per-room `status.tsv`,
-spaces, extended panel sets, models, naked-edge lists).
+spaces, extended panel sets, models, naked-edge lists, `notalone.txt` per build).
+
+**Review of the per-room tables against the 70-room reference.** Base's 70 spaces are not a 1:1 result: 22 reference
+entries are not enclosed alone without leak (1 missing, 9 shared spaces, several leaking), and 10 spaces match no
+reference room (four slivers of 0.01-0.02 m3, and 2.84, 19.37, 19.53, 23 and 36.17 m3 regions, several of them pieces
+cut off by invented walls). Revision 1 -> 2 (52 -> 54): Bed 1 D204 enclosed by the crossing-wall junction (above), and
+one more 0.01 m3 sliver space (x 4.9, y -2.71, z 4.975). Revision 2's 27 entries not enclosed alone without leak:
+
+- pre-existing in base (22): Circulation 1/2/4 with Unoccupied and Unconditioned 1/2/4 (pairs sharing 6.2 m3 spaces);
+  Kitchen 1-4 reference rooms probed again at z 3.5 falling into upper spaces (Kitchen 3/4 with Bed 5 / Dining 5); Bed 3 +
+  Circulation 10 (133.89 m3); Bed 13 + Circulation 8; Dining 1 D107 missing in base too; and the ground-floor Kitchen 1-4,
+  Circulation 3, Circulation 9 entries whose status worsened (base: alone with 10.6-13.5 % leak or shared; revision 2:
+  shared in the houses A-C ground-floor space, or missing in house D);
+- new against base (5): Dining 2/3/4 (houses A-C ground-floor space of 7 rooms, open: volume undefined, 15.6-15.7 %
+  leak), Bed 2 D203 and Bed 7 D303 (house D facade hole, first and second floor).
+
+Remaining missing: Dining 1 D107, Kitchen 1 D105-6 (both entries), Bed 2 D203, Circulation 9 D206, Bed 7 D303 (all house
+D). Merged and open: houses A-C ground floors (7 rooms, one space). Spaces without a reference room in revision 2: two
+0.01 m3 slivers and the 36.17 m3 region also present in base. All new losses trace to the defects the invented walls
+had masked (Clean3D kink jog, extraction junction blocks, house D corner slot and facade hole) - owned by the separate
+Clean3D and SAM extraction tasks, not addressed here.
 
 ## Where rooms change, traced (open items of revision 1)
 
@@ -223,7 +253,7 @@ Comparison worktrees (detached, do not commit): `SAM_OCCT-wt-extend3d-base` (`22
 
 ## Next step
 
-Owner review of revision 2 (`ce8e45d`), the trace and the Softhouse result; then, with owner approval, the native
-integration suite on `ce8e45d` and an independent re-review against the same harness. The measurement question (direct
+Independent re-review of revision 2 at `76f6f22` (code `ce8e45d`, native suite and Softhouse both run on it) against the
+same harness, the trace and the Softhouse tables; owner review. The measurement question (direct
 build vs sew-based rebuild) is reviewed before any golden change. Push and draft PR for this branch, the Clean3D
 candidate and the SAM extraction PR (houses A-D ground-floor and facade defects above) follow in the owner's order.
