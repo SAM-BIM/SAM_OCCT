@@ -404,26 +404,33 @@ another workspace ran at the same time (timing only).
   two-level-tilted managed 0.21 cells 17 -> **16** (pinned 9; base `22e4fd0` 16) and whole-level-towers managed
   23 -> **22** (pinned 21).
 
-Captured output, masked (`stdout-b837165-vs-695e814.diff`): 16 tests differ, all passing except the two goldens:
+Captured output, masked (`stdout-b837165-vs-695e814.diff`): **16 tests differ - 11 passing, 5 failing** (outcomes from
+`integ-695e814.trx`; each of the 5 also failed at `b837165`, none is a new failure; corrected after the final
+independent review, `.review-extend3d-final-20261026/REVIEW.md` R1, `changed-output-status.json`). The run-level
+output differs accordingly.
 
-| test | change | classification |
-| --- | --- | --- |
-| WorkflowParity AdjacencyCluster-home | workflow B **8 -> 18 spaces** (56 -> 112 panels, 13 -> 49 adjacencies) - the `76f6f22` values; the `LEVEL_CLIP` extent of #20 now the stub only ((-3.09, -0.05)-(-2.865, 2.95) instead of up to (8.135, 3)); new Info `HOLE_DROPPED: 1 of 1` on #20 | **intended** (item 2); the dropped opening is #20's 1e-6 m x 2.1 m seam sliver, carried silently by the old union |
-| same test, workflow A (Solve3D) | still 18 cells / 9 naked; 211 -> 195 resolved panels, 17 -> 13 air panels, consolidation alternative 20 -> 56 naked; A-old 130 -> 125 panels, parity WARN (192/194) -> clean (182/182); A-matched 16 spaces, parity 168/170 -> 159/159 | presentation: the only conditioning change is #20's loop start; resolve-only on the two saved face sets, same build: 194 vs 182 output faces, 18 cells / 601.301 m3 / 9 naked both (`presentation/res-ach-*`) |
-| WorkflowParity Revit-home | A-matched 5 -> **7 spaces** (= the solver's 7 cells: pass); solver 51 -> 57 resolved panels, 8 -> 4 naked | presentation: resolve-only, swapping in only #4 (loop start only) reproduces the whole change (46 -> 55 faces, 9 -> 4 naked); only #20 (1e-6 m) also changes it (52, 4); 7 cells / 158.222 m3 in all four (`presentation/res-rh-*`) |
-| GoldenMaster managed whole-level-towers | sew-rebuild 23 -> 22 cells (8880.3 -> 8613.4 m3), still failing | measurement: resolve-only on the 2ab5316 vs fix faces gives the **same solver result** (24 cells, 9039.786 m3, 9 naked, 222 faces; all 222 faces pair within 4.3e-8 m, 14 with another loop start) and the golden's sew-0.01 rebuild 23 vs 22 (the 159.373 m3 cell at x 31.5..37.6 becomes part of an open shell x 31.5..46.0); swapping only the three loop-start-only faces moves the solver's naked count 9 -> 13 (`presentation/res-tw-*`, `cmp-tw-resolved.txt`) |
-| GoldenMaster managed 0.21 two-level-tilted | 17 -> 16 cells, 350 -> 416 faces (2869.7 -> 2707.7 m3), still failing | same class (only #180 changed: seam vertices, far edge 1e-6 m); not separately traced |
-| GoldenMaster managed 0.21 whole-level-towers | volume 9400.474569530 -> 9400.474569391 m3 (passes) | numerical |
-| ParameterDiscovery NineSpace / Towers | trial rows change (e.g. towers best 35 -> 36 cells, baseline naked 11 -> 21; nine-space best faces 121 -> 115; same best configurations) | presentation: nine-space conditioning at bbl 0 and 0.21 changes only loop starts and collinear vertices (8 / 1 faces, boundary distance 0, clip diagnostics identical - `ninespace/`); trial rows not separately traced |
-| ControlledWorkflow NineSpaces, GHParity MergeCoplanarFalse, EastSouthGap, NineSpaceWallCapture rotate Z 45, Towers DoubleWallGap | cell numbering swapped (same cells, volumes and matches); ControlledWorkflow 74 -> 73 rebuilt panels | order only |
-| Towers FullUserChain / BucketAlignSweep | a cell centre 1e-6 m | numerical |
+| test | outcome (`b837165` -> `695e814`) | change | classification |
+| --- | --- | --- | --- |
+| WorkflowParity AdjacencyCluster-home | **Failed -> Failed**: A-solver-matched **16 spaces vs 18 expected** (unchanged) | workflow B **8 -> 18 spaces** (56 -> 112 panels, 13 -> 49 adjacencies) - the `76f6f22` values; the `LEVEL_CLIP` extent of #20 now the stub only ((-3.09, -0.05)-(-2.865, 2.95) instead of up to (8.135, 3)); new Info `HOLE_DROPPED: 1 of 1` on #20 | workflow B: **intended** (item 2); the dropped opening is #20's 1e-6 m x 2.1 m seam sliver, carried silently by the old union. Restoring workflow B does **not** make this test pass |
+| same test, workflow A (Solve3D) | (same test) | still 18 cells / 9 naked; 211 -> 195 resolved panels, 17 -> 13 air panels, consolidation alternative 20 -> 56 naked; A-old 130 -> 125 panels, relation parity WARN (192/194) -> clean (182/182); A-matched still 16 spaces, relation parity 168/170 -> 159/159 | presentation: the only conditioning change is #20's loop start; resolve-only on the two saved face sets, same build: 194 vs 182 output faces, 18 cells / 601.301 m3 / 9 naked both (`presentation/res-ach-*`). Relation parity is a different measure from the room count the test asserts (16 vs 18 still fails) |
+| WorkflowParity Revit-home | **Failed -> Passed** | A-matched 5 -> **7 spaces** (= the solver's 7 cells); solver 51 -> 57 resolved panels, 8 -> 4 naked | presentation: resolve-only, swapping in only #4 (loop start only) reproduces the whole change (46 -> 55 faces, 9 -> 4 naked); only #20 (1e-6 m) also changes it (52, 4); 7 cells / 158.222 m3 in all four (`presentation/res-rh-*`) |
+| GoldenMaster managed whole-level-towers | **Failed -> Failed**: expected 21, actual 23 -> **22** | sew-rebuild 8880.3 -> 8613.4 m3 | measurement: resolve-only on the 2ab5316 vs fix faces gives the **same solver result** (24 cells, 9039.786 m3, 9 naked, 222 faces; all 222 faces pair within 4.3e-8 m, 14 with another loop start) and the golden's sew-0.01 rebuild 23 vs 22 (the 159.373 m3 cell at x 31.5..37.6 becomes part of an open shell x 31.5..46.0); swapping only the three loop-start-only faces moves the solver's naked count 9 -> 13 (`presentation/res-tw-*`, `cmp-tw-resolved.txt`) |
+| GoldenMaster managed 0.21 two-level-tilted | **Failed -> Failed**: expected 9, actual 17 -> **16** | 350 -> 416 faces, 2869.7 -> 2707.7 m3 | **inference**, not traced: same class (only #180 changed: seam vertices, far edge 1e-6 m) |
+| GoldenMaster managed 0.21 whole-level-towers | **Failed -> Failed**: expected 25, actual **27** (unchanged) | volume 9400.474569530 -> 9400.474569391 m3 | the volume delta is numerical; the cell-count failure is pre-existing and unchanged |
+| NineSpaceWallCapture capture 0.45, rotate Z 45 | **Failed -> Failed** (pre-existing North0 / North2 geometry comparison, message unchanged) | cell numbering South2 / West2 swapped | order only |
+| ParameterDiscovery NineSpace / Towers | Passed -> Passed | trial rows change (e.g. towers best 35 -> 36 cells, baseline naked 11 -> 21; nine-space best faces 121 -> 115; same best configurations) | **inference** from the nine-space conditioning check (bbl 0 and 0.21: only loop starts and collinear vertices change, 8 / 1 faces, boundary distance 0, clip diagnostics identical - `ninespace/`); trial rows not separately traced |
+| Extend3DCensus whole-level-towers | Passed -> Passed | fast-path / plane-ops 182 / 38 -> 183 / 37 | **inference**, not traced: a clipped wall without its seam vertices is a plain rectangle (towers #135: 8 -> 4 vertices) and takes the fast path in a later pass |
+| ControlledWorkflow NineSpaces, GHParity MergeCoplanarFalse, EastSouthGap, FullFixture FillMargin1 AllNineMatch, Towers DoubleWallGap | Passed -> Passed | cell numbering swapped (same cells, volumes and matches); ControlledWorkflow 74 -> 73 rebuilt panels | order only |
+| Towers FullUserChain / BucketAlignSweep | Passed -> Passed | a cell centre 1e-6 m | numerical |
 
 **Conclusion.** Every managed change of `695e814` is confined to clipped faces and is geometry-neutral there (loop
-start, collinear vertices, <= 1e-6 m), apart from #20 on the Extend3D path, where the crack is removed as intended. The
-native-measured swings elsewhere - both directions: Revit-home parity now passes, AdjacencyCluster-home parity clean,
-towers baseline naked 11 -> 21 - follow from the solver's dependence on face presentation (item 1), shown directly on
-AdjacencyCluster-home, Revit-home and towers. They are not caused by geometry this branch changes, and they are not
-repaired here. No golden re-pin.
+start, collinear vertices, <= 1e-6 m), apart from #20 on the Extend3D path, where the crack is removed as intended.
+Workflow B on AdjacencyCluster-home is restored to 18 rooms; the enclosing WorkflowParity test still fails on its
+A-solver-matched room count (16 vs 18), as before. The native-measured swings elsewhere - both directions: Revit-home
+parity now passes, AdjacencyCluster-home relation parity clean, towers baseline naked 11 -> 21 - follow from the
+solver's dependence on face presentation (item 1), shown directly on AdjacencyCluster-home, Revit-home and towers and
+inferred for the others. They are not caused by geometry this branch changes, and they are not repaired here. Failing
+tests among the changed outputs: 5 (all failing before as well). No golden re-pin.
 
 ## Review findings (status at `695e814`)
 
@@ -902,9 +909,11 @@ Branch commits on `22e4fd0`: `639ef12` (rev 1), `1408b93`, `696dce0` (rev 2), `d
 message was not rewritten) and this record commit.
 
 **Results at `695e814`.** Unit 1133/1133; GrasshopperTests 38/38; native integration 24 failed / 472 / 2 skipped (the
-`b837165` failures less WorkflowParity Revit-home, now passing). WorkflowParity AdjacencyCluster-home workflow B back to
-18 spaces. Managed changes confined to clipped faces and geometry-neutral there; the native-measured swings elsewhere
-are the solver's presentation dependence, shown by resolve-only controls ("Revision 3c" item 5). Not run: hosted CI
+`b837165` failures less WorkflowParity Revit-home, now passing). Workflow B on AdjacencyCluster-home is back to 18
+spaces; the WorkflowParity AdjacencyCluster-home test itself still fails (A-solver-matched 16 vs 18 expected, as at
+`b837165`). Of the 16 tests whose output changed, 11 pass and 5 fail - all 5 failed before. Managed changes confined to
+clipped faces and geometry-neutral there; the native-measured swings elsewhere are the solver's presentation
+dependence, shown by resolve-only controls on three fixtures and inferred for the rest ("Revision 3c" item 5). Not run: hosted CI
 (nothing pushed), the Softhouse chain or any building simulation (excluded), an interactive Grasshopper canvas (headless
 contract and reporter tests only; `%APPDATA%\SAM` still holds the 06:55 deployment, so Grasshopper does not load this
 code until it is redeployed). **The full Softhouse rebuild is not done.**
@@ -926,9 +935,11 @@ presentation dependence without a trace of their own.
    their reverse/rotate variants give one answer each; the A/B naked sets agree away from #20's corner; the integration
    suite's `Solve3D` outputs become invariant to loop start (the `presentation/` controls). Until then, cell counts from
    a sew-based rebuild are not evidence of a geometry change.
-2. Goldens: towers / two-level-tilted managed (sew-rebuild measurement of an output with duplicates; now 22 and 16;
-   parked branch untouched, no re-baseline); NineSpace West2/West3 deltas (pre-existing reason). Disposition needed
-   before merge.
+2. Goldens and other failing tests, all failing before this branch's last change: managed whole-level-towers (21
+   expected, now 22) and managed 0.21 two-level-tilted (9, now 16) - sew-rebuild measurement of an output with
+   duplicates; managed 0.21 whole-level-towers (25 expected, 27, unchanged); WorkflowParity AdjacencyCluster-home
+   (A-solver-matched 16 vs 18); NineSpaceWallCapture West2/West3 deltas and the capture 0.45 rotate Z 45 North0/North2
+   comparison (pre-existing reasons). Parked branch untouched, no re-baseline. Disposition needed before merge.
 3. Pre-existing, tracked separately ("Separate"): split-piece opening loss at a junction; `GetBaseSegment` for tilted
    walls taller than long; AutoTune3D surfaces no per-panel extend lines; Extend3D drops the Clean3D slab openings
    without `HOLE_DROPPED`; SAM multi-face `Difference` null ambiguity (SAM side); L3 native stage of the saved Softhouse
