@@ -1,10 +1,11 @@
 # Extend3D: walls extend to their own cap, never through another storey — Q4 (2026-10-26)
 
-Status: revision 3b implemented and validated locally on `fix/extend3d-no-invented-walls-q4` (base `sow/2026-Q4` at
+Status: revision 3c implemented and validated locally on `fix/extend3d-no-invented-walls-q4` (base `sow/2026-Q4` at
 `22e4fd0`), local commits `639ef12` (revision 1), `1408b93`, `696dce0` (revision 2), `ce8e45d` (revision 2 robustness fix
 found by the Softhouse run, see "Softhouse"), `33ea9bb`, `5600f90`, `2ab5316` (revision 3, see "Revision 3"), `2986ad5`,
-`0f060ff`, `b837165` (revision 3b, see "Revision 3b"). **Tested content: `b837165`** (unit 1131/1131, GrasshopperTests
-37/37, native integration 25 failed / 471 / 2 skipped - the `76f6f22` baseline, identical failures and messages).
+`0f060ff`, `b837165` (revision 3b, see "Revision 3b"), `695e814` (revision 3c, see "Revision 3c"). **Tested content:
+`695e814`** (unit 1133/1133, GrasshopperTests 38/38, native integration 24 failed / 472 / 2 skipped - the `b837165`
+failures less WorkflowParity Revit-home, now passing; every output change classified in "Revision 3c" item 5).
 Not pushed, no PR. **Draft PR: ready to open on owner approval. Merge: NO-GO** (open items in "Handover"). Step 1 of the Softhouse "Dining 1"
 stage investigation (owner, 2026-10-26: SAM_OCCT Extend3D first, the SAM extraction fix as a separate PR). Revision 2
 answers the independent review of 2026-10-26 (`SAM-BIM/.review-extend3d-revision2-20261026/REVIEW.md`, machine-local:
@@ -55,11 +56,15 @@ geometry justifies, it is never the evidence.
      wall's line (no overshoot fin). A stretch without a crossing wall is an intentional set-back or void and is clipped
      whatever `MaxExtension` is (review finding 2). The lateral extend (`ExtendWalls`) does not see such a gap: it reads
      the merged wall's whole plan extent.
-   - Only the extension is clipped: the original face is united back whole. Each clip reports
-     `SAM_OCCT_EXTEND3D_LEVEL_CLIP` (area, levels, extent); census `LevelClipCount`.
+   - Only the extension is clipped: since revision 3c (`695e814`) the clipped face is the extended face cut by the
+     removed extension pieces (a local cut); before, the original face was united back whole with the kept extension
+     pieces, which could re-open a tolerance-wide crack (revision 3c item 2). A clip that would lose original
+     material is not made. Each clip reports `SAM_OCCT_EXTEND3D_LEVEL_CLIP` (area, levels, extent); census
+     `LevelClipCount`.
 
-Plain rectangles never have free columns (fast path unchanged). No public API, parameter, default, Grasshopper component
-or native change. `SolverReportFormat.cs`: doc comment only.
+Plain rectangles never have free columns (fast path unchanged). No public API, parameter, default or native change.
+Grasshopper: no GUID or parameter change; minor version bumps for the changed computed result (revision 3c item 4).
+`SolverReportFormat.cs`: doc comment only.
 
 ## Revision 3 (2026-10-26; answers `SAM-BIM/.review-extend3d-opus-plan-20261026/REVIEW.md`, machine-local)
 
@@ -282,7 +287,153 @@ B's naked set, the resolve is sensitive to that collinear vertex and a managed m
 from the clipped face in `ClipBeyondLevels`) can be tested; otherwise D = B with only the clip's two corners applied.
 No reach exemption, no golden re-pin (owner decision 2026-10-26).
 
-## Review findings (status at `b837165`)
+*Corrected in revision 3c:* `STAGE=resolve` runs the whole `Panel3DSnapSolver.Execute` after conditioning (healing,
+GapFill, `FinalizeAndValidate` with its consolidation rebuild), so these A/B runs do not isolate General Fuse. The
+stage trace (below) shows General Fuse / MakerVolume give the same cells for A and B; the first divergence is the
+intermediate sewing-based naked-edge measure.
+
+## Revision 3c (2026-10-26; answers `SAM-BIM/.review-extend3d-opus-plan-20261026/REVISION3B-REVIEW.md`, machine-local)
+
+The review of `b837165` (draft PR suitable; merge blocked) found: the #20 cause not isolated to the native resolve
+(finding 1), Workflow B 18 -> 8 not reconciled room by room (finding 2), and the component versions not bumped
+(finding 3). The owner's task (`REVISION3B-NEXT.md`) authorised bounded native probes, a demonstrated generic correction
+and the minor bumps. One code commit, `695e814`.
+
+**1. #20 on the Solve3D path: first divergence = the intermediate sewing measure, not General Fuse**
+(`evidence/2026-10-26-r3b/clip20-trace/`). An isolated instrumented export of `b837165` (`C:\Users\michal\AppData\Local\Temp\r3bv\instr`,
+hooks in `tools-2026-10-26-r3b/instrumentation/StageDump.cs` + `hooks-on-b837165.patch`, runner `scripts/trace20.sh`) dumps every
+stage of `Panel3DSnapSolver.Execute` for A (`ce8e45d` #20, clipped), B (`639ef12` #20) and C (A with #20's collinear
+vertex removed):
+
+| stage (`dump-<X>/`) | A | B | C |
+| --- | --- | --- | --- |
+| R1 input / R2 pre-merge | 41 / 41 | 41 / 41 | 41 / 41 |
+| R3 MakerVolume (General Fuse) cells, faces | 18, 166 | 18, 166 - same volumes (1e-6 m3); vertex-equal except #20's corner (x -2.865, +/-1 vertex, 0.05 m: the intended clip) and <= 6e-7 m jitter / loop start | = A |
+| R4 post-merge / R5 sew | 145 / not adopted | 145 / not adopted, equal | = A |
+| **R6 intermediate naked edges** (`Query.Validate`, sew 0.01, of the flattened cell faces) | **45** (6 wires) | **44** (7 wires), on different walls | 45 |
+| H2 GapFill patches -> F1 appended | 17 -> 162 | 16 -> 161 | = A |
+| F2 consolidation rebuild (adopted) cells, faces | 18, 194 | 18, 188 | = A |
+| F3 final naked (integration measure) | 9 | 6 | 9 |
+
+The R6 measure is **presentation-dependent on the same geometry** (`validate-*.txt`, the R5 face set re-validated as
+given / in reverse face order / every loop started one vertex later): A 45 / 48 / 40, B 44 / 68 / 40. C is
+geometry-equivalent to A (#20's vertex 4.4e-16 m off the line of its neighbours, area and plane identical, the other 40
+faces serialised identically - `variant-C.txt`) and gives A's result at every stage: the collinear vertex is not the
+cause, and no collinear cleanup was added. **Cause:** manifold sewing of a non-manifold cell-complex face soup (every
+partition listed once per cell) used as the naked-edge measure; its result depends on face order and loop start, and
+GapFill and the consolidation rebuild act on it, so a remote change of #20's far corner moves the final naked set.
+Correction needs a topology-based free-edge measure (edges with one face in the MakerVolume result) - native/solver
+architecture, outside this branch; bounded proposal under "Handover".
+
+**2. Workflow B (Clean3D -> Extend3D -> `Create.AdjacencyCluster`) 18 -> 8 reconciled** (`evidence/2026-10-26-r3b/workflowB/`).
+One saved Clean3D output of AdjacencyCluster-home (`clean.json`) extended by the `ce8e45d`, `b837165` (`dll-wip`) and
+`695e814` (`dll-fix`) solvers, then built natively with the same code (`Probe.cs build`, as given and in reverse panel
+order). The `ce8e45d` and `b837165` extended sets differ **only in #20** (stub 0.675 m2 removed, plus #20's topology):
+
+| extended set (same Clean3D input) | cells as given / reversed | cells lost against `ce8e45d` |
+| --- | --- | --- |
+| `ce8e45d` (no clip - the false failure) | 18 / 18 | - |
+| `b837165` (clip made by re-union) | **8** / 8 | the 10 cells bounded by #20 (y 4.8): ground 136.320, 13.883, 12.437, 65.280 m3; first floor 78.507, 27.354, 75.692, 32.837, 73.633, 9.148 m3 |
+| `b837165`, #20 with the slit removed | 17 | 9.148 m3 (x 6.036..8.135, z 3..6.035) |
+| `b837165`, #20 with slit and seam hole removed | 18 | none |
+| `b837165`, #20 with only the seam hole removed | 8 | as `b837165` |
+| `ce8e45d`, #20 seam hole removed | 18 | none |
+| **`695e814`** (local cut) | **18 / 18** | none; equal to `ce8e45d` except two ground-cell tops 3.000001 -> 3 m (x 6.036..8.135 and 8.135..11.535) |
+
+Mechanism: the clip's "original" for #20 is the wall after its top extend; it carries a 1 um crack down from its top at
+x 6.036 (to z 3.000001) and a 1 um seam hole (the jagged 1 um storey line Clean3D's merge leaves), while the bottom
+extend's own outline has neither. `b837165` re-assembled the kept face as Union(original, kept additions), which
+brought the crack and the hole back into the clipped wall (`face20-extended-wip.txt`: the slit vertices
+(6.036155|6.036156, 4.8, 3.000001..4.377943) and a `HOLE3D`), and the native build lost every room bounded by #20.
+`face20-extended-fix.txt` (`695e814`): one loop, 16 vertices, no hole, no slit, area 64.083703 m2. The stub removal itself
+loses no enclosure (removing only the stub, without the crack, builds 18): the removed material is invented, as
+intended.
+
+**3. Correction (`695e814`, `SnappedPanel.ClipBeyondLevels`).** The clipped face is the extended face minus the removed
+(non-sliver) extension pieces - a local cut where the extension is removed - and is no longer re-assembled from the
+original and the kept extension pieces. The wall is the largest resulting piece; other non-sliver pieces are reported
+as dropped (Warning, as before); lost original material, invalid faces and the `removed` sliver gate are unchanged
+(`removed` now excludes slivers before the cut, as the gate already judged them). A separate sliver-hole remover was
+tried and withdrawn: SAM already drops such holes in both constructions (that mutation was not detectable).
+Acceptance criteria: (a) the clipped face has no crack or seam hole that the extended face does not have; (b) Workflow
+B on AdjacencyCluster-home builds 18 cells as given and reversed, equal to the pre-clip build within 1e-6 m; (c) the
+invented stub stays removed (`LEVEL_CLIP` 0.675 m2, unchanged); (d) an opening wider than the tolerance is kept;
+(e) no fixture-specific branch. Tests: `ClipBeyondLevels_AdjacencyClusterHomeNorthWall_CutsOnlyTheStubWithoutCrackOrSliverHole`
+(the captured real inputs of #20's clip; fails at `b837165` - `evidence/2026-10-26-r3b/runs/before-b837165-clipface.txt`) and
+`ClipBeyondLevels_OpeningWiderThanTheTolerance_IsKept`.
+
+**Managed impact** (`evidence/2026-10-26-r3b/fixtures-cond-fix/`: conditioning of the 8 fixtures, `cmp-*.txt` and the
+boundary-distance comparison `facecmp-2ab5316-vs-fix.txt` against the `2ab5316` dumps; Softhouse Extend3D alone on
+the saved Clean3D output, `facecmp-softhouse-wip-vs-fix.txt` against `b837165`). Clip diagnostics identical in every
+fixture (12 clips, 0 failed) and in Softhouse (327 lines, 15 clips). Clean faces identical in all 8 fixtures. Every
+changed panel is a clipped panel; no unclipped panel changed:
+
+| input | changed / clipped panels | classification |
+| --- | --- | --- |
+| AdjacencyCluster-home | 1 / 1 (#20) | loop start only (same vertices, same order) |
+| Revit-home | 2 / 2 | #4 loop start only; #20 far (bottom) edge 1e-6 m inwards (z -0.529999 -> -0.529998), area -1.4e-5 m2 |
+| two-level-tilted (0.21) | 1 / 1 (#180) | 2 collinear seam vertices gone (the original/extension junction at the level), far edge 1e-6 m inwards, area -7.6e-6 m2 |
+| whole-level-towers | 7 / 7 | #105, #106, #139 loop start only; #142 2 collinear seam vertices gone (same boundary); #97, #112 2 seam vertices gone + far edge 1e-6 m inwards (area -6.6e-6 m2); #135 4 seam vertices gone, 2 vertices 2.6e-7 m |
+| other 4 fixtures | 0 / 0 | identical |
+| Softhouse Extend3D | 12 / 14 | 11 loop start only; #77 one collinear vertex added on an existing edge (same boundary) |
+
+The seam vertices are where the old union joined the original and a kept extension; the far-edge moves are the
+extended face's own edge (the cut keeps every edge of the extended face other than the cut, as an unclipped wall
+does), which lies within the 1e-6 m distance tolerance of the original's. Maximum boundary distance 1e-6 m. Nothing
+non-local beyond that tolerance.
+
+**4. Grasshopper versioning** (GH_COMPONENT_STANDARDS GH-F2/H2: a computed-result change is behavioural -> minor):
+`SAMOCCT.Extend3D` 0.10.0 -> **0.11.0**, `SAMOCCT.Solve3D` 0.7.1 -> **0.8.0**, `SAMOCCT.AutoTune3D` (Discover) 0.4.0 ->
+**0.5.0**, `SAMOCCT.AutoTune3D` (legacy) 0.1.0 -> **0.2.0** (both AutoTune solvers run the managed extend/clip in their
+trials). GUIDs, names, parameters, order, access and defaults unchanged (`GHComponentContractTests`,
+`Extend3DLevelClipDiagnosticsTests`). Manifest: SAM_OCCT has no approved `design/grasshopper-icons/param_contract.json`
+(the standard's validation applies only where one exists), so there is no manifest to regenerate; the icon manifests
+(`manifest.csv|json`) carry no version. `param_contract.py` was not run (no Python on this machine).
+
+**5. Final checks on `695e814`** (one run each; `evidence/2026-10-26-r3c/runs/`). Built from the clean `695e814` checkout
+with `--no-incremental` through `safebuild.sh` (APPDATA/USERPROFILE redirected; `%APPDATA%\SAM` still the 06:55
+deployment, not updated); tests with the real APPDATA and `--no-build`. Solver DLL SHA256: integration/`build`
+`A089A655...`, unit bin `2CC2A208...`, Grasshopper bin `D3A731CC...` (`hashes-695e814.txt`, `integ-695e814.head`; builds
+are not deterministic). The integration suite was the only OCCT process; an unrelated SAM_OpenStudio test host of
+another workspace ran at the same time (timing only).
+- Unit **1133 / 1133** (b837165: 1131; +2 new tests, no other identity or outcome change). GrasshopperTests **38 / 38**
+  (37; `AutoTune3D_Legacy_Version_Is010` -> `_Is020`, + `AutoTune3D_Discover_Version_Is050`).
+- Native integration **24 failed / 472 passed / 2 skipped** of 498, 19 m 25 s (b837165: 25 / 471 / 2). Same 498
+  identities. One outcome change: `WorkflowParity_AllWorkflows_ObservedAcrossAllFixtures(Revit-home-panels)` **now
+  passes**. Failure messages identical (`integ-695e814.msg.txt` vs `msg-b837165.txt`) except two golden actuals:
+  two-level-tilted managed 0.21 cells 17 -> **16** (pinned 9; base `22e4fd0` 16) and whole-level-towers managed
+  23 -> **22** (pinned 21).
+
+Captured output, masked (`stdout-b837165-vs-695e814.diff`): 16 tests differ, all passing except the two goldens:
+
+| test | change | classification |
+| --- | --- | --- |
+| WorkflowParity AdjacencyCluster-home | workflow B **8 -> 18 spaces** (56 -> 112 panels, 13 -> 49 adjacencies) - the `76f6f22` values; the `LEVEL_CLIP` extent of #20 now the stub only ((-3.09, -0.05)-(-2.865, 2.95) instead of up to (8.135, 3)); new Info `HOLE_DROPPED: 1 of 1` on #20 | **intended** (item 2); the dropped opening is #20's 1e-6 m x 2.1 m seam sliver, carried silently by the old union |
+| same test, workflow A (Solve3D) | still 18 cells / 9 naked; 211 -> 195 resolved panels, 17 -> 13 air panels, consolidation alternative 20 -> 56 naked; A-old 130 -> 125 panels, parity WARN (192/194) -> clean (182/182); A-matched 16 spaces, parity 168/170 -> 159/159 | presentation: the only conditioning change is #20's loop start; resolve-only on the two saved face sets, same build: 194 vs 182 output faces, 18 cells / 601.301 m3 / 9 naked both (`presentation/res-ach-*`) |
+| WorkflowParity Revit-home | A-matched 5 -> **7 spaces** (= the solver's 7 cells: pass); solver 51 -> 57 resolved panels, 8 -> 4 naked | presentation: resolve-only, swapping in only #4 (loop start only) reproduces the whole change (46 -> 55 faces, 9 -> 4 naked); only #20 (1e-6 m) also changes it (52, 4); 7 cells / 158.222 m3 in all four (`presentation/res-rh-*`) |
+| GoldenMaster managed whole-level-towers | sew-rebuild 23 -> 22 cells (8880.3 -> 8613.4 m3), still failing | measurement: resolve-only on the 2ab5316 vs fix faces gives the **same solver result** (24 cells, 9039.786 m3, 9 naked, 222 faces; all 222 faces pair within 4.3e-8 m, 14 with another loop start) and the golden's sew-0.01 rebuild 23 vs 22 (the 159.373 m3 cell at x 31.5..37.6 becomes part of an open shell x 31.5..46.0); swapping only the three loop-start-only faces moves the solver's naked count 9 -> 13 (`presentation/res-tw-*`, `cmp-tw-resolved.txt`) |
+| GoldenMaster managed 0.21 two-level-tilted | 17 -> 16 cells, 350 -> 416 faces (2869.7 -> 2707.7 m3), still failing | same class (only #180 changed: seam vertices, far edge 1e-6 m); not separately traced |
+| GoldenMaster managed 0.21 whole-level-towers | volume 9400.474569530 -> 9400.474569391 m3 (passes) | numerical |
+| ParameterDiscovery NineSpace / Towers | trial rows change (e.g. towers best 35 -> 36 cells, baseline naked 11 -> 21; nine-space best faces 121 -> 115; same best configurations) | presentation: nine-space conditioning at bbl 0 and 0.21 changes only loop starts and collinear vertices (8 / 1 faces, boundary distance 0, clip diagnostics identical - `ninespace/`); trial rows not separately traced |
+| ControlledWorkflow NineSpaces, GHParity MergeCoplanarFalse, EastSouthGap, NineSpaceWallCapture rotate Z 45, Towers DoubleWallGap | cell numbering swapped (same cells, volumes and matches); ControlledWorkflow 74 -> 73 rebuilt panels | order only |
+| Towers FullUserChain / BucketAlignSweep | a cell centre 1e-6 m | numerical |
+
+**Conclusion.** Every managed change of `695e814` is confined to clipped faces and is geometry-neutral there (loop
+start, collinear vertices, <= 1e-6 m), apart from #20 on the Extend3D path, where the crack is removed as intended. The
+native-measured swings elsewhere - both directions: Revit-home parity now passes, AdjacencyCluster-home parity clean,
+towers baseline naked 11 -> 21 - follow from the solver's dependence on face presentation (item 1), shown directly on
+AdjacencyCluster-home, Revit-home and towers. They are not caused by geometry this branch changes, and they are not
+repaired here. No golden re-pin.
+
+## Review findings (status at `695e814`)
+
+Review of revision 3b (`.review-extend3d-opus-plan-20261026/REVISION3B-REVIEW.md`):
+
+| id | finding | status | evidence |
+| --- | --- | --- | --- |
+| 3b-R1 | #20 cause not isolated to the native resolve (A/B ran healing, GapFill and the consolidation rebuild) | **corrected**: stage trace; General Fuse / MakerVolume equal for A and B; first divergence = the intermediate sewing naked-edge measure, presentation-dependent on the same geometry; collinear vertex excluded (variant C). The order-dependent measure itself is **open** (native/solver proposal) | "Revision 3c" item 1 |
+| 3b-R2 | Workflow B 18 -> 8 not reconciled | **reconciled and fixed** `695e814`: the clip's re-union re-opened a 1 um crack in #20; local cut -> 18 cells, equal to the pre-clip build within 1e-6 m; regression on the captured real inputs | items 2, 3 |
+| 3b-R3 | component versions not bumped | **done** `695e814`: Extend3D 0.11.0, Solve3D 0.8.0, AutoTune3D Discover 0.5.0, AutoTune3D 0.2.0; GUIDs/parameters kept; no approved `param_contract.json` in SAM_OCCT | item 4 |
 
 Revision-3b review (`.review-extend3d-revision2b-20261026`):
 
@@ -300,7 +451,7 @@ Revision-3 review (opus plan), status as committed at `2ab5316`, updated where r
 
 | id | finding | status | evidence |
 | --- | --- | --- | --- |
-| M1 | clip #20's effect is remote (naked ribbon x 3.6..11.5 on #20, first-floor cells missing/merged) | managed side localised (#20 changes only inside the clip region); **located in the native resolve** by the two resolve-only runs (only #20 swapped: naked 9 <-> 6, rebuild 16 <-> 13 cells; solver cells identical); why the kernel reacts remotely is **open** - next probe (collinear vertex) needs owner authorisation | "Revision 3b", "Clip #20 (review M1)" |
+| M1 | clip #20's effect is remote (naked ribbon x 3.6..11.5 on #20, first-floor cells missing/merged) | managed side localised (#20 changes only inside the clip region); revision 3c: not General Fuse - the solver's intermediate sewing naked-edge measure (order/loop-start dependent) diverges first, GapFill and the rebuild follow; collinear vertex excluded. Measure **open** (bounded native proposal) | "Revision 3c" item 1 |
 | M2 | junction/alignment evidence from the crossing wall's whole extent | **fixed** `33ea9bb`, 18 regressions (5 fail before) | table above |
 | M3 a-d | record errors (ambiguous rooms, reference volumes, Bed 11, M1 location) | **corrected** in this record | "Corrected diagnostics", item 4 |
 | L1 | no containment; crash regression not shown to reproduce | **reproduced** on the real input (3-opening ground slab, not the 7-opening one); real-geometry regression fails at `696dce0`; exceptions propagate (policy kept, no catch-and-skip); non-exception clip failures reported - since `0f060ff` as an Error (dropped piece: Warning) | "L1 reproduction", "Revision 3b" |
@@ -327,6 +478,11 @@ Revision-3 review (opus plan), status as committed at `2ab5316`, updated where r
   every detail level with the runtime messages, risk line); new `Testing/SAM.OCCT.GrasshopperTests/Extend3DLevelClipDiagnosticsTests.cs`
   (4: Extend3D GUID/version/outputs unchanged, failed clip an Error message at each detail level). Unit suite 1131 / 1131,
   GrasshopperTests 37 / 37 at `b837165`.
+- Revision 3c (`695e814`): `ExtendIntermediateCapTests.cs` + 2 (`ClipBeyondLevels_AdjacencyClusterHomeNorthWall_CutsOnlyTheStubWithoutCrackOrSliverHole`
+  on #20's captured clip inputs - fails at `b837165`; `ClipBeyondLevels_OpeningWiderThanTheTolerance_IsKept`);
+  GrasshopperTests: version assertions 0.11.0 / 0.8.0, `AutoTune3D_Legacy_Version_Is010` renamed `..._Is020`, new
+  `AutoTune3D_Discover_Version_Is050`; the diagnostics contract comments updated. Unit suite 1133 / 1133,
+  GrasshopperTests 38 / 38.
 
 ## Validation (local, machine `michal`; identical conditions; base = `SAM_OCCT-wt-extend3d-base` at `22e4fd0` + new tests)
 
@@ -340,8 +496,8 @@ dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj -c Debug --no-b
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj -c Debug --no-build
 ```
 
-Tested content: `696dce0` (table below), `76f6f22` (code = `ce8e45d`; identical results, see "Re-run on `76f6f22`") and
-**`b837165`** (revision 3b, "Re-run on `b837165`" below). Revision 3 (`2ab5316`) was validated managed-only; its
+Tested content: `696dce0` (table below), `76f6f22` (code = `ce8e45d`; identical results, see "Re-run on `76f6f22`"),
+`b837165` (revision 3b, "Re-run on `b837165`" below) and **`695e814`** (revision 3c, "Revision 3c" item 5). Revision 3 (`2ab5316`) was validated managed-only; its
 statement that the conditioned faces of every fixture equal `ce8e45d` holds for the Solve3D conditioning stage only - on
 the Clean3D -> Extend3D path AdjacencyCluster-home differs (#20, below).
 
@@ -399,7 +555,7 @@ removes the same #20 stub the Solve3D path has removed since revision 2, and the
 to the open #20 item. The two skips are the native-missing and sew-guard tests, as before. No other test's output
 changed (all other `[extend]` lines of the parity fixtures identical). The 25 failures are therefore the baseline
 explained in the table above (revision 2 column), value for value: those not listed there fail as at base `22e4fd0`;
-AdjacencyCluster-home naked 9 (#20, located in the native resolve - "Revision 3b"); Revit-home solver cells 7 (trace
+AdjacencyCluster-home naked 9 (#20; revision 3c: the solver's intermediate sewing measure, not General Fuse); Revit-home solver cells 7 (trace
 item 2); the towers / two-level-tilted managed goldens (duplicate-face
 rebuild measurement, parked; no re-baseline); the NineSpaceWallCapture West2/West3 deltas (< 0.005 m3, pre-existing
 failure reason). None is repaired or re-pinned here.
@@ -562,9 +718,12 @@ the solver's output faces with the measurement options (`Create.Shells`, sew 0.0
    11.535 (73.63 m3), are missing (`ach-fix1.txt` vs `ach-fix.txt`); in the duplicate-free rebuild the first-floor cells
    75.69 + 32.85 m3 merge into 108.53 m3 (`dd-fix1.txt` vs `dd-fix.txt`): a change of first-floor room identity. The
    managed conditioning does not explain it - #20 changes only inside the clip region and every other conditioned face is
-   bit-identical (revision 3, "Clip #20"); the remote change arises in the native resolve (revision 3b: resolve-only on
-   the saved faces with only #20 swapped reproduces 9 <-> 6 naked and the rebuilt cells exactly). Whether the stub is an
-   intended overhang (keep the clip) or a modelling gap to close needs the owner's call; no reach exemption was added.
+   bit-identical (revision 3, "Clip #20"); the remote change arises after conditioning (revision 3b: resolve-only on
+   the saved faces with only #20 swapped reproduces 9 <-> 6 naked and the rebuilt cells exactly) - revision 3c locates
+   it in the solver's intermediate sewing naked-edge measure, not General Fuse (MakerVolume cells equal). Workflow B
+   showed the stub itself is invented material: removing it loses no enclosure once the clip no longer re-opens a crack
+   (revision 3c item 2). The clip is kept (the owner's provisional decision, now supported by that evidence); no reach
+   exemption was added.
 
 So the golden-master, plane-target and parity counts on these fixtures measure the rebuild of an output with coincident
 duplicates, not Extend3D's geometry alone; no re-baseline is proposed on them.
@@ -678,64 +837,118 @@ sh $H/tools-2026-10-26-r3/scripts/stage.sh $E/fixtures-cond-wip <build> x 0 cond
 dotnet run --project $E/run-review-wip/Review.csproj --no-build ; dotnet run --project $E/run-probe-wip/Probe.csproj --no-build
 ```
 
-## Handover (2026-10-26, revision 3b; machine `michal`)
+### Revision 3c evidence and commands
+
+Machine-local; copy before switching machines. `E` = `evidence/2026-10-26-r3b` (investigation and managed impact),
+`F` = `evidence/2026-10-26-r3c` (final suites).
+- `$E/clip20-trace/`: `dump-A|B|C/` (stages R1..F3 as in the table of "Revision 3c" item 1), `res-A|B|C` (+ `.rebuild`,
+  `.resolved.json`), `cmp-AB-r3.txt`, `cmp-AB-r5.txt`, `validate-<A|B>-<same|reverse|rotate>.txt`, `cond-C.faces.json`,
+  `variant-C.txt`; instrumented DLLs `$E/dll-instr/`, `$E/dll-instr-chain/`.
+- `$E/workflowB/`: `clean.json` (saved Clean3D output), `extended-<ce8e45d|wip|fix|wip-noslit|wip-noslit-nohole|wip-nohole|ce8e45d-nohole>.json`,
+  `build-<set>-<same|reverse>.txt` (native build: cells, volumes, boxes), `face20-*.txt`, `clipdump/` (the clip inputs of
+  every clipped panel, source of the regression's captured #20 inputs), `diffpanel.txt`, `variant-noslit.txt`;
+  DLL sets `$E/dll-wip/` (`b837165` code), `$E/dll-fix/` (`695e814` code, solver `CC625E1C...`).
+- `$E/fixtures-cond-fix/`: conditioning dumps of the 8 fixtures and Softhouse `ext3d-fix.*` on the `695e814` code,
+  `cmp-*.txt`, `summary.txt`, `facecmp-2ab5316-vs-fix.txt`, `facecmp-softhouse-wip-vs-fix.txt` (`$E/harness/Probe.cs`
+  `facecmp` mode, added in revision 3c; `Probe.cs.before-facecmp` is the previous copy).
+- `$E/runs/before-b837165-clipface.txt`: the new regression against the `b837165` solver (`$E/before-run-b837165/`).
+- `$F/runs/`: `hashes-695e814.txt`, `unit-695e814.trx|log`, `gh-695e814.trx|log`, `integ-695e814.trx|log|head`,
+  `integ-695e814.msg.txt|nonpass.txt` (`msgs.sh`), masked per-test output `integ-<76f6f22|b837165|695e814>.out.txt` and
+  `stdout-b837165-vs-695e814.diff`, build logs `rebuild-*.log`.
+- `$F/presentation/`: resolve-only controls on the fix build (`res-ach-<2ab5316faces|fixfaces>`, `res-rh-<2ab5316faces|fixfaces|swap4|swap20>`,
+  `res-tw-<2ab5316faces|fixfaces|swap-orderonly>` with `.rebuild` and `.resolved.json`), `cmp-tw-resolved.txt`,
+  `facecmp-tw-resolved.txt`. `$F/ninespace/`: conditioning of `ControlledWorkflow/Panels-9SpacesModel.sam` at bbl 0 and
+  0.21 with `dll-wip` (`b837165`) and the fix build, `facecmp-ns-*.txt`.
+
+Masked output: per test of the `.trx`, the captured output with GUIDs, `h:mm:ss` and `<n> ms|s` timings and temporary
+file names masked, lines sorted within each test, tests by name, run-level output last (inline PowerShell, text in
+`$F/tools/trxout.ps1`). Checked on the earlier pair: `76f6f22` vs `b837165` gives only the known WorkflowParity
+AdjacencyCluster-home workflow B lines.
+
+```sh
+# trace (isolated instrumented export of b837165; StageDump hooks): A, B, C; then the presentation variants of R5
+sh $H/tools-2026-10-26-r3b/scripts/trace20.sh $E/clip20-trace
+dotnet $E/run-probe-instr/bin/Debug/net8.0/Probe.dll validate $E/clip20-trace/dump-A/07-R5-after-sew.json <same|reverse|rotate>
+# Workflow B: Extend3D on the saved Clean3D output with a DLL set (CHAIN_CLEAN reads it, CHAIN_SAVE writes the extended
+# panels), then the native build exactly as WorkflowParity's workflow B (as given / reversed)
+CHAIN_CLEAN=$E/workflowB/clean.json CHAIN_SAVE=$E/workflowB/extended-fix.json dotnet $E/run-probe-fix/bin/Debug/net8.0/Probe.dll chain AdjacencyCluster-home.sam
+dotnet $E/run-probe-fix/bin/Debug/net8.0/Probe.dll build $E/workflowB/extended-fix.json <same|reverse>
+# managed impact
+dotnet $E/run-probe-fix/bin/Debug/net8.0/Probe.dll facecmp <a.faces.json> <b.faces.json> faces
+dotnet $E/run-probe-fix/bin/Debug/net8.0/Probe.dll facecmp <a.panels_extended.json> <b.panels_extended.json> panels
+# presentation controls: resolve-only of saved conditioned faces, optionally with single faces swapped in from the other set
+sh $H/tools-2026-10-26-r3b/scripts/stage.sh $F/presentation fix Revit-home-panels.sam 0 resolve res-rh-swap4 FACES=<2ab5316 faces.json> SWAP="<fix faces.json>|4"
+sh $H/tools-2026-10-26-r3b/scripts/stage.sh $F/presentation fix whole-level-towers.sam 0 resolve res-tw-fixfaces FACES=<fix faces.json> REBUILD=1
+# final suites at 695e814 (as revision 3b, --no-incremental builds through safebuild.sh)
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj -c Debug --no-build --logger "trx;LogFileName=$F/runs/integ-695e814.trx"
+sh $H/tools-2026-10-26-r3b/scripts/msgs.sh $F/runs/integ-695e814.log $F/runs/integ-695e814
+```
+
+## Handover (2026-10-26, revision 3c; machine `michal`)
 
 **State.** Everything is local; nothing is pushed, no PR exists, nothing is merged.
 
 | repository / worktree | branch | commit | working tree |
 | --- | --- | --- | --- |
-| `SAM_OCCT-wt-extend3d` (this record) | `fix/extend3d-no-invented-walls-q4` (upstream `origin/sow/2026-Q4`, not pushed) | record commit on `b837165`; **tested content `b837165`** | clean after the commit |
+| `SAM_OCCT-wt-extend3d` (this record) | `fix/extend3d-no-invented-walls-q4` (upstream `origin/sow/2026-Q4`, not pushed) | record commit on `695e814`; **tested content `695e814`** | clean after the commit |
 | `SAM_OCCT-wt-extend3d-base` / `-fix1` (comparison only) | detached | `22e4fd0` + untracked rev-1 tests / `639ef12` | do not commit |
 | duplicate-faces worktree | `fix/solver-output-duplicate-faces-q4` | `3ff5f4b` | **parked** - untouched |
 | `SAM-wt-junctions` (SAM side) | `fix/panels-by-solids-junctions-q4` | `fe5bbce4` (= SAM `sow/2026-Q4`) | clean, empty branch |
 
 Branch commits on `22e4fd0`: `639ef12` (rev 1), `1408b93`, `696dce0` (rev 2), `dc8f9df`, `ce8e45d`, `76f6f22`, `7ab06e8`,
 `bdde7c6` (records except `ce8e45d`), `33ea9bb` (M2), `5600f90` (L1/L2 reporting), `2ab5316` (L2 area threshold),
-`2986ad5` (L2 per piece), `0f060ff` (L1 severity), `b837165` (AtBase/AtTop reach) and this record commit (which also
-carries the revision-3 record text that had not been committed).
+`2986ad5` (L2 per piece), `0f060ff` (L1 severity), `b837165` (AtBase/AtTop reach), `59ad662` (record), `695e814`
+(revision 3c: local-cut clip, minor version bumps; its subject still says "WIP" - the content is final and tested; the
+message was not rewritten) and this record commit.
 
-**Results at `b837165`.** Unit 1131/1131; GrasshopperTests 37/37; native integration 25 failed / 471 / 2 skipped - the
-`76f6f22` baseline with identical identities, outcomes and messages; one passing test's output changed (WorkflowParity
-AdjacencyCluster-home workflow B 18 -> 8 spaces: #20 on the Extend3D path, from `2ab5316`). Failing before / passing
-after on the `2ab5316` DLLs; five mutations detected; review harness identical to `2ab5316` except the intended L2 line;
-fixture conditioning identical to `2ab5316`; Softhouse Extend3D identical except a 1e-6 m vertex (change 3). #20 located
-in the native resolve. Not run: hosted CI (nothing pushed), the Softhouse chain or any building simulation (excluded), an
-interactive Grasshopper canvas (headless contract and reporter tests only). **The full Softhouse rebuild is not done.**
+**Results at `695e814`.** Unit 1133/1133; GrasshopperTests 38/38; native integration 24 failed / 472 / 2 skipped (the
+`b837165` failures less WorkflowParity Revit-home, now passing). WorkflowParity AdjacencyCluster-home workflow B back to
+18 spaces. Managed changes confined to clipped faces and geometry-neutral there; the native-measured swings elsewhere
+are the solver's presentation dependence, shown by resolve-only controls ("Revision 3c" item 5). Not run: hosted CI
+(nothing pushed), the Softhouse chain or any building simulation (excluded), an interactive Grasshopper canvas (headless
+contract and reporter tests only; `%APPDATA%\SAM` still holds the 06:55 deployment, so Grasshopper does not load this
+code until it is redeployed). **The full Softhouse rebuild is not done.**
 
 **Assumptions.** As before for the Softhouse diagnostics (sampling grids, 80 % share, leak rays, chain settings). The L2
 retention argument assumes Extend's own fill (each column filled from the target to the wall); it is also why no input
 through the component reaches a failed clip. The AtBase/AtTop reach is conservative (the crossing's own exceptions are
-not followed).
+not followed). The two-level-tilted golden and the ParameterDiscovery trial rows are attributed to the shown
+presentation dependence without a trace of their own.
 
 **Unresolved / blockers (owner).**
-1. **#20**: located in the native resolve, mechanism unexplained (next probe: the collinear vertex, "Clip #20 (review
-   M1)"); its disposition (keep the clip, or treat the stub as a modelling gap) stays the owner's call - it now also sets
-   WorkflowParity's workflow B on AdjacencyCluster-home (8 spaces). No reach exemption, no golden re-pin.
-2. Goldens: towers / two-level-tilted managed (duplicate-face rebuild measurement; parked branch untouched, no
-   re-baseline); NineSpace West2/West3 deltas (pre-existing reason). Disposition needed before merge.
-3. Grasshopper versioning: `SAMOCCT.Extend3D` (0.10.0) and `SAMOCCT.Solve3D` (0.7.1) now compute different panels on
-   inputs with merged multi-storey walls (since revision 1) and Extend3D raises new runtime messages; no parameter or
-   GUID changed and no version was bumped. GH_COMPONENT_STANDARDS GH-F2 classes a computed-result change as behavioural
-   (minor/major, chosen with the reviewing owner) - owner decision.
-4. Pre-existing, tracked separately ("Separate"): split-piece opening loss at a junction; `GetBaseSegment` for tilted
+1. **Presentation-dependent naked-edge measure in the solver** (the remaining #20 item): the intermediate sewing
+   `Validate` of the flattened cell faces (ResolveStage) and the measurements built on it (GapFill, the consolidation
+   rebuild choice, the goldens' sew-0.01 rebuild) give different answers for the same geometry in another face order or
+   loop start (A 45 / 48 / 40, B 44 / 68 / 40). **Bounded proposal** (separate solver/native task, not this branch):
+   count free edges topologically from the MakerVolume result - an edge is naked when it bounds exactly one face of the
+   cell complex (native `TopExp::MapShapesAndAncestors` over the result's edges and faces; no sewing) - and use that
+   count in `ResolveStage`, `GapFill` candidate selection and the consolidation choice; acceptance: the A/B/C sets and
+   their reverse/rotate variants give one answer each; the A/B naked sets agree away from #20's corner; the integration
+   suite's `Solve3D` outputs become invariant to loop start (the `presentation/` controls). Until then, cell counts from
+   a sew-based rebuild are not evidence of a geometry change.
+2. Goldens: towers / two-level-tilted managed (sew-rebuild measurement of an output with duplicates; now 22 and 16;
+   parked branch untouched, no re-baseline); NineSpace West2/West3 deltas (pre-existing reason). Disposition needed
+   before merge.
+3. Pre-existing, tracked separately ("Separate"): split-piece opening loss at a junction; `GetBaseSegment` for tilted
    walls taller than long; AutoTune3D surfaces no per-panel extend lines; Extend3D drops the Clean3D slab openings
    without `HOLE_DROPPED`; SAM multi-face `Difference` null ambiguity (SAM side); L3 native stage of the saved Softhouse
    run untied.
-5. Before merge: hosted CI green at the final PR head, every review finding resolved or accepted, owner/code-owner
-   approval, codex-bot comment check.
+4. Before merge: hosted CI green at the final PR head, every review finding resolved or accepted, owner/code-owner
+   approval, codex-bot comment check. The GH manifest check of the standard does not apply (no approved
+   `param_contract.json` in SAM_OCCT); a reviewer reads the four version bumps in the diff.
 
-**Decisions (owner, 2026-10-26).** Duplicate-faces branch parked. Clip #20 kept open provisionally, no reach exemption.
-No golden re-baseline. No push, PR or merge without owner approval. Revision 3b: final local validation authorised by
-the owner's task (managed, Grasshopper, two #20 resolve-only runs, one native suite); no Softhouse chain.
+**Decisions (owner, 2026-10-26).** Duplicate-faces branch parked. Clip #20 kept, no reach exemption (Workflow B shows the
+stub is invented material). No golden re-baseline. No push, PR or merge without owner approval. Revision 3c: bounded
+native probes, the demonstrated correction, minor component bumps and one final managed/GH/native check authorised by
+the owner's task (`REVISION3B-NEXT.md`); no Softhouse chain.
 
 ## Next step (recommended; not started)
 
 1. **Owner: approve opening the draft PR** into `sow/2026-Q4` (push this branch, PR body from this record, marked "not
    ready: merge blockers listed"), then hosted CI. Recommended: this or a new session, Build mode, Claude Opus high
    effort - mechanical.
-2. **Independent review of revision 3b** (code `2ab5316..b837165` and this record) before merge. Recommended: new
-   session, Plan mode (read-only), Claude Opus high effort, the reviewer of `.review-extend3d-revision2b-20261026`, so
-   the per-piece metric, the severity path and the crossing reach get a reader not anchored on this session. Evidence:
-   `evidence/2026-10-26-r3b`.
-3. **Owner decisions** 1-3 above; if authorised, the #20 collinear-vertex probe (one native resolve-only run, existing
-   tools). Recommended: Build mode, Claude Opus high effort.
+2. **Independent review of revision 3c** (`b837165..695e814` and this record) before merge. Recommended: new session,
+   Plan mode (read-only), Claude Opus high effort, the reviewer of `REVISION3B-REVIEW.md`, so the local cut and the
+   presentation attribution get a reader not anchored on this session. Evidence: `evidence/2026-10-26-r3b`, `-r3c`.
+3. **Owner decision** on the solver measure proposal (blocker 1) and the goldens (blocker 2). The measure work is a
+   separate task (new session, Build mode, Claude Opus high effort; native/solver change with its own PR).
