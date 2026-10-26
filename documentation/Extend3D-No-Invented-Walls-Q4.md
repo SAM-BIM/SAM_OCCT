@@ -142,15 +142,17 @@ openings. `ce8e45d` subtracts openings one at a time (unit test with two opening
 | | base `22e4fd0` | revision 1 `639ef12` | revision 2 `ce8e45d` |
 | --- | --- | --- | --- |
 | spaces / hosted apertures | 70 / 96 | 52 / 83 | 54 / 84 |
-| reference rooms alone in a space, no leak (of 70) | 48 | 42 | 43 |
-| reference rooms sharing a space / in no space | 18 / 1 | 21 / 7 | 21 / 6 |
+| v1 leak report (superseded, see "Corrected diagnostics"): rooms alone in a space, no leak / sharing / in no space | 48 / 18 / 1 | 42 / 21 / 7 | 43 / 21 / 6 |
+| **corrected (v2): reference rooms good** - clear match, space closed, volume finite and positive, alone, no leak | **48** | **45** | **46** |
+| corrected (v2): spaces closed with a valid volume | 64 of 70 | 47 of 52 | 49 of 54 |
 | naked edges of the extended panel set (same options, one build) | 134 | 177 | 178 |
 
 The 70 -> 52 change persists (70 -> 54). Material room changes, base -> revision 2 (revision 2 = revision 1 except Bed 1):
 
-- **Houses A-C ground floors** (Dining 2/3/4, Kitchen 2/3/4, Circulation 3): separate in base, one open space (volume
-  undefined, leak 2.5-15.7 %) in revisions 1 and 2. Base separated them with walls that exist only upstairs; without
-  them the masked defects show: Clean3D kink jog and extraction junction blocks (Separate). Unchanged from revision 1.
+- **Houses A-C ground floors** (Dining 2/3/4, Kitchen 2/3/4, Circulation 2/3/4 - 9 reference rooms by the corrected
+  matching): separate in base (several leaking), one open space (19 naked segments, volume undefined, leak 3.5-21.4 %)
+  in revisions 1 and 2. Base separated them with walls that exist only upstairs; without them the masked defects show:
+  Clean3D kink jog and extraction junction blocks (Separate). Unchanged from revision 1.
 - **House D** Kitchen 1 (both reference entries), Bed 2 D203, Circulation 9 D206, Bed 7 D303: in no space in revisions 1
   and 2 (base enclosed them, Kitchen 1 with 10.6/33.1 % leak). The ground-floor corner slot and the first/second-floor
   facade hole at x -6.64, y 3.179..3.827 (extraction) are open once the invented walls are gone. Unchanged from revision 1.
@@ -168,25 +170,52 @@ The 70 -> 52 change persists (70 -> 54). Material room changes, base -> revision
 Evidence: `evidence/2026-10-26-r2/softhouse/` (`base`, `fix1`, `fix`, `fix-crash`: chain/leak logs, per-room `status.tsv`,
 spaces, extended panel sets, models, naked-edge lists, `notalone.txt` per build).
 
-**Review of the per-room tables against the 70-room reference.** Base's 70 spaces are not a 1:1 result: 22 reference
-entries are not enclosed alone without leak (1 missing, 9 shared spaces, several leaking), and 10 spaces match no
-reference room (four slivers of 0.01-0.02 m3, and 2.84, 19.37, 19.53, 23 and 36.17 m3 regions, several of them pieces
-cut off by invented walls). Revision 1 -> 2 (52 -> 54): Bed 1 D204 enclosed by the crossing-wall junction (above), and
-one more 0.01 m3 sliver space (x 4.9, y -2.71, z 4.975). Revision 2's 27 entries not enclosed alone without leak:
+### Corrected diagnostics (v2, 2026-10-26; supersedes the v1 per-room review)
 
-- pre-existing in base (22): Circulation 1/2/4 with Unoccupied and Unconditioned 1/2/4 (pairs sharing 6.2 m3 spaces);
-  Kitchen 1-4 reference rooms probed again at z 3.5 falling into upper spaces (Kitchen 3/4 with Bed 5 / Dining 5); Bed 3 +
-  Circulation 10 (133.89 m3); Bed 13 + Circulation 8; Dining 1 D107 missing in base too; and the ground-floor Kitchen 1-4,
-  Circulation 3, Circulation 9 entries whose status worsened (base: alone with 10.6-13.5 % leak or shared; revision 2:
-  shared in the houses A-C ground-floor space, or missing in house D);
-- new against base (5): Dining 2/3/4 (houses A-C ground-floor space of 7 rooms, open: volume undefined, 15.6-15.7 %
-  leak), Bed 2 D203 and Bed 7 D303 (house D facade hole, first and second floor).
+The v1 leak report (`Leak.cs`) mixed four things and had two defects: it matched each reference room by one probe point
+(the floor-vertex average at mid-height, which lies outside L-shaped rooms), and it meshed panels from their outer edge
+only. v2 (`Rooms2.cs`, isolated copy; run on the saved models, no chain re-run) reports separately:
 
-Remaining missing: Dining 1 D107, Kitchen 1 D105-6 (both entries), Bed 2 D203, Circulation 9 D206, Bed 7 D303 (all house
-D). Merged and open: houses A-C ground floors (7 rooms, one space). Spaces without a reference room in revision 2: two
-0.01 m3 slivers and the 36.17 m3 region also present in base. All new losses trace to the defects the invented walls
-had masked (Clean3D kink jog, extraction junction blocks, house D corner slot and facade hole) - owned by the separate
-Clean3D and SAM extraction tasks, not addressed here.
+1. **matching** - points sampled inside each reference room's own shell (0.4 m grid, three heights; 0.15 m for small
+   rooms); the share of them in each model space; "clear" only when one space holds >= 80 % and no sample lies in two
+   spaces. Result: no ambiguous majority in any build (base: Dining 1, Bath 7, Circulation 1 split between spaces). The
+   v1 probe lay outside its own room for Circulation 1/2/3/4 D/C/B/A103 and Circulation 8 A301: v1 paired Circulation 1/2/4
+   with the 6.2 m3 "Unoccupied and Unconditioned" spaces, but their samples lie entirely in the houses A-C ground-floor
+   space (Circulation 2, 4) or in no space (Circulation 1, house D); Circulation 8's samples lie in the 36.17 m3 space v1
+   listed as matching no reference room. Flag: 13 reference rooms' own gbXML shells give no valid SAM volume (Dining
+   2/3/4, Kitchen 1-4 ground floor, Carpark 1/2, Circulation 1/9, Bed 1 D204, Bath 4 A202); their samples (84-486 each)
+   rely on point-in-shell tests on those shells.
+2. **closure** - naked segments of each model space's shell (MacroDistance).
+3. **volume** - each space's shell volume finite and positive. Closure and volume fail together: base 6, revision 1 5,
+   revision 2 5 spaces (all with volume NaN).
+4. **leakage** - rays from up to 6 samples (250 each) through the panels meshed with their internal openings. Finding:
+   the saved extended panel sets and models contain **no internal openings** (`InternalEdge2DLoops`: Clean3D output 3
+   panels, Extend3D output 0, model 0 - in base too), so v2 and v1 meshing are identical here; the Clean3D slab openings
+   (e.g. the first-floor slab's 7) are lost inside Extend3D without a `HOLE_DROPPED` diagnostic (pre-existing, not traced).
+
+**Bed 11 B304** (v1: alone, 0 % leak, in every build) is a false enclosure: its samples lie 100 % in one space, but that
+space is open (16 naked segments, 42.9 m), has no valid volume and spans x 4.92..10.73, y -2.89..4.89 (38.1 m2 floor)
+against a 13.05 m3 reference room. The rays find no leak because they meet panels inside the room's box. Same in base,
+revision 1 and 2 (pre-existing).
+
+Revision 2's 24 reference rooms not good (by reason):
+- no space (7): Dining 1 D107, Circulation 1 D103, Kitchen 1 D105-6 (ground and first floor), Bed 2 D203, Circulation 9
+  D206, Bed 7 D303 - all house D (corner slot and facade hole);
+- the open houses A-C ground-floor space (9): Dining 2/3/4, Kitchen 2/3/4, Circulation 2/3/4;
+- open spaces holding two reference rooms (4): Dining 5 A206 + Kitchen 4 A105-6 (first floor), Bed 5 B204 + Kitchen 3
+  B105-6 (first floor) - pre-existing;
+- closed space holding two rooms (2): Bed 3 C205 + Circulation 10 C206 (133.89 m3) - pre-existing;
+- open single-room spaces (2): Bed 11 B304, Bed 13 A304 - pre-existing.
+Against base: Bath 7 B302 becomes good (base split it with the invented wall at y 6.013); Bed 2 D203, Bed 7 D303 and
+Dining 4 A107 become not good (Dining 2/3 already leaked in base). Revision 1 -> 2: Bed 1 D204 becomes good. Spaces
+without a reference room in revision 2: two 0.01 m3 slivers (base: five slivers of 0.007-0.024 m3 and the 2.84, 19.37,
+19.53 and 23.0 m3 pieces). All new losses trace to the defects the invented walls had masked (Clean3D kink jog, extraction junction
+blocks, house D corner slot and facade hole) - owned by the separate Clean3D and SAM extraction tasks.
+
+Evidence: `evidence/2026-10-26-r2/softhouse-v2/<build>/` (`v2_rooms.tsv`, `v2_spaces.tsv`, `notgood.txt`, `run.log`),
+`softhouse-v2/internal-openings.txt`; inputs `softhouse/<build>/{model,panels_extended,panels_clean}.json` (unchanged);
+v1 outputs kept in `softhouse/`. Tool: `handover/tools-2026-10-26-r2/` (`scripts/rooms2.sh <savedDir> <out>`), verified to
+reproduce the v2 tables exactly.
 
 ## Where rooms change, traced (open items of revision 1)
 
@@ -251,9 +280,64 @@ sew tolerance, `Compare.cs` face-set comparison, `Chain.cs` towers chain, `Repla
 Comparison worktrees (detached, do not commit): `SAM_OCCT-wt-extend3d-base` (`22e4fd0` + tests), `SAM_OCCT-wt-extend3d-fix1`
 (`639ef12`).
 
-## Next step
+## Handover (2026-10-26, end of session; machine `michal`)
 
-Independent re-review of revision 2 at `76f6f22` (code `ce8e45d`, native suite and Softhouse both run on it) against the
-same harness, the trace and the Softhouse tables; owner review. The measurement question (direct
-build vs sew-based rebuild) is reviewed before any golden change. Push and draft PR for this branch, the Clean3D
-candidate and the SAM extraction PR (houses A-D ground-floor and facade defects above) follow in the owner's order.
+**State.** Everything below is local; nothing is pushed, no PR exists, nothing is merged.
+
+| repository / worktree | branch | commit | working tree |
+| --- | --- | --- | --- |
+| `SAM_OCCT-wt-extend3d` (this record) | `fix/extend3d-no-invented-walls-q4` (upstream `origin/sow/2026-Q4`, not pushed) | the commit adding this section, on `7ab06e8`; code = `ce8e45d` | clean after the commit |
+| `SAM_OCCT-wt-extend3d-base` (comparison only) | detached | `22e4fd0` + untracked revision-1 test files | do not commit |
+| `SAM_OCCT-wt-extend3d-fix1` (comparison only) | detached | `639ef12` | clean; do not commit |
+| duplicate-faces worktree | `fix/solver-output-duplicate-faces-q4` (no upstream) | `3ff5f4b` (code `1978171`; records `ac47976`, `8afa30e`) | **parked** - untouched |
+| `SAM-wt-junctions` (SAM side of the chain) | `fix/panels-by-solids-junctions-q4` | `fe5bbce4` (= SAM `sow/2026-Q4`) | clean, empty branch |
+
+Branch commits on `22e4fd0`: `639ef12` (rev 1), `1408b93`, `696dce0` (rev 2), `dc8f9df` (record), `ce8e45d` (rev 2
+side-coverage robustness), `76f6f22`, `7ab06e8` (records) and the handover commit.
+
+**Results (verified).** Unit 1091/1091 on `76f6f22`. Native integration on `76f6f22` (code `ce8e45d`): 25 failed /
+471 / 2 skipped, identical test identities, outcomes, failure messages and masked output to `696dce0`; failing set =
+base's 27 minus the two new Extend3D tests; every moved message explained above (golden counts measure the rebuild of a
+solver output with exact duplicate faces). Review harness: both blocking findings resolved. Softhouse (same inputs and
+settings as the 70 -> 52 comparison): 70 / 52 / 54 spaces; corrected v2 diagnostics: 48 / 45 / 46 good reference rooms,
+remaining losses listed in "Corrected diagnostics" and owned by Clean3D / SAM extraction.
+
+**Commands, tools, evidence.** Commands are in "Validation", "Re-run on `76f6f22`", "Softhouse" and "Corrected
+diagnostics". Portable tools (no session-temporary dependency): `SAM_daily/2026-10-25-Softthouse/handover/
+tools-2026-10-26-r2/` (`pipe/` sources incl. `Rooms2.cs`, `scripts/` build, safebuild, softhouse, rooms2, stage; `INDEX.md`).
+Evidence: `handover/evidence/2026-10-26-r2/README.md` (integration runs, fixture traces, Softhouse v1 and v2,
+reviewed revision-1 DLL). The handover folder index: `handover/HANDOVER_2026-10-26-r2.md`. Machine-local: copy the
+`handover` folder, the gbXML `SAM_daily/2026-10-24-OCCT-models/000000/softhouse3.xml` and the review harness
+`SAM-BIM/.review-extend3d-revision2-20261026/` before switching machines; push nothing without owner approval.
+
+**Verified findings.** (1) Revision 2's rules use geometric evidence; reach only bounds moves (unit tests incl. the
+review reproductions). (2) The two-level-tilted merger, the towers count swings and the Revit-home 7 vs 5 are in the
+rebuild of a solver output with exact duplicate faces; the solver's own cells are identical across base / rev 1 / rev 2.
+(3) The side-coverage change of `ce8e45d` had no observable effect on the native suite. (4) Softhouse: Bed 1 D204
+restored by the crossing-wall junction rule; Bath 7 and Bed 4 volume changes come from removed invented walls; Bed 11
+B304 is a false enclosure in every build; the v1 probe mismatched five Circulation rooms.
+
+**Assumptions.** Reference rooms whose gbXML shells give no valid SAM volume (13) are sampled with point-in-shell tests on
+those shells; the 80 % share threshold and 0.4 m / 0.15 m sampling grids define "clear"; leak = ray leaving the
+room's box (+0.35 m) before a panel; the Softhouse chain settings are those of 2026-10-26 (bbl 0.21, fill 0.5,
+directional grow, minThickness 0.04, continuation 0.01, snap 0.3).
+
+**Unresolved.** AdjacencyCluster-home naked 6 -> 9 (clip #20, provisional); solver output duplicate faces (parked;
+direct-build measurement = candidate correction with 18-case evidence for review); Extend3D output silently drops the
+Clean3D slab openings (pre-existing, no `HOLE_DROPPED`, not traced); Softhouse losses owned by the Clean3D kink candidate
+and the SAM extraction fix; GrasshopperTests and hosted CI not run.
+
+**Decisions (owner, 2026-10-26).** Duplicate-faces branch parked, commits and evidence kept, no PR. Clip #20 kept open
+provisionally, no reach exemption. No golden re-baseline. No push, PR or merge without owner approval.
+
+## Next step (recommended; not started)
+
+**Independent review of Extend3D revision 2 at `76f6f22`, to a go / no-go for a draft PR into `sow/2026-Q4`.**
+Recommended: new session, Plan mode (read-only review), Claude Opus at high effort, or the independent reviewer used for
+revision 1, because the conclusions rest on rules and evidence another reader must check without this session's
+anchoring. Scope: the code diff `22e4fd0..76f6f22` under `SAM_OCCT/` and `Testing/`; the review harness re-run against
+the current unit-test output; unit tests (managed only); this record's claims against the evidence folder, including
+the v2 Softhouse tables, the stage trace and the integration comparison. Output: findings with severity and a go / no-go.
+Exclusions: no production or test changes, no native integration or Softhouse chain re-run, no golden re-baseline, no
+push / PR / merge; the duplicate-faces branch stays parked; clip #20 stays provisional; the slab-opening drop, the
+Clean3D kink and the SAM extraction fix are out of scope (note them only).
