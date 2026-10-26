@@ -2074,7 +2074,8 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             // Only the extension is clipped: the original face is united back whole, so no clip ever removes material the
-            // wall had before the extend, whatever the shadows overlap.
+            // wall had before the extend, whatever the shadows overlap. (SAM's planar Difference returns null for an empty
+            // result as well as on failure, so null reads as empty here.)
             List<Geometry.Planar.Face2D> additions = (Geometry.Planar.Query.Difference(extended2D, original2D, tolerance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null && x.GetArea() > tolerance);
             List<Geometry.Planar.Face2D> keptAdditions = additions.SelectMany(x => Geometry.Planar.Query.Difference(x, shadows, tolerance) ?? new List<Geometry.Planar.Face2D>()).Where(x => x != null && x.GetArea() > tolerance).ToList();
             if (keptAdditions.Sum(x => x.GetArea()) >= additions.Sum(x => x.GetArea()) - tolerance)
@@ -2082,19 +2083,23 @@ namespace SAM.Geometry.OCCT.Solver
                 return false;
             }
 
-            List<Geometry.Planar.Face2D> united = Geometry.Planar.Query.Union(new List<Geometry.Planar.Face2D> { original2D }.Concat(keptAdditions).ToList(), tolerance);
-            Geometry.Planar.Face2D kept = united?.FindAll(x => x != null).OrderByDescending(x => x.GetArea()).FirstOrDefault();
+            // The wall is one face: the piece holding the original. Every kept extension piece must be in it; one that is
+            // not (not connected to the wall) is reported, never dropped silently.
+            List<Geometry.Planar.Face2D> united = Geometry.Planar.Query.Union(new List<Geometry.Planar.Face2D> { original2D }.Concat(keptAdditions).ToList(), tolerance)?.FindAll(x => x != null);
+            Geometry.Planar.Face2D kept = united?.OrderByDescending(x => x.GetArea()).FirstOrDefault();
             double lost = kept == null ? double.MaxValue : (Geometry.Planar.Query.Difference(original2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>()).Where(x => x != null).Sum(x => x.GetArea());
             if (kept == null || lost > tolerance)
             {
-                return false;
+                return ClipFailed(levels, up, "the clipped face would not hold the whole original wall");
             }
 
             Face3D clipped = plane.Convert(kept);
             if (clipped == null || !clipped.IsValid())
             {
-                return false;
+                return ClipFailed(levels, up, "the clipped face is not valid");
             }
+
+            List<Geometry.Planar.Face2D> discarded = united.FindAll(x => !ReferenceEquals(x, kept) && x.GetArea() > tolerance);
 
             List<Point3D> removedPoints = (Geometry.Planar.Query.Difference(extended2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>())
                 .FindAll(x => x != null)
@@ -2112,7 +2117,29 @@ namespace SAM.Geometry.OCCT.Solver
                 SourceIndices?.FirstOrDefault() ?? -1, up ? "top" : "bottom",
                 string.Join(", ", levels.Select(x => x.Z.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Distinct()), removedArea,
                 removedBox == null ? string.Empty : string.Format(System.Globalization.CultureInfo.InvariantCulture, " within ({0:0.###}, {1:0.###}, {2:0.###})-({3:0.###}, {4:0.###}, {5:0.###})", removedBox.Min.X, removedBox.Min.Y, removedBox.Min.Z, removedBox.Max.X, removedBox.Max.Y, removedBox.Max.Z)));
+            if (discarded.Count != 0)
+            {
+                BoundingBox3D discardedBox = new BoundingBox3D(discarded.SelectMany(x => (x.ExternalEdge2D as Geometry.Planar.ISegmentable2D)?.GetPoints() ?? new List<Geometry.Planar.Point2D>()).Select(x => plane.Convert(x)).ToList());
+                extendDiagnostics.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED: panel (#{0}) {1} extension: {2:0.###} m2 kept beside the level(s) at z = {3} is not connected to the wall and was dropped, within ({4:0.###}, {5:0.###}, {6:0.###})-({7:0.###}, {8:0.###}, {9:0.###}).",
+                    SourceIndices?.FirstOrDefault() ?? -1, up ? "top" : "bottom", discarded.Sum(x => x.GetArea()),
+                    string.Join(", ", levels.Select(x => x.Z.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Distinct()),
+                    discardedBox.Min.X, discardedBox.Min.Y, discardedBox.Min.Z, discardedBox.Max.X, discardedBox.Max.Y, discardedBox.Max.Z));
+            }
+
             return true;
+        }
+
+        /// <summary>Reports a clip that could not be made (<c>SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED</c>, shown at the default
+        /// detail): the extension is kept whole, including where it grows past the level(s), so the wall may stand where
+        /// the input has none. Never reported as an ordinary extend.</summary>
+        private bool ClipFailed(IList<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> levels, bool up, string reason)
+        {
+            extendDiagnostics.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED: panel (#{0}) {1} extension past the level(s) at z = {2} could not be clipped ({3}); the extension is kept whole.",
+                SourceIndices?.FirstOrDefault() ?? -1, up ? "top" : "bottom",
+                string.Join(", ", levels.Select(x => x.Z.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Distinct()), reason));
+            return false;
         }
 
         private static double U(Point3D point3D, Vector3D uAxis)

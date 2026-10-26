@@ -777,5 +777,103 @@ namespace SAM.OCCT.UnitTests
             // Assert
             Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, 1.5), Tolerance), "The junction with the crossing wall must be closed.");
         }
+
+        [Fact]
+        public void ClipBeyondLevels_KeptExtensionNotConnectedToTheWall_IsReportedNotDroppedSilently()
+        {
+            // Arrange: a wall at x = 0 (u = y) whose original is the upper storey (y 0..4, z 3..6) with a stub (y 0..1, z 2.5..3)
+            // below the level at z = 3, extended by a strip (y 1..1.15, z -0.05..3). A crossing wall at y = 1.15 has material
+            // at the junction over z 1..2 only, so the kept junction fill there touches neither the stub nor the storey above.
+            // Extend's own fill always attaches such a piece (the stub's column is filled to the target); this drives the
+            // clip directly to check the report (review L2).
+            Face3D original = TestGeometry.CreatePlanarFace(new Point3D(0, 0, 6), new Point3D(0, 0, 2.5), new Point3D(0, 1, 2.5), new Point3D(0, 1, 3), new Point3D(0, 4, 3), new Point3D(0, 4, 6));
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 6), new Point3D(0, 0, 2.5), new Point3D(0, 1, 2.5), new Point3D(0, 1, -0.05), new Point3D(0, 1.15, -0.05), new Point3D(0, 1.15, 3), new Point3D(0, 4, 3), new Point3D(0, 4, 6)), 1, 0.3, 0.5);
+            List<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> levels = new List<(double, IList<(double, double)>, IList<(double, double, double)>)>
+            {
+                (3.0, new List<(double, double)> { (-0.3, 4.3) }, new List<(double, double, double)> { (1.15, 1.0, 2.0) }),
+            };
+
+            // Act
+            bool clipped = wall.ClipBeyondLevels(original, levels, false, Overshoot, Tolerance);
+
+            // Assert: the wall keeps the piece holding the original; the disconnected 0.15 m2 is reported.
+            Assert.True(clipped);
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 0.5, 2.75), Tolerance), "The original must be kept.");
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 1.075, 1.5), Tolerance));
+            Assert.Contains(wall.ExtendDiagnostics, x => x.StartsWith("SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED") && x.Contains("0.15 m2") && x.Contains("not connected"));
+        }
+
+        // ── Cap openings (Softhouse crash at 696dce0, review L1) ──────────────────────────────────────────
+        // Softhouse (2026-10-26) Clean3D output reduced to the two faces that reproduce the revision-2 crash at 696dce0: the
+        // ground-floor slab with its three openings and one wall over it, exactly as saved (each face's plane and its loops
+        // in that plane, 1e-6 m). Rebuilding the slab from 3D points or re-orienting its loops does not reproduce the crash.
+
+        // SoftHouseGroundSlab: plane origin, normal, axisY; then the outline and openings as (x, y) in that plane.
+        private static readonly double[] SoftHouseGroundSlabPlane = { 12.400476316074108, 5.5989756584167472, 0.02500000037252904, 0, 0, -1, 0, -1, 0 };
+        private static readonly double[][] SoftHouseGroundSlabLoops =
+        {
+            new[] { -13.302869, -2.873884, -15.549644, -2.873884, -15.547286, -2.923884, -19.040527, -2.923884, -19.040527, 2.923884, -19.040527, 4.044038, -18.803114, 4.044038, -18.928027, 6.056521, -19.040526, 6.280036, -19.040527, 6.280036, -19.040527, 6.280037, -19.040527, 6.281521, -19.800527, 6.281521, -19.800527, 8.125654, -19.800527, 12.216521, -13.741941, 12.216521, -13.522404, 10.171087, -13.74194, 12.216521, -7.744485, 12.216521, -7.484221, 8.125655, -7.744484, 12.216521, -1.828074, 12.216521, 4.109638, 12.216521, 4.109638, 8.125655, 4.109638, 2.979185, 2.823719, 2.948884, 2.837124, 2.948884, 2.862125, 2.948884, 4.109638, 2.948884, 4.109638, 0.680318, 4.109638, -0.739842, 4.109638, -2.923884, 1.785825, -2.923884, -1.674221, -2.923884, -1.674221, -2.873884, -3.985999, -2.873884, -3.984175, -2.923884, -7.484221, -2.923884, -9.774175, -2.923884, -13.302869, -2.923884 },
+            new[] { -2.923321, 2.948884, -1.849221, 2.973884, -1.786721, 4.044037, -1.674221, 8.042336, -1.674221, 8.03532, -1.674221, 6.26532, -1.674221, 4.044038, -1.674221, 2.948884, -2.898321, 2.948884, -2.92332, 2.948884 },
+            new[] { -7.596721, 4.044038, -7.484221, 8.111016, -7.484221, 8.033471, -7.484221, 6.303471, -7.484221, 4.044038, -7.484221, 2.948884, -8.726309, 2.948884, -8.743873, 2.948884, -7.659221, 2.973884 },
+            new[] { -13.415368, 4.044038, -13.352868, 8.125654, -13.302869, 8.125654, -13.302869, 4.044038, -13.302869, 2.948884, -14.533287, 2.948884, -14.550331, 2.948884, -13.477868, 2.973884 },
+        };
+
+        // SoftHouseWall: plane origin, normal, axisY; then the outline and openings as (x, y) in that plane.
+        private static readonly double[] SoftHouseWallPlane = { 2.3735876600162102, 2.7174809934699637, 3.4000000953674316, -0.99905387287327585, 0.043489758528973313, 0, 0, 0, -1 };
+        private static readonly double[][] SoftHouseWallLoops =
+        {
+            new[] { -1.163644, -0.075, -1.163644, 3.375, -0.042429, 3.375, 5.810876, 3.375, 5.810876, -0.075, -0.042429, -0.075 },
+        };
+
+        /// <summary>A face as SAM stores it: <paramref name="plane"/> (origin, normal, axis Y) and its outline and openings
+        /// as (x, y) in that plane, read without re-orienting or re-uniting the loops.</summary>
+        private static Face3D SavedFace3D(double[] plane, double[][] loops)
+        {
+            System.Text.Json.Nodes.JsonObject Vector(string type, int i) => new System.Text.Json.Nodes.JsonObject { ["_type"] = type, ["X"] = plane[i], ["Y"] = plane[i + 1], ["Z"] = plane[i + 2] };
+            System.Text.Json.Nodes.JsonObject Loop(double[] xy) => new System.Text.Json.Nodes.JsonObject
+            {
+                ["_type"] = "SAM.Geometry.Planar.Polygon2D,SAM.Geometry",
+                ["Points"] = new System.Text.Json.Nodes.JsonArray(Enumerable.Range(0, xy.Length / 2).Select(i => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+                {
+                    ["_type"] = "SAM.Geometry.Planar.Point2D,SAM.Geometry", ["X"] = xy[2 * i], ["Y"] = xy[2 * i + 1],
+                }).ToArray()),
+            };
+
+            return new Face3D(new System.Text.Json.Nodes.JsonObject
+            {
+                ["_type"] = "SAM.Geometry.Spatial.Face3D,SAM.Geometry",
+                ["ExternalEdge2D"] = Loop(loops[0]),
+                ["InternalEdge2Ds"] = new System.Text.Json.Nodes.JsonArray(loops.Skip(1).Select(x => (System.Text.Json.Nodes.JsonNode)Loop(x)).ToArray()),
+                ["Plane"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["_type"] = "SAM.Geometry.Spatial.Plane,SAM.Geometry",
+                    ["Origin"] = Vector("SAM.Geometry.Spatial.Point3D,SAM.Geometry", 0),
+                    ["Normal"] = Vector("SAM.Geometry.Spatial.Vector3D,SAM.Geometry", 3),
+                    ["AxisY"] = Vector("SAM.Geometry.Spatial.Vector3D,SAM.Geometry", 6),
+                },
+            });
+        }
+
+        [Fact]
+        public void Extend_SoftHouseGroundSlabWithThreeOpenings_CompletesAndKeepsTheWall()
+        {
+            // Arrange: SideCoverage at 696dce0 built the slab's plan face with all its openings at once; SAM united them into a
+            // face with a null internal edge and the intersection with the wall's band threw (NullReferenceException in
+            // FixEdges). The two-opening case above does not reproduce it. Tolerances as Extend3D uses them.
+            Face3D slab = SavedFace3D(SoftHouseGroundSlabPlane, SoftHouseGroundSlabLoops);
+            SnappedPanel wall = new SnappedPanel(1, SavedFace3D(SoftHouseWallPlane, SoftHouseWallLoops), 1, 0.3, 0.5);
+            double area = wall.GetArea();
+            List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(0, slab, 1, 0.3, 0.5), wall };
+
+            // Act
+            System.Exception exception = Record.Exception(() => Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, SAM.Core.Tolerance.Distance));
+
+            // Assert
+            Assert.Equal(3, slab.GetInternalEdge3Ds().Count);
+            Assert.Null(exception);
+            Assert.True(wall.Face3D.IsValid());
+            Assert.True(wall.GetArea() >= area - 1e-6, "The wall must keep its original area.");
+        }
     }
 }
