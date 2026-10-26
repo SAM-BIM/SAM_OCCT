@@ -1,7 +1,8 @@
 # Extend3D: walls extend to their own cap, never through another storey — Q4 (2026-10-26)
 
 Status: revision 2 implemented locally on `fix/extend3d-no-invented-walls-q4` (base `sow/2026-Q4` at `22e4fd0`), local
-commits `639ef12` (revision 1), `1408b93`, `696dce0` (revision 2). Not pushed, no PR. Step 1 of the Softhouse "Dining 1"
+commits `639ef12` (revision 1), `1408b93`, `696dce0` (revision 2), `ce8e45d` (revision 2 robustness fix found by the
+Softhouse run, see "Softhouse"). Not pushed, no PR. Step 1 of the Softhouse "Dining 1"
 stage investigation (owner, 2026-10-26: SAM_OCCT Extend3D first, the SAM extraction fix as a separate PR). Revision 2
 answers the independent review of 2026-10-26 (`SAM-BIM/.review-extend3d-revision2-20261026/REVIEW.md`, machine-local:
 REVISE - cap splitting moved the clip level; MaxExtension used as evidence of a junction and of a split level; room
@@ -106,7 +107,56 @@ Review harness (`SAM-BIM/.review-extend3d-revision2-20261026`, `dotnet run`): re
 (nearby floors 24.520004 vs 24.546672 m2, probe in/out; set-back filled at reach 0.5 only); revision 2 gives 24.440004 m2
 for both representations with the probe outside, and the set-back open at reach 0.10 and 0.50 (36.150000 m2 both). The
 original concave-floor case is unchanged (36.6 m2 both, notch filled under no floor). `git diff --check` clean.
-Not run: GrasshopperTests, hosted CI (nothing pushed), Softhouse chain with revision 2.
+Not run: GrasshopperTests, hosted CI (nothing pushed). After `ce8e45d` (side-coverage robustness, below): unit
+1091/1091; the native integration suite was not re-run on that content (owner, 2026-10-26: Softhouse validation only).
+
+## Softhouse (owner request 2026-10-26: same inputs and settings as the 70 -> 52 comparison)
+
+Chain (machine-local tool `pipe`, unchanged since the 2026-10-26 stage comparison): PanelsBySolids (minThickness 0.04,
+continuation 0.01) -> SnapToJunctions 0.3 -> Clean3D (bbl 0.21) -> Extend3D (inputAlreadyClean, fillMargin 0.5, bbl 0.21,
+directionalCapGrow) -> `Create.AdjacencyCluster` (sew 0.01, fuzzy MacroDistance) -> apertures; then the reference-room
+leak report (`LEAK=1`, reference `SAM_daily/2026-10-24-OCCT-models/000000/softhouse3.xml`, 70 rooms). SAM side: worktree
+`SAM-wt-junctions` at `fe5bbce4` (SAM `sow/2026-Q4`, no changes). Inputs: `handover/inputs/solids_panels_392.3dm`,
+`windows_201.3dm`. One native process at a time. Command (Git Bash; `tools/softhouse.sh <out> <base|fix1|fix>`):
+
+```sh
+env SAMDIRS="<SAM-BIM>\SAM-wt-junctions\build;<SAM_OCCT build>;%APPDATA%\SAM" CONT=0.01 MINTHK=0.04 CHAIN=1 pipe.exe solids_panels_392.3dm windows_201.3dm <out>
+env SAMDIRS=... LEAK=1 GBXML=<softhouse3.xml> pipe.exe solids_panels_392.3dm windows_201.3dm <out>
+```
+
+Revision 2 at `696dce0` crashed in Extend3D (`SideCoverage`): a plan face built with several cap openings at once has
+them unioned by SAM `Face2D.Create`, which left a null internal edge (`FixEdges` threw) on a Softhouse slab with 7
+openings. `ce8e45d` subtracts openings one at a time (unit test with two openings over the wall). Results below are
+`ce8e45d`. Base and revision 1 reproduce the 2026-10-26 runs exactly (leak reports identical to `base2` / `fix4`).
+
+| | base `22e4fd0` | revision 1 `639ef12` | revision 2 `ce8e45d` |
+| --- | --- | --- | --- |
+| spaces / hosted apertures | 70 / 96 | 52 / 83 | 54 / 84 |
+| reference rooms alone in a space, no leak (of 70) | 48 | 42 | 43 |
+| reference rooms sharing a space / in no space | 18 / 1 | 21 / 7 | 21 / 6 |
+| naked edges of the extended panel set (same options, one build) | 134 | 177 | 178 |
+
+The 70 -> 52 change persists (70 -> 54). Material room changes, base -> revision 2 (revision 2 = revision 1 except Bed 1):
+
+- **Houses A-C ground floors** (Dining 2/3/4, Kitchen 2/3/4, Circulation 3): separate in base, one open space (volume
+  undefined, leak 2.5-15.7 %) in revisions 1 and 2. Base separated them with walls that exist only upstairs; without
+  them the masked defects show: Clean3D kink jog and extraction junction blocks (Separate). Unchanged from revision 1.
+- **House D** Kitchen 1 (both reference entries), Bed 2 D203, Circulation 9 D206, Bed 7 D303: in no space in revisions 1
+  and 2 (base enclosed them, Kitchen 1 with 10.6/33.1 % leak). The ground-floor corner slot and the first/second-floor
+  facade hole at x -6.64, y 3.179..3.827 (extraction) are open once the invented walls are gone. Unchanged from revision 1.
+- **Bed 1 D204** (house D first floor): in no space in revision 1, enclosed again in revision 2 (39.32 m3, as base, no
+  leak). Wall #77 (x -6.64) stops at y 3.179 on the first floor (the facade hole) and the Bed 1/Bed 2 partition crosses
+  its line at y 3.341 on that storey: the junction rule keeps the fill of that 0.162 m stretch (crossing wall present,
+  within the 0.4 m reach). Bed 2's part of the hole (y 3.341..3.827, 0.486 m to the next wall) is beyond the reach and
+  stays open; revision 1 measured the whole 0.648 m free stretch and kept nothing.
+- **Bath 7 B302** 43.39 -> 62.76 m3: base separated it from a 19.37 m3 region with no reference room by the wall at
+  y 6.013 grown through the second-floor slab over x 4.92..10.73 (M2 notch fill); the input has that wall on the first
+  floor only there. Bed 4 C203 37.99 -> 40.83 m3 likewise absorbs a 2.84 m3 base sliver space. Unchanged from revision 1.
+- Revision 2 also removes a 2 mm stray column of wall #77 that revision 1 kept below the first floor (y -0.683..-0.681)
+  and adds one 0.01 m3 sliver space at z 4.975 (x 4.9, y -2.71; revision 1 already had one at x 10.7).
+
+Evidence: `evidence/2026-10-26-r2/softhouse/` (`base`, `fix1`, `fix`, `fix-crash`: chain/leak logs, per-room `status.tsv`,
+spaces, extended panel sets, models, naked-edge lists).
 
 ## Where rooms change, traced (open items of revision 1)
 
@@ -137,7 +187,8 @@ the solver's output faces with the measurement options (`Create.Shells`, sew 0.0
    measured on the rebuilt output swing with nm-level differences (26 exact duplicate faces in every build). Without
    duplicates: base 18, revision 1 18, revision 2 19 (one more room separated, 100.3 m3 at x 21.9..26.7).
 
-4. **AdjacencyCluster-home naked 6 -> 9 (open, owner decision)** - caused by Extend3D, a single conditioning difference
+4. **AdjacencyCluster-home naked 6 -> 9 (owner 2026-10-26: keep clip #20 open provisionally, no reach exemption;
+   closure unresolved)** - caused by Extend3D, a single conditioning difference
    from revision 1: clip `#20` removes a 0.675 m2 stub below the first floor at the north wall's end (y 4.8, x -3.09..
    -2.865), where the upper storey overhangs the ground-floor corner wall (x -2.865) and no wall crosses the line below
    the floor there. Revision 1 kept it by the reach rule the review rejected. The solver's own cells are identical
@@ -153,8 +204,12 @@ duplicates, not Extend3D's geometry alone; no re-baseline is proposed on them.
 
 - Clean3D kink candidate: `clean3d-kink-jog-candidate.patch` (machine-local evidence folder of 2026-10-26).
 - SAM extraction fix (junction blocks shorter than the wall thickness): SAM worktree `SAM-wt-junctions`, empty.
-- New: solver output with exact duplicate faces (item 1 above) - its own bounded task in the output assembly
-  (`FinalizeAndValidate` / heal), with a determinism test (rebuild invariant to 1e-7 m perturbation).
+- Solver output with exact duplicate faces (item 1 above): traced in its own session to the per-cell face listing of the
+  adopted consolidation rebuild in `FinalizeAndValidate`. The dedup (local branch `fix/solver-output-duplicate-faces-q4`,
+  commits `1978171`, `ac47976`, `8afa30e`) makes sew-based rebuilds worse (whole-level-flat managed golden 22 -> 13, both
+  #82 towers pins merge the west room). Owner 2026-10-26: **parked**, commits and evidence kept, no PR. Rebuilding the
+  output directly (MakerVolume) is a candidate measurement correction; its 18-case evidence (identical under order and
+  noise variants at base) is kept for independent review before any change to what the tests pin.
 
 ## Evidence (machine-local, copy before switching machines)
 
@@ -168,7 +223,7 @@ Comparison worktrees (detached, do not commit): `SAM_OCCT-wt-extend3d-base` (`22
 
 ## Next step
 
-Owner review of revision 2, the trace (items 1-3) and the decision on item 4; an independent re-review against the same
-harness; rerun the Softhouse chain with revision 2 (revision 1: 70 -> 52 spaces, masked kink/extraction defects). Then:
-the output duplicate-face task as its own bounded change (before any golden re-baseline, since those counts measure it),
-then push and draft PR for this branch, the Clean3D candidate, and the SAM extraction PR.
+Owner review of revision 2 (`ce8e45d`), the trace and the Softhouse result; then, with owner approval, the native
+integration suite on `ce8e45d` and an independent re-review against the same harness. The measurement question (direct
+build vs sew-based rebuild) is reviewed before any golden change. Push and draft PR for this branch, the Clean3D
+candidate and the SAM extraction PR (houses A-D ground-floor and facade defects above) follow in the owner's order.
