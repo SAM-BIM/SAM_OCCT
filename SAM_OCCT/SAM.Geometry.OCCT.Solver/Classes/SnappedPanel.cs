@@ -2076,36 +2076,47 @@ namespace SAM.Geometry.OCCT.Solver
             // Only the extension is clipped: the original face is united back whole, so no clip ever removes material the
             // wall had before the extend, whatever the shadows overlap. (SAM's planar Difference returns null for an empty
             // result as well as on failure, so null reads as empty here.)
-            List<Geometry.Planar.Face2D> additions = (Geometry.Planar.Query.Difference(extended2D, original2D, tolerance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null && x.GetArea() > tolerance);
-            List<Geometry.Planar.Face2D> keptAdditions = additions.SelectMany(x => Geometry.Planar.Query.Difference(x, shadows, tolerance) ?? new List<Geometry.Planar.Face2D>()).Where(x => x != null && x.GetArea() > tolerance).ToList();
+            // Every residual piece - an addition, a removed or kept part of one, original material missing from the result,
+            // a piece left apart from the wall - is judged by its own width (IsSliver): noise of the planar operations is a
+            // sliver along an edge, however long the wall.
+            List<Geometry.Planar.Face2D> additions = (Geometry.Planar.Query.Difference(extended2D, original2D, tolerance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null && !IsSliver(x, tolerance));
+            List<Geometry.Planar.Face2D> keptAdditions = additions.SelectMany(x => Geometry.Planar.Query.Difference(x, shadows, tolerance) ?? new List<Geometry.Planar.Face2D>()).Where(x => x != null && !IsSliver(x, tolerance)).ToList();
 
-            // Areas are compared with a sliver of the distance tolerance's width along the face's boundary - the noise of the
-            // planar operations on this face - not with the tolerance itself (an area of 1e-6 m2 is a 1 mm square; a 1e-6 m
-            // sliver along a 12 m wall is 1.2e-5 m2). Softhouse: a shadow grazing a wall's extension removed 1e-5 m2, so the
-            // clip ran and then judged the original 1.5e-6 m2 short.
-            double sliver = tolerance * extended2D.GetPerimeter();
-            if (keptAdditions.Sum(x => x.GetArea()) >= additions.Sum(x => x.GetArea()) - sliver)
+            // Nothing but slivers removed (a shadow grazing the extension's edge): no clip. Softhouse wall #17: a graze removed
+            // 1e-5 m2 along the wall; compared as an area with the 1e-6 m distance tolerance it read as a clip.
+            List<Geometry.Planar.Face2D> removed = additions.SelectMany(x => shadows.SelectMany(y => Geometry.Planar.Query.Intersection(x, y, tolerance) ?? new List<Geometry.Planar.Face2D>())).ToList();
+            if (removed.TrueForAll(x => x == null || IsSliver(x, tolerance)))
             {
                 return false;
             }
 
             // The wall is one face: the piece holding the original. Every kept extension piece must be in it; one that is
-            // not (not connected to the wall) is reported, never dropped silently.
+            // not (not connected to the wall) is reported, never dropped silently. A clip that cannot keep the whole original
+            // (beyond slivers) or gives an invalid face is not made.
             List<Geometry.Planar.Face2D> united = Geometry.Planar.Query.Union(new List<Geometry.Planar.Face2D> { original2D }.Concat(keptAdditions).ToList(), tolerance)?.FindAll(x => x != null);
             Geometry.Planar.Face2D kept = united?.OrderByDescending(x => x.GetArea()).FirstOrDefault();
-            double lost = kept == null ? double.MaxValue : (Geometry.Planar.Query.Difference(original2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>()).Where(x => x != null).Sum(x => x.GetArea());
-            if (kept == null || lost > sliver)
+            List<Geometry.Planar.Face2D> lost = kept == null ? null : (Geometry.Planar.Query.Difference(original2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null && !IsSliver(x, tolerance));
+            Face3D clipped = null;
+            string failure = null;
+            if (lost == null || lost.Count != 0)
             {
-                return ClipFailed(levels, up, "the clipped face would not hold the whole original wall");
+                failure = string.Format(System.Globalization.CultureInfo.InvariantCulture, "the clipped face would not hold the whole original wall: {0:0.######} m2 of it left out", lost == null ? original2D.GetArea() : lost.Sum(x => x.GetArea()));
+            }
+            else
+            {
+                clipped = plane.Convert(kept);
+                if (clipped == null || !clipped.IsValid())
+                {
+                    failure = "the clipped face is not valid";
+                }
             }
 
-            Face3D clipped = plane.Convert(kept);
-            if (clipped == null || !clipped.IsValid())
+            if (failure != null)
             {
-                return ClipFailed(levels, up, "the clipped face is not valid");
+                return ClipFailed(levels, up, failure);
             }
 
-            List<Geometry.Planar.Face2D> discarded = united.FindAll(x => !ReferenceEquals(x, kept) && x.GetArea() > sliver);
+            List<Geometry.Planar.Face2D> discarded = united.FindAll(x => !ReferenceEquals(x, kept) && !IsSliver(x, tolerance));
 
             List<Point3D> removedPoints = (Geometry.Planar.Query.Difference(extended2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>())
                 .FindAll(x => x != null)
@@ -2146,6 +2157,27 @@ namespace SAM.Geometry.OCCT.Solver
                 SourceIndices?.FirstOrDefault() ?? -1, up ? "top" : "bottom",
                 string.Join(", ", levels.Select(x => x.Z.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Distinct()), reason));
             return false;
+        }
+
+        /// <summary>True when <paramref name="face2D"/> is a sliver: its mean width - twice its area over the length of its
+        /// boundary (outer and inner loops) - is within the distance <paramref name="tolerance"/>, the measure Clean3D's
+        /// collapse test uses (<c>SnapStage.MeanWidth</c>). A strip w wide has mean width about w however long it is, so the
+        /// judgement depends on the piece's own geometry, never on the size of the wall it came from. An empty piece is a
+        /// sliver; a loop with no measurable length is not.</summary>
+        private static bool IsSliver(Geometry.Planar.Face2D face2D, double tolerance)
+        {
+            if (face2D?.ExternalEdge2D == null)
+            {
+                return true;
+            }
+
+            double perimeter = Geometry.Planar.Query.Perimeter(face2D.ExternalEdge2D) + (face2D.InternalEdge2Ds ?? new List<Geometry.Planar.IClosed2D>()).Sum(x => Geometry.Planar.Query.Perimeter(x));
+            if (double.IsNaN(perimeter))
+            {
+                return false;
+            }
+
+            return perimeter <= 0 || 2 * face2D.GetArea() / perimeter <= tolerance;
         }
 
         private static double U(Point3D point3D, Vector3D uAxis)

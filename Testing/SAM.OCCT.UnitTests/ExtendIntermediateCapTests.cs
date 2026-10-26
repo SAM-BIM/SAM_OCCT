@@ -804,6 +804,36 @@ namespace SAM.OCCT.UnitTests
             Assert.Contains(wall.ExtendDiagnostics, x => x.StartsWith("SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED") && x.Contains("0.15 m2") && x.Contains("not connected"));
         }
 
+        // ── Residual pieces judged by their own width (review of 2026-10-26 revision 3, finding 2) ─────────
+        // The clip compared areas with tolerance x the whole wall's perimeter: on a long wall at a coarse tolerance a real
+        // removal read as noise. Each removed, lost or discarded piece is now judged by its own mean width.
+
+        [Theory]
+        [InlineData(1e-6)]
+        [InlineData(1e-4)]
+        [InlineData(1e-3)] // 2ab5316: 0.06 m2 removed < 1e-3 x 72 m perimeter: filled silently, no clip, no failure
+        public void Extend_LongWallWithNarrowSetBack_StaysOpenAtAnyTolerance(double tolerance)
+        {
+            // Arrange: the review's case - a 30 m wall whose ground-floor part stops 20 mm short of its end, no crossing wall.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(0, 29.98, 0), new Point3D(0, 29.98, 3), new Point3D(0, 30, 3), new Point3D(0, 30, 6), new Point3D(0, 0, 6)), 1, 0.3, 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(100, LongCap(0), 1, 0.3, 0.5), new SnappedPanel(101, LongCap(3), 1, 0.3, 0.5), new SnappedPanel(102, LongCap(6), 1, 0.3, 0.5), wall };
+
+            // Act
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, tolerance);
+
+            // Assert: the 20 mm x 3 m set-back is a real removal at every tolerance, made and reported as a clip.
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 29.99, 1.5), Tolerance), "The 20 mm set-back must stay open.");
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 15, -0.025), Tolerance), "The wall must still reach its floor.");
+            Assert.Contains(wall.ExtendDiagnostics, x => x.StartsWith("SAM_OCCT_EXTEND3D_LEVEL_CLIP:"));
+            Assert.DoesNotContain(wall.ExtendDiagnostics, x => x.StartsWith("SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED"));
+        }
+
+        private static Face3D LongCap(double z)
+        {
+            return TestGeometry.CreatePlanarFace(new Point3D(-1, -1, z), new Point3D(1, -1, z), new Point3D(1, 31, z), new Point3D(-1, 31, z));
+        }
+
         // ── Cap openings (Softhouse crash at 696dce0, review L1) ──────────────────────────────────────────
         // Softhouse (2026-10-26) Clean3D output reduced to the two faces that reproduce the revision-2 crash at 696dce0: the
         // ground-floor slab with its three openings and one wall over it, exactly as saved (each face's plane and its loops
