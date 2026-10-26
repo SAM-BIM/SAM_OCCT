@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
+using SAM.Core.OCCT;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
 using System.Linq;
@@ -25,6 +26,7 @@ namespace SAM.Geometry.OCCT.Solver
         private Face3D face3D;
         private Plane plane;
         private readonly List<string> extendDiagnostics = new List<string>();
+        private readonly List<OcctDiagnosticSeverity> extendDiagnosticSeverities = new List<OcctDiagnosticSeverity>();
 
         // E1 extend-path census (docs/EXTEND3D_ROBUST_HANDOVER.md). Counts, since the last
         // ResetExtendCensus(), how many extend/footprint operations took the byte-identical legacy
@@ -90,12 +92,22 @@ namespace SAM.Geometry.OCCT.Solver
         public Plane Plane => plane;
 
         /// <summary>
-        /// Coded diagnostics accumulated by the profile-preserving extend/trim path - currently
-        /// only <c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c>, emitted when a footprint trim clips or drops
-        /// an internal opening (a window/door) rather than dropping it silently (E1 / R6). Empty on
-        /// the byte-identical rectangular fast path, which never touches openings.
+        /// Coded diagnostics accumulated by the profile-preserving extend/trim path:
+        /// <c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c>, emitted when a footprint trim clips or drops an internal
+        /// opening (a window/door) rather than dropping it silently (E1 / R6), and the level-clip lines of
+        /// <see cref="ClipBeyondLevels"/>. Empty on the byte-identical rectangular fast path, which never
+        /// touches openings. Each line's severity is in <see cref="ExtendDiagnosticSeverities"/>.
         /// </summary>
         public IReadOnlyList<string> ExtendDiagnostics => extendDiagnostics;
+
+        /// <summary>
+        /// The severity of each line of <see cref="ExtendDiagnostics"/> (same index), set where the line is
+        /// produced: Info for what was done (<c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c>,
+        /// <c>SAM_OCCT_EXTEND3D_LEVEL_CLIP</c>), Warning for a completed clip that dropped a kept extension piece
+        /// (<c>SAM_OCCT_EXTEND3D_LEVEL_CLIP_PIECE_DROPPED</c>), Error for a required clip that could not be made
+        /// (<c>SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED</c>). Never read back from the text.
+        /// </summary>
+        public IReadOnlyList<OcctDiagnosticSeverity> ExtendDiagnosticSeverities => extendDiagnosticSeverities;
 
         /// <summary>
         /// Coplanar test: the two supporting planes are parallel within
@@ -1958,6 +1970,14 @@ namespace SAM.Geometry.OCCT.Solver
         /// <returns>True when area was removed.</returns>
         internal bool ClipBeyondLevels(Face3D original, IList<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> levels, bool up, double band, double tolerance)
         {
+            return ClipBeyondLevels(original, levels, up, band, tolerance, out _);
+        }
+
+        /// <summary>As the overload above; <paramref name="failed"/> is true when a clip was required and could not be made
+        /// (<c>SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED</c>): the face is then left as extended.</summary>
+        internal bool ClipBeyondLevels(Face3D original, IList<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> levels, bool up, double band, double tolerance, out bool failed)
+        {
+            failed = false;
             if (original == null || face3D == null || plane == null || levels == null || levels.Count == 0 || ReferenceEquals(original, face3D))
             {
                 return false;
@@ -2113,6 +2133,7 @@ namespace SAM.Geometry.OCCT.Solver
 
             if (failure != null)
             {
+                failed = true;
                 return ClipFailed(levels, up, failure);
             }
 
@@ -2129,33 +2150,35 @@ namespace SAM.Geometry.OCCT.Solver
             RecordHoleDrop(original.GetInternalEdge3Ds()?.Count ?? 0, clipped, "clip beyond level");
             Adopt(clipped);
             LevelClipCount++;
-            extendDiagnostics.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+            AddExtendDiagnostic(string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "SAM_OCCT_EXTEND3D_LEVEL_CLIP: panel (#{0}) {1} extension kept from growing past the level(s) at z = {2} where the wall does not continue: {3:0.###} m2 removed{4}.",
                 SourceIndices?.FirstOrDefault() ?? -1, up ? "top" : "bottom",
                 string.Join(", ", levels.Select(x => x.Z.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Distinct()), removedArea,
-                removedBox == null ? string.Empty : string.Format(System.Globalization.CultureInfo.InvariantCulture, " within ({0:0.###}, {1:0.###}, {2:0.###})-({3:0.###}, {4:0.###}, {5:0.###})", removedBox.Min.X, removedBox.Min.Y, removedBox.Min.Z, removedBox.Max.X, removedBox.Max.Y, removedBox.Max.Z)));
+                removedBox == null ? string.Empty : string.Format(System.Globalization.CultureInfo.InvariantCulture, " within ({0:0.###}, {1:0.###}, {2:0.###})-({3:0.###}, {4:0.###}, {5:0.###})", removedBox.Min.X, removedBox.Min.Y, removedBox.Min.Z, removedBox.Max.X, removedBox.Max.Y, removedBox.Max.Z)), OcctDiagnosticSeverity.Info);
             if (discarded.Count != 0)
             {
+                // The clip is made and removes only extension: the result is usable, but a permitted extension piece (a
+                // junction or continuation fill) is missing, so the wall may leave an opening there - a Warning.
                 BoundingBox3D discardedBox = new BoundingBox3D(discarded.SelectMany(x => (x.ExternalEdge2D as Geometry.Planar.ISegmentable2D)?.GetPoints() ?? new List<Geometry.Planar.Point2D>()).Select(x => plane.Convert(x)).ToList());
-                extendDiagnostics.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                    "SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED: panel (#{0}) {1} extension: {2:0.###} m2 kept beside the level(s) at z = {3} is not connected to the wall and was dropped, within ({4:0.###}, {5:0.###}, {6:0.###})-({7:0.###}, {8:0.###}, {9:0.###}).",
+                AddExtendDiagnostic(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "SAM_OCCT_EXTEND3D_LEVEL_CLIP_PIECE_DROPPED: panel (#{0}) {1} extension: {2:0.###} m2 kept beside the level(s) at z = {3} is not connected to the wall and was dropped, within ({4:0.###}, {5:0.###}, {6:0.###})-({7:0.###}, {8:0.###}, {9:0.###}); the wall may leave an opening there.",
                     SourceIndices?.FirstOrDefault() ?? -1, up ? "top" : "bottom", discarded.Sum(x => x.GetArea()),
                     string.Join(", ", levels.Select(x => x.Z.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Distinct()),
-                    discardedBox.Min.X, discardedBox.Min.Y, discardedBox.Min.Z, discardedBox.Max.X, discardedBox.Max.Y, discardedBox.Max.Z));
+                    discardedBox.Min.X, discardedBox.Min.Y, discardedBox.Min.Z, discardedBox.Max.X, discardedBox.Max.Y, discardedBox.Max.Z), OcctDiagnosticSeverity.Warning);
             }
 
             return true;
         }
 
-        /// <summary>Reports a clip that could not be made (<c>SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED</c>, shown at the default
-        /// detail): the extension is kept whole, including where it grows past the level(s), so the wall may stand where
-        /// the input has none. Never reported as an ordinary extend.</summary>
+        /// <summary>Reports a required clip that could not be made (<c>SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED</c>, an Error):
+        /// the extension is kept whole, including where it grows past the level(s), so the wall may stand where the input
+        /// has none. The caller marks the extend record of that extension (<see cref="ExtendRiskFlag.LevelClipFailed"/>).</summary>
         private bool ClipFailed(IList<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> levels, bool up, string reason)
         {
-            extendDiagnostics.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED: panel (#{0}) {1} extension past the level(s) at z = {2} could not be clipped ({3}); the extension is kept whole.",
+            AddExtendDiagnostic(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED: panel (#{0}) {1} extension past the level(s) at z = {2} could not be clipped ({3}); the extension is kept whole and may stand where the input has no wall.",
                 SourceIndices?.FirstOrDefault() ?? -1, up ? "top" : "bottom",
-                string.Join(", ", levels.Select(x => x.Z.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Distinct()), reason));
+                string.Join(", ", levels.Select(x => x.Z.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Distinct()), reason), OcctDiagnosticSeverity.Error);
             return false;
         }
 
@@ -2384,9 +2407,16 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             HoleDroppedCount += holesBefore - holesAfter;
-            extendDiagnostics.Add(string.Format(
+            AddExtendDiagnostic(string.Format(
                 "SAM_OCCT_EXTEND3D_HOLE_DROPPED: {0} of {1} internal opening(s) dropped or clipped to the boundary during {2}.",
-                holesBefore - holesAfter, holesBefore, operation));
+                holesBefore - holesAfter, holesBefore, operation), OcctDiagnosticSeverity.Info);
+        }
+
+        /// <summary>Records one <see cref="ExtendDiagnostics"/> line with the severity its producer states.</summary>
+        private void AddExtendDiagnostic(string text, OcctDiagnosticSeverity severity)
+        {
+            extendDiagnostics.Add(text);
+            extendDiagnosticSeverities.Add(severity);
         }
 
         private static IClosedPlanar3D ProjectLoop(IClosedPlanar3D loop, Plane backerPlane)

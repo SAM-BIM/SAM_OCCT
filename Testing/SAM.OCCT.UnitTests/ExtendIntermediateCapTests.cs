@@ -801,7 +801,7 @@ namespace SAM.OCCT.UnitTests
             Assert.True(clipped);
             Assert.True(wall.Face3D.Inside(new Point3D(0, 0.5, 2.75), Tolerance), "The original must be kept.");
             Assert.False(wall.Face3D.Inside(new Point3D(0, 1.075, 1.5), Tolerance));
-            Assert.Contains(wall.ExtendDiagnostics, x => x.StartsWith("SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED") && x.Contains("0.15 m2") && x.Contains("not connected"));
+            Assert.Contains(wall.ExtendDiagnostics, x => x.StartsWith("SAM_OCCT_EXTEND3D_LEVEL_CLIP_PIECE_DROPPED") && x.Contains("0.15 m2") && x.Contains("not connected"));
         }
 
         // ── Residual pieces judged by their own width (review of 2026-10-26 revision 3, finding 2) ─────────
@@ -832,6 +832,35 @@ namespace SAM.OCCT.UnitTests
         private static Face3D LongCap(double z)
         {
             return TestGeometry.CreatePlanarFace(new Point3D(-1, -1, z), new Point3D(1, -1, z), new Point3D(1, 31, z), new Point3D(-1, 31, z));
+        }
+
+        [Theory]
+        [InlineData(1e-6)]
+        [InlineData(1e-3)] // 2ab5316: 0.0025 m2 < 1e-3 x 20.1 m perimeter: the original was dropped silently
+        public void ClipBeyondLevels_OriginalOutsideTheKeptPiece_NotClippedAndReportedAsError(double tolerance)
+        {
+            // Arrange: the routine's own guard, driven directly (Extend's own fill always attaches the extension to the
+            // original): a 50 mm square of original material apart from the extension, which is far larger. The piece
+            // holding the kept extension does not hold the original; however small, that material is the wall's.
+            Face3D original = TestGeometry.CreatePlanarFace(new Point3D(0, 10, 5), new Point3D(0, 10.05, 5), new Point3D(0, 10.05, 5.05), new Point3D(0, 10, 5.05));
+            Face3D extended = TestGeometry.CreatePlanarFace(new Point3D(0, 0, -0.05), new Point3D(0, 4, -0.05), new Point3D(0, 4, 6), new Point3D(0, 0, 6));
+            SnappedPanel wall = new SnappedPanel(0, extended, 1, 0.3, 0.5);
+            double area = wall.GetArea();
+            List<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> levels = new List<(double, IList<(double, double)>, IList<(double, double, double)>)>
+            {
+                (3.0, new List<(double, double)> { (-0.3, 4.3) }, new List<(double, double, double)>()),
+            };
+
+            // Act
+            bool clipped = wall.ClipBeyondLevels(original, levels, false, Overshoot, tolerance, out bool failed);
+
+            // Assert: no clip, the face stays as extended, and the failure is an Error naming the material left out.
+            Assert.False(clipped);
+            Assert.True(failed);
+            Assert.Equal(area, wall.GetArea(), 9);
+            int index = wall.ExtendDiagnostics.ToList().FindIndex(x => x.StartsWith("SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED") && x.Contains("would not hold the whole original wall: 0.0025 m2"));
+            Assert.True(index >= 0, string.Join(" | ", wall.ExtendDiagnostics));
+            Assert.Equal(SAM.Core.OCCT.OcctDiagnosticSeverity.Error, wall.ExtendDiagnosticSeverities[index]);
         }
 
         // ── Cap openings (Softhouse crash at 696dce0, review L1) ──────────────────────────────────────────

@@ -139,21 +139,36 @@ namespace SAM.Analytical.OCCT.Solver
         /// <summary>
         /// The per-panel extend diagnostics recorded on the conditioned panels themselves:
         /// <c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c>, emitted when a footprint trim clips or drops an internal
-        /// opening (E1 / R6), and <c>SAM_OCCT_EXTEND3D_LEVEL_CLIP</c>, emitted when a vertical extension is kept
-        /// from growing past another level. These live on the <see cref="SnappedPanel"/> and were previously not surfaced
+        /// opening (E1 / R6), and the level-clip lines (<c>SAM_OCCT_EXTEND3D_LEVEL_CLIP</c>, <c>_PIECE_DROPPED</c>,
+        /// <c>_FAILED</c>). These live on the <see cref="SnappedPanel"/> and were previously not surfaced
         /// beyond the panel; E3 flows them out to the diagnostics list so a dropped window is never silent.
-        /// Already fully-formed coded lines, returned verbatim.
+        /// Already fully-formed coded lines, returned verbatim; the text of <see cref="FormatExtendPanelDiagnosticRecords"/>.
         /// </summary>
         public static List<string> FormatExtendPanelDiagnostics(IReadOnlyList<SnappedPanel> snappedPanels)
         {
-            List<string> result = new List<string>();
+            return FormatExtendPanelDiagnosticRecords(snappedPanels).ConvertAll(x => x.Text);
+        }
+
+        /// <summary>
+        /// The same lines as <see cref="FormatExtendPanelDiagnostics"/>, in the same order, each paired with the
+        /// structured shared <see cref="Core.Diagnostic"/> carrying the severity the panel recorded where the line was
+        /// produced (<see cref="SnappedPanel.ExtendDiagnosticSeverities"/>; a failed level clip is an Error), never read
+        /// back from the text. A line without a recorded severity (a panel whose lists disagree) is an Error, so it can
+        /// never be filtered away as Info.
+        /// </summary>
+        public static List<DiagnosticRecord> FormatExtendPanelDiagnosticRecords(IReadOnlyList<SnappedPanel> snappedPanels)
+        {
+            List<DiagnosticRecord> result = new List<DiagnosticRecord>();
             foreach (SnappedPanel snappedPanel in snappedPanels ?? new List<SnappedPanel>())
             {
-                foreach (string diagnostic in snappedPanel?.ExtendDiagnostics ?? (IReadOnlyList<string>)new List<string>())
+                IReadOnlyList<string> diagnostics = snappedPanel?.ExtendDiagnostics ?? (IReadOnlyList<string>)new List<string>();
+                IReadOnlyList<OcctDiagnosticSeverity> severities = snappedPanel?.ExtendDiagnosticSeverities ?? (IReadOnlyList<OcctDiagnosticSeverity>)new List<OcctDiagnosticSeverity>();
+                for (int i = 0; i < diagnostics.Count; i++)
                 {
-                    if (!string.IsNullOrEmpty(diagnostic))
+                    if (!string.IsNullOrEmpty(diagnostics[i]))
                     {
-                        result.Add(diagnostic);
+                        OcctDiagnosticSeverity severity = i < severities.Count ? severities[i] : OcctDiagnosticSeverity.Error;
+                        result.Add(global::SAM.Core.OCCT.Query.CreateDiagnosticRecord(diagnostics[i], severity.ToDiagnosticSeverity()));
                     }
                 }
             }

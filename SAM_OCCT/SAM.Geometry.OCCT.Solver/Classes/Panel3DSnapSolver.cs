@@ -2529,12 +2529,12 @@ namespace SAM.Geometry.OCCT.Solver
                 }
             }
 
-            ClipBeyondIntermediateCaps(wall, before, wallBox, capBoxes, capPlanes, capFaces, capIndex, up, overshoot, toleranceDistance, wallFeet);
+            bool levelClipFailed = ClipBeyondIntermediateCaps(wall, before, wallBox, capBoxes, capPlanes, capFaces, capIndex, up, overshoot, toleranceDistance, wallFeet);
 
             if (records != null && preBox != null)
             {
                 RecordCapExtend(records, wall, wallPanelIndex, preBox, up, capIndex, capBox, capPlane, flatRelative,
-                    flatRelative ? scalarOvershoot : overshoot, capPanelIndices, capSourceIndices, toleranceDistance);
+                    flatRelative ? scalarOvershoot : overshoot, capPanelIndices, capSourceIndices, toleranceDistance, levelClipFailed);
             }
         }
 
@@ -2560,17 +2560,19 @@ namespace SAM.Geometry.OCCT.Solver
         /// </list>
         /// Walls without such a level - every plain rectangle - are left exactly as extended.
         /// </summary>
-        private static void ClipBeyondIntermediateCaps(SnappedPanel wall, Face3D before, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, List<Face3D> capFaces, int capIndex, bool up, double band, double toleranceDistance, List<(SnappedPanel Wall, Segment3D Foot, Face3D Face)> wallFeet = null)
+        /// <returns>True when a clip was required and could not be made (<see cref="SnappedPanel.ClipBeyondLevels"/>
+        /// reports it as an Error); the wall is then left as extended.</returns>
+        private static bool ClipBeyondIntermediateCaps(SnappedPanel wall, Face3D before, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, List<Face3D> capFaces, int capIndex, bool up, double band, double toleranceDistance, List<(SnappedPanel Wall, Segment3D Foot, Face3D Face)> wallFeet = null)
         {
             if (before == null || ReferenceEquals(before, wall.Face3D) || capIndex < 0 || capFaces == null || capFaces.Count != capBoxes.Count || capPlanes == null || capPlanes.Count != capBoxes.Count)
             {
-                return;
+                return false;
             }
 
             WallPlanFrame frame = WallPlanFrame.Create(wall, before, band);
             if (frame == null)
             {
-                return;
+                return false;
             }
 
             double targetZ = CapZAtPlan(capPlanes[capIndex], frame.CentreX, frame.CentreY, up ? capBoxes[capIndex].Min.Z : capBoxes[capIndex].Max.Z);
@@ -2630,10 +2632,13 @@ namespace SAM.Geometry.OCCT.Solver
                 }
             }
 
+            bool failed = false;
             if (levels.Count != 0)
             {
-                wall.ClipBeyondLevels(before, levels, up, band, toleranceDistance);
+                wall.ClipBeyondLevels(before, levels, up, band, toleranceDistance, out failed);
             }
+
+            return failed;
         }
 
         /// <summary>
@@ -3044,12 +3049,14 @@ namespace SAM.Geometry.OCCT.Solver
         /// <c>ExtendTopToPlane</c> and their bottom mirrors): emits one <see cref="ExtendRecord"/> when the
         /// wall's top/base actually moved, recording the elevation delta at the wall centre, the target cap
         /// (its panel index) and whether the scalar (E1 flat-Z) or the sloped-plane (E2) branch was taken.
-        /// Vertical reach is MaxExtend-UNCAPPED by policy, so the lateral-capped flag is always false. Recording
+        /// Vertical reach is MaxExtend-UNCAPPED by policy, so the lateral-capped flag is always false. A move whose
+        /// level clip could not be made (<paramref name="levelClipFailed"/>) carries
+        /// <see cref="ExtendRiskFlag.LevelClipFailed"/>, so its ordinary record never reads as a completed clip. Recording
         /// only.</summary>
         private static void RecordCapExtend(
             List<ExtendRecord> records, SnappedPanel wall, int wallPanelIndex, BoundingBox3D preBox, bool up,
             int capIndex, BoundingBox3D capBox, Plane capPlane, bool flatRelative, double overshoot,
-            List<int> capPanelIndices, List<int> capSourceIndices, double toleranceDistance)
+            List<int> capPanelIndices, List<int> capSourceIndices, double toleranceDistance, bool levelClipFailed = false)
         {
             BoundingBox3D postBox = wall.GetBoundingBox();
             if (postBox == null)
@@ -3093,13 +3100,19 @@ namespace SAM.Geometry.OCCT.Solver
                     : string.Format("cap plane n=({0:0.##},{1:0.##},{2:0.##}) z={3:0.###}", n.X, n.Y, n.Z, capExtremeZ);
             }
 
-            records.Add(new ExtendRecord(
+            ExtendRecord record = new ExtendRecord(
                 wallPanelIndex, RepresentativeSource(wall),
                 up ? ExtendOperationKind.Top : ExtendOperationKind.Bottom,
                 fromValue, toValue, flatRelative ? "elevation" : "distance-to-plane",
                 new Point3D(centreX, centreY, fromValue), new Point3D(centreX, centreY, toValue),
                 targetPanelIndex, targetSourceIndex, flatRelative ? "cap-scalar" : "cap-plane", targetDescription,
-                overshoot, false));
+                overshoot, false);
+            if (levelClipFailed)
+            {
+                record.AddRisk(ExtendRiskFlag.LevelClipFailed);
+            }
+
+            records.Add(record);
         }
 
         /// <summary>
