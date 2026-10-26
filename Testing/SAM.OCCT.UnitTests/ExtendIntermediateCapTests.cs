@@ -226,6 +226,28 @@ namespace SAM.OCCT.UnitTests
             Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, 1.5), Tolerance), "The junction with the crossing wall must be closed.");
         }
 
+        [Fact]
+        public void ExtendWallsThenExtend_UpperStoreyContinuingPastTheCrossingWall_JunctionFillStopsAtItsLine()
+        {
+            // Arrange: the upper storey runs on to y = 6.8, past the crossing ground-floor wall at y = 6; the ground-floor
+            // part stops at y = 5.85 (whole-level-towers #20: a fill overshooting the crossing wall left a fin and an
+            // unclosed room).
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(0, 5.85, 0), new Point3D(0, 5.85, 3), new Point3D(0, 6.8, 3), new Point3D(0, 6.8, 6), new Point3D(0, 0, 6)), 1, 0.3, 0.5);
+            SnappedPanel crossing = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(-1, 6, 0), new Point3D(1, 6, 0), new Point3D(1, 6, 3), new Point3D(-1, 6, 3)), 1, 0.3, 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(100, WideCap(0), 1, 0.3, 0.5), new SnappedPanel(101, WideCap(3), 1, 0.3, 0.5), new SnappedPanel(102, WideCap(6), 1, 0.3, 0.5), wall, crossing };
+
+            // Act
+            Panel3DSnapSolver.ExtendWalls(panels, VerticalAngle, Overshoot, Tolerance);
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, Tolerance);
+
+            // Assert: closed up to the crossing wall's line, nothing beyond it below the first floor.
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 5.95, 1.5), Tolerance), "The junction must be closed.");
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 6.03, 1.5), Tolerance), "No fin past the crossing wall.");
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 6.5, 1.5), Tolerance), "The upper storey's overhang must not be filled.");
+        }
+
         [Theory]
         [InlineData(0.5, 3.0, 6.0)]  // the crossing wall is upstairs only: no wall to meet below the first floor
         [InlineData(0.1, 0.0, 3.0)]  // the junction is 0.15 m away, beyond the wall's 0.1 m reach: no permission to move
@@ -258,18 +280,55 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Theory]
-        [InlineData(0.05)]
         [InlineData(0.5)]
         [InlineData(2.0)]
         public void Extend_SplitLevelFloorBesideTheWall_DoesNotStopTheExtension(double maxExtension)
         {
-            // Arrange / Act: the raised floor lies west of the wall only, the lower floor east of it only (whole-level-towers:
-            // floors at 12.24 and 12.384). The wall is the step between them: the east room reaches z = 0.
+            // Arrange / Act: the raised floor lies west of the wall only, the lower floor east of it only. The east room
+            // continues past the raised floor's level to z = 0: the wall is the step between them.
             SnappedPanel wall = ExtendBesideRaisedFloor(-5, 0, maxExtension);
 
-            // Assert: the base reaches below the floor at z = 0 along the whole wall, whatever the wall's lateral reach.
+            // Assert: the base reaches below the floor at z = 0 along the whole wall.
             Assert.True(wall.Face3D.Inside(new Point3D(0, 2, 0.05), Tolerance));
             Assert.True(wall.Face3D.Inside(new Point3D(0, 5, 0.05), Tolerance));
+        }
+
+        [Fact]
+        public void Extend_SplitLevelBeyondTheWallsReach_WallStaysOnTheRaisedFloor()
+        {
+            // Arrange / Act: the same split level, but the wall may move only 0.05 m: the 0.15 m growth past the raised
+            // floor is justified by the geometry but not permitted.
+            SnappedPanel wall = ExtendBesideRaisedFloor(-5, 0, 0.05);
+
+            // Assert: no growth below the raised floor where it lies; the stretch beside no raised floor still extends.
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 2, 0.05), Tolerance));
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 5, 0.05), Tolerance));
+        }
+
+        [Theory]
+        [InlineData(0.4, true)]
+        [InlineData(0.1, false)]
+        public void Extend_FloorStackedOverTheTargetOnOneSide_WallReachesTheTargetWithinItsReach(double maxExtension, bool reaches)
+        {
+            // Arrange: whole-level-towers - a floor at z = 0 under both sides of the wall, a second floor 0.144 m higher
+            // stacked over it on the west side only, and the wall standing on the upper one (base 0.128). The east room's
+            // floor is z = 0: its space continues past the upper floor's level to the target.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0.128), new Point3D(0, 6, 0.128), new Point3D(0, 6, 3), new Point3D(0, 0, 3)), 1, 0.3, maxExtension);
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                new SnappedPanel(100, TestGeometry.CreatePlanarFace(new Point3D(-5, 0, 0), new Point3D(5, 0, 0), new Point3D(5, 6, 0), new Point3D(-5, 6, 0)), 1, 0.3, 0.5),
+                new SnappedPanel(101, TestGeometry.CreatePlanarFace(new Point3D(-5, 0, 0.144), new Point3D(0, 0, 0.144), new Point3D(0, 6, 0.144), new Point3D(-5, 6, 0.144)), 1, 0.3, 0.5),
+                new SnappedPanel(102, TestGeometry.CreatePlanarFace(new Point3D(-5, 0, 3), new Point3D(5, 0, 3), new Point3D(5, 6, 3), new Point3D(-5, 6, 3)), 1, 0.3, 0.5),
+                wall,
+            };
+
+            // Act
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, Tolerance);
+
+            // Assert
+            Assert.Equal(reaches, wall.Face3D.Inside(new Point3D(0, 3, 0.02), Tolerance));
+            Assert.Equal(reaches ? -Overshoot : 0.128, wall.GetBoundingBox().Min.Z, 4);
         }
 
         [Theory]
@@ -284,6 +343,36 @@ namespace SAM.OCCT.UnitTests
 
             // Assert: the part standing on the raised floor (y 0..4) does not grow through it to z = 0.
             Assert.False(wall.Face3D.Inside(new Point3D(0, 2, 0.05), Tolerance), "The wall must not grow through its own floor.");
+        }
+
+        [Fact]
+        public void ExtendWallsThenExtend_RaisedFloorEndingAtTheCrossingWallsFace_ClipStepsAtTheCrossingWallsLine()
+        {
+            // Arrange: whole-level-towers #142 - an exterior wall (y = 0, x 0..10, base 0.2) standing on a room floor at 0.144
+            // that ends at the inner face of a crossing wall (x 0..5.9, the crossing wall's line at x = 6), and a floor at
+            // z = 0 on the other side of that crossing wall (x 6..10) reaching under the wall. Read as modelled, the clip
+            // would step the wall's base at x = 5.9, 0.1 m beside the junction, and leave an open sliver there.
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0.2), new Point3D(10, 0, 0.2), new Point3D(10, 0, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.4);
+            SnappedPanel crossing = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(6, 0, 0.2), new Point3D(6, 5, 0.2), new Point3D(6, 5, 3), new Point3D(6, 0, 3)), 1, 0.3, 0.4);
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                new SnappedPanel(100, TestGeometry.CreatePlanarFace(new Point3D(0, 0.1, 0.144), new Point3D(5.9, 0.1, 0.144), new Point3D(5.9, 5, 0.144), new Point3D(0, 5, 0.144)), 1, 0.3, 0.5),
+                new SnappedPanel(101, TestGeometry.CreatePlanarFace(new Point3D(6, -0.1, 0), new Point3D(10, -0.1, 0), new Point3D(10, 5, 0), new Point3D(6, 5, 0)), 1, 0.3, 0.5),
+                new SnappedPanel(102, TestGeometry.CreatePlanarFace(new Point3D(0, -0.1, 3), new Point3D(10, -0.1, 3), new Point3D(10, 5, 3), new Point3D(0, 5, 3)), 1, 0.3, 0.5),
+                wall,
+                crossing,
+            };
+
+            // Act
+            Panel3DSnapSolver.ExtendWalls(panels, VerticalAngle, Overshoot, Tolerance);
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, Tolerance);
+
+            // Assert: beside the raised floor the base rests on it; beyond the crossing wall's line it reaches z = 0.
+            Assert.False(wall.Face3D.Inside(new Point3D(3, 0, 0.05), Tolerance), "No growth through the room's own floor.");
+            Assert.False(wall.Face3D.Inside(new Point3D(5.95, 0, 0.05), Tolerance), "The step must be at the crossing wall's line, not at the floor's edge.");
+            Assert.True(wall.Face3D.Inside(new Point3D(6.05, 0, 0.05), Tolerance), "Beyond the crossing wall the room floor is z = 0.");
         }
 
         // ── Representation independence (independent review, finding 1) ────────────────────────────────

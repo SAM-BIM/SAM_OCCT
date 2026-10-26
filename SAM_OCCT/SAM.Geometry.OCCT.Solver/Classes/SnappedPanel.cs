@@ -2011,12 +2011,15 @@ namespace SAM.Geometry.OCCT.Solver
                     }
                 }
 
-                // Columns where the original wall continues past the level keep their extension. So does a junction: the
-                // stretch from where the original continues to a wall crossing this one in the storey beyond the level
-                // (the wall stopping short of it there), up to the wall's lateral reach. A stretch without a crossing wall
-                // is an intentional set-back or void, however narrow, and is clipped.
+                continuing = PlanIntervals.Normalise(continuing, tolerance);
+                List<(double From, double To)> free = PlanIntervals.Difference(columns, continuing, tolerance);
+
+                // A junction keeps its extension too: the stretch from where the original continues up to the line of a
+                // wall crossing this one in the storey beyond the level (the wall stopping short of it there), up to the
+                // wall's lateral reach. A stretch without a crossing wall is an intentional set-back or void, however
+                // narrow, and is clipped.
                 List<(double From, double To)> junctions = new List<(double, double)>();
-                foreach ((double freeFrom, double freeTo) in PlanIntervals.Difference(columns, continuing, tolerance))
+                foreach ((double freeFrom, double freeTo) in free)
                 {
                     bool fromContinuing = continuing.Any(x => System.Math.Abs(x.To - freeFrom) <= tolerance);
                     bool toContinuing = continuing.Any(x => System.Math.Abs(x.From - freeTo) <= tolerance);
@@ -2024,17 +2027,17 @@ namespace SAM.Geometry.OCCT.Solver
                     {
                         if (fromContinuing && crossing > freeFrom + tolerance && crossing <= freeTo + tolerance && crossing - freeFrom <= MaxExtension + tolerance)
                         {
-                            junctions.Add((freeFrom, System.Math.Min(freeTo, crossing + band)));
+                            junctions.Add((freeFrom, System.Math.Min(freeTo, crossing)));
                         }
 
                         if (toContinuing && crossing < freeTo - tolerance && crossing >= freeFrom - tolerance && freeTo - crossing <= MaxExtension + tolerance)
                         {
-                            junctions.Add((System.Math.Max(freeFrom, crossing - band), freeTo));
+                            junctions.Add((System.Math.Max(freeFrom, crossing), freeTo));
                         }
                     }
                 }
 
-                foreach ((double freeFrom, double freeTo) in PlanIntervals.Difference(PlanIntervals.Difference(columns, continuing, tolerance), junctions, tolerance))
+                foreach ((double freeFrom, double freeTo) in PlanIntervals.Difference(free, junctions, tolerance))
                 {
                     AddColumn(shadows, uAxis, wAxis, freeFrom, freeTo, from, to, tolerance);
                 }

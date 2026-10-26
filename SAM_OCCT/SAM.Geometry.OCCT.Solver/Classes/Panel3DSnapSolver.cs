@@ -2461,7 +2461,7 @@ namespace SAM.Geometry.OCCT.Solver
             // itself leaves a wall in) meets that cap: it is not grown on to the next cap, a storey away - unless the
             // passed caps leave part of the wall uncovered or are a split level beside it (RestsOnPassedCaps).
             int capIndex = NearestCoveringCap(wallBox, centreX, centreY, capBoxes, capPlanes, toleranceDistance, up, wallExtreme, out List<int> passedCaps, overshoot);
-            if (RestsOnPassedCaps(wall, passedCaps, capIndex, capBoxes, capPlanes, capFaces, overshoot, toleranceDistance))
+            if (RestsOnPassedCaps(wall, passedCaps, capIndex, capBoxes, capPlanes, capFaces, overshoot, toleranceDistance, wallFeet))
             {
                 records?.Add(ExtendRecord.Skip(
                     wallPanelIndex, RepresentativeSource(wall), up ? ExtendOperationKind.Top : ExtendOperationKind.Bottom,
@@ -2543,17 +2543,20 @@ namespace SAM.Geometry.OCCT.Solver
         /// ceiling) lying between the wall's opposite extreme and the extend target, over columns of the wall
         /// that do not themselves continue past that level (<see cref="SnappedPanel.ClipBeyondLevels"/>). A wall
         /// merged across storeys extends to its own cap and never through another storey's floor.
-        /// <para>Every decision is read from the caps' actual geometry beside the wall (<see cref="SideCoverage"/>),
-        /// not from a reach or distance threshold:</para>
+        /// <para>Where a level stops the wall is read from the caps' actual geometry beside the wall
+        /// (<see cref="SideCoverage"/>); the wall's reach only bounds a move that geometry justifies:</para>
         /// <list type="bullet">
         /// <item>A level is one surface: the caps coplanar with each other (<see cref="SameSurface"/>), their coverage
         /// united. A floor in one piece, in unequal pieces or listed twice covers the wall identically and clips at the
         /// same elevation; caps at different elevations, however close, are different levels.</item>
         /// <item>A column the level covers on neither side of the wall (an opening, a double-height corner) keeps the
         /// extension.</item>
-        /// <item>A stretch where the level and the target form a step (<see cref="StepStretches"/>: a raised floor or
-        /// lowered ceiling on one side only, the space on the other side reaching the target) keeps the extension: the
-        /// wall is the step between them.</item>
+        /// <item>A stretch where the space beside the wall continues past the level to the target
+        /// (<see cref="ContinuationStretches"/>: a split level) keeps the extension when the growth past the level is
+        /// within the wall's reach (<see cref="SnappedPanel.MaxExtension"/>); a level covering every side the target
+        /// covers is a storey of its own and always clips.</item>
+        /// <item>A stretch where the wall stops short of a wall crossing it beyond the level keeps the extension up to
+        /// that wall's line, within the wall's reach (<see cref="SnappedPanel.ClipBeyondLevels"/>).</item>
         /// </list>
         /// Walls without such a level - every plain rectangle - are left exactly as extended.
         /// </summary>
@@ -2571,7 +2574,12 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             double targetZ = CapZAtPlan(capPlanes[capIndex], frame.CentreX, frame.CentreY, up ? capBoxes[capIndex].Min.Z : capBoxes[capIndex].Max.Z);
-            (List<(double From, double To)> Minus, List<(double From, double To)> Plus) target = LevelCoverage(SameSurfaceCaps(capIndex, capBoxes, capPlanes, frame, toleranceDistance), capBoxes, capFaces, frame, toleranceDistance);
+            // Where other walls cross this wall's line (plan parameter u) and over which elevations: the room boundaries the
+            // caps' coverage is aligned to (AlignToCrossings), and the junctions ClipBeyondLevels keeps.
+            List<(double U, double ZMin, double ZMax)> crossings = Crossings(wall, frame, wallFeet, band, toleranceDistance);
+            (List<(double From, double To)> Minus, List<(double From, double To)> Plus) target = AlignToCrossings(
+                LevelCoverage(SameSurfaceCaps(capIndex, capBoxes, capPlanes, frame, toleranceDistance), capBoxes, capFaces, frame, toleranceDistance),
+                crossings, wallBox.Min.Z, wallBox.Max.Z, wall.BucketSize, toleranceDistance);
 
             // The flat caps strictly between the wall's opposite extreme and the target, near the wall in plan.
             List<(int Index, double Z)> intermediate = new List<(int, double)>();
@@ -2591,23 +2599,23 @@ namespace SAM.Geometry.OCCT.Solver
                 }
             }
 
-            // Where other walls cross this wall's line (plan parameter u) and over which elevations.
-            List<(double U, double ZMin, double ZMax)> crossings = Crossings(wall, frame, wallFeet, band, toleranceDistance);
-
             List<(double Z, IList<(double From, double To)> Columns, IList<double> Crossings)> levels = new List<(double, IList<(double, double)>, IList<double>)>();
             foreach (List<(int Index, double Z)> level in GroupSameSurface(intermediate, capPlanes, toleranceDistance))
             {
-                (List<(double From, double To)> Minus, List<(double From, double To)> Plus) coverage = LevelCoverage(level.ConvertAll(x => x.Index), capBoxes, capFaces, frame, toleranceDistance);
-                List<(double From, double To)> columns = PlanIntervals.Difference(
-                    PlanIntervals.Union(coverage.Minus, coverage.Plus, toleranceDistance),
-                    StepStretches(coverage, target, toleranceDistance),
-                    toleranceDistance);
+                // The level's extreme towards the wall's own part: the clip never reaches past any of its caps.
+                double z = up ? level.Max(x => x.Z) : level.Min(x => x.Z);
+                (List<(double From, double To)> Minus, List<(double From, double To)> Plus) coverage = AlignToCrossings(
+                    LevelCoverage(level.ConvertAll(x => x.Index), capBoxes, capFaces, frame, toleranceDistance),
+                    crossings, wallBox.Min.Z, wallBox.Max.Z, wall.BucketSize, toleranceDistance);
+
+                List<(double From, double To)> columns = PlanIntervals.Union(coverage.Minus, coverage.Plus, toleranceDistance);
+                if (System.Math.Abs(targetZ - z) <= wall.MaxExtension + toleranceDistance)
+                {
+                    columns = PlanIntervals.Difference(columns, ContinuationStretches(coverage, target, toleranceDistance), toleranceDistance);
+                }
 
                 if (columns.Count != 0)
                 {
-                    // The level's extreme towards the wall's own part: the clip never reaches past any of its caps.
-                    double z = up ? level.Max(x => x.Z) : level.Min(x => x.Z);
-
                     // The walls crossing the line beyond the level (between it and the target), where the storey beyond
                     // the level has a wall for this one to meet.
                     double beyondFrom = up ? z : targetZ, beyondTo = up ? targetZ : z;
@@ -2620,6 +2628,37 @@ namespace SAM.Geometry.OCCT.Solver
             {
                 wall.ClipBeyondLevels(before, levels, up, band, toleranceDistance);
             }
+        }
+
+        /// <summary>
+        /// Aligns a level's coverage of the wall line to the room boundaries: an end of a covered stretch within the
+        /// wall's capture half-width (<paramref name="capture"/>) of a wall crossing the line where this wall stands
+        /// (overlapping its elevations <paramref name="zMin"/>..<paramref name="zMax"/>) is moved onto that wall's line.
+        /// Caps are modelled to the faces of the walls that bound
+        /// them, half a wall short of (or past) the crossing wall's line; read as they are, the clip would step a wall's
+        /// base or top a few centimetres beside the junction, leaving an open sliver there.
+        /// </summary>
+        private static (List<(double From, double To)> Minus, List<(double From, double To)> Plus) AlignToCrossings((List<(double From, double To)> Minus, List<(double From, double To)> Plus) coverage, List<(double U, double ZMin, double ZMax)> crossings, double zMin, double zMax, double capture, double toleranceDistance)
+        {
+            List<double> us = (crossings ?? new List<(double, double, double)>())
+                .Where(x => System.Math.Min(x.ZMax, zMax) - System.Math.Max(x.ZMin, zMin) > toleranceDistance)
+                .Select(x => x.U)
+                .ToList();
+            if (us.Count == 0)
+            {
+                return coverage;
+            }
+
+            double Snap(double u)
+            {
+                double nearest = us.OrderBy(x => System.Math.Abs(x - u)).First();
+                return System.Math.Abs(nearest - u) <= capture + toleranceDistance ? nearest : u;
+            }
+
+            List<(double From, double To)> Align(List<(double From, double To)> intervals) =>
+                PlanIntervals.Normalise(intervals.Select(x => (Snap(x.From), Snap(x.To))), toleranceDistance);
+
+            return (Align(coverage.Minus), Align(coverage.Plus));
         }
 
         /// <summary>
@@ -2660,24 +2699,27 @@ namespace SAM.Geometry.OCCT.Solver
         }
 
         /// <summary>
-        /// The stretches of the wall line where <paramref name="level"/> and <paramref name="target"/> form a step: the
-        /// level covers one side of the wall and the target does not, while the target covers the other side and the
-        /// level does not. There the wall separates a raised floor (or lowered ceiling) from the space beside it that
-        /// reaches the target - a split level - and must reach the target. Everywhere else a level the wall would grow
-        /// past is a storey of its own.
+        /// The stretches of the wall line where the space beside the wall continues past <paramref name="level"/> to the
+        /// target: on some side of the wall the target covers the line and the level does not (a split level - a raised
+        /// floor or lowered ceiling on the other side only - or a floor stacked over the target on the other side only).
+        /// There the wall, bounding that space beyond the level, is grown on to the target, as far as the wall's reach
+        /// permits (the caller bounds the move). Where the level covers every side the target covers, nothing beside the
+        /// wall continues past it: it is a storey of its own and the extension is clipped, however close it is.
         /// </summary>
-        private static List<(double From, double To)> StepStretches((List<(double From, double To)> Minus, List<(double From, double To)> Plus) level, (List<(double From, double To)> Minus, List<(double From, double To)> Plus) target, double toleranceDistance)
+        private static List<(double From, double To)> ContinuationStretches((List<(double From, double To)> Minus, List<(double From, double To)> Plus) level, (List<(double From, double To)> Minus, List<(double From, double To)> Plus) target, double toleranceDistance)
         {
-            List<(double From, double To)> minus = PlanIntervals.Intersection(PlanIntervals.Difference(PlanIntervals.Difference(level.Minus, target.Minus, toleranceDistance), level.Plus, toleranceDistance), PlanIntervals.Difference(target.Plus, level.Plus, toleranceDistance), toleranceDistance);
-            List<(double From, double To)> plus = PlanIntervals.Intersection(PlanIntervals.Difference(PlanIntervals.Difference(level.Plus, target.Plus, toleranceDistance), level.Minus, toleranceDistance), PlanIntervals.Difference(target.Minus, level.Minus, toleranceDistance), toleranceDistance);
-            return PlanIntervals.Union(minus, plus, toleranceDistance);
+            return PlanIntervals.Union(
+                PlanIntervals.Difference(target.Minus, level.Minus, toleranceDistance),
+                PlanIntervals.Difference(target.Plus, level.Plus, toleranceDistance),
+                toleranceDistance);
         }
 
         /// <summary>True when the wall rests on the caps it already passes (<paramref name="passedCaps"/>): together they
-        /// cover the whole wall line (on either side), and nowhere do they form a step with the target level
-        /// (<see cref="StepStretches"/>, a split level beside the wall). Otherwise the wall is extended to the target and
-        /// the passed caps, as intermediate levels, are clipped column by column (<see cref="ClipBeyondIntermediateCaps"/>).</summary>
-        private static bool RestsOnPassedCaps(SnappedPanel wall, List<int> passedCaps, int capIndex, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, List<Face3D> capFaces, double band, double toleranceDistance)
+        /// cover the whole wall line (on either side), and nowhere does the space beside the wall continue past them to the
+        /// target within the wall's reach (<see cref="ContinuationStretches"/>). Otherwise the wall is extended to the
+        /// target and the passed caps, as intermediate levels, are clipped column by column
+        /// (<see cref="ClipBeyondIntermediateCaps"/>).</summary>
+        private static bool RestsOnPassedCaps(SnappedPanel wall, List<int> passedCaps, int capIndex, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, List<Face3D> capFaces, double band, double toleranceDistance, List<(SnappedPanel Wall, Segment3D Foot, BoundingBox3D Box)> wallFeet = null)
         {
             if (passedCaps == null || passedCaps.Count == 0)
             {
@@ -2695,7 +2737,13 @@ namespace SAM.Geometry.OCCT.Solver
                 return true;
             }
 
-            (List<(double From, double To)> Minus, List<(double From, double To)> Plus) passed = LevelCoverage(passedCaps, capBoxes, capFaces, frame, toleranceDistance);
+            double CapZ(int i) => CapZAtPlan(capPlanes[i], frame.CentreX, frame.CentreY, 0.5 * (capBoxes[i].Min.Z + capBoxes[i].Max.Z));
+            List<(double U, double ZMin, double ZMax)> crossings = Crossings(wall, frame, wallFeet, band, toleranceDistance);
+            double targetZ = CapZ(capIndex);
+            BoundingBox3D wallBox = wall.GetBoundingBox();
+
+            (List<(double From, double To)> Minus, List<(double From, double To)> Plus) passed = AlignToCrossings(
+                LevelCoverage(passedCaps, capBoxes, capFaces, frame, toleranceDistance), crossings, wallBox.Min.Z, wallBox.Max.Z, wall.BucketSize, toleranceDistance);
             List<(double From, double To)> uncovered = PlanIntervals.Difference(
                 new[] { (frame.UMin + wall.BucketSize, frame.UMax - wall.BucketSize) },
                 PlanIntervals.Union(passed.Minus, passed.Plus, toleranceDistance),
@@ -2705,12 +2753,18 @@ namespace SAM.Geometry.OCCT.Solver
                 return false;
             }
 
-            List<(double From, double To)> step = StepStretches(
+            // Growing on past the passed caps to the target is a move the wall's reach must permit.
+            if (passedCaps.Max(i => System.Math.Abs(CapZ(i) - targetZ)) > wall.MaxExtension + toleranceDistance)
+            {
+                return true;
+            }
+
+            List<(double From, double To)> continuation = ContinuationStretches(
                 passed,
-                LevelCoverage(SameSurfaceCaps(capIndex, capBoxes, capPlanes, frame, toleranceDistance), capBoxes, capFaces, frame, toleranceDistance),
+                AlignToCrossings(LevelCoverage(SameSurfaceCaps(capIndex, capBoxes, capPlanes, frame, toleranceDistance), capBoxes, capFaces, frame, toleranceDistance), crossings, wallBox.Min.Z, wallBox.Max.Z, wall.BucketSize, toleranceDistance),
                 toleranceDistance);
 
-            return step.Count == 0;
+            return PlanIntervals.Intersection(continuation, PlanIntervals.Union(passed.Minus, passed.Plus, toleranceDistance), toleranceDistance).Count == 0;
         }
 
         /// <summary>The union of the side coverage (<see cref="SideCoverage"/>) of <paramref name="caps"/> on each side of
