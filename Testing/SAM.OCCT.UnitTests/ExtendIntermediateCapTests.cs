@@ -166,44 +166,170 @@ namespace SAM.OCCT.UnitTests
             Assert.InRange(wall.GetArea(), 24.0, 24.0 + 12 * Overshoot + 1e-4);
         }
 
-        [Fact]
-        public void Extend_MergedWallStoppingShortOfTheEndOnOneStorey_JunctionGapStaysFilled()
+        /// <summary>The west wall merged across both storeys with its ground-floor part stopping 0.15 m short of the end
+        /// (y 0..5.85 below the first floor, y 0..6 above), in a stack whose caps extend past the wall (x -1..11,
+        /// y -1..7).</summary>
+        private static SnappedPanel ShortGroundFloorWall(double maxExtension)
         {
-            // Arrange: the west wall merged across both storeys, its ground-floor part stopping 0.15 m short of the end
-            // (y 0..5.85) where it should meet a crossing wall (Revit-home: a ground-floor wall merged with its longer
-            // foundation wall). 0.15 m is within the wall's lateral reach (0.5 m): a junction gap, not a missing storey.
-            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
-                new Point3D(0, 0, 0), new Point3D(0, 5.85, 0), new Point3D(0, 5.85, 3), new Point3D(0, 6, 3), new Point3D(0, 6, 6), new Point3D(0, 0, 6)), 1, 0.3, 0.5);
-
-            // Act
-            Extend(wall);
-
-            // Assert
-            Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, 1.5), Tolerance), "The 0.15 m junction gap must stay filled.");
+            return new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(0, 5.85, 0), new Point3D(0, 5.85, 3), new Point3D(0, 6, 3), new Point3D(0, 6, 6), new Point3D(0, 0, 6)), 1, 0.3, maxExtension);
         }
 
-        [Fact]
-        public void Extend_SplitLevelFloorBesideTheWall_DoesNotStopTheExtension()
+        private static Face3D WideCap(double z)
         {
-            // Arrange: a ground-floor wall (x = 0) with a stepped base, z 0.15 over y 0..4 and z 0.1 over y 4..6, between a
-            // floor at z = 0 and a split-level floor 0.15 m higher on its other side over y 0..4 (whole-level-towers: floors
-            // at 12.24 and 12.384). The 0.15 m step is within the wall's reach: one level, not two storeys.
-            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
-                new Point3D(0, 0, 0.15), new Point3D(0, 4, 0.15), new Point3D(0, 4, 0.1), new Point3D(0, 6, 0.1), new Point3D(0, 6, 3), new Point3D(0, 0, 3)), 1, 0.3, 0.5);
-            List<SnappedPanel> panels = new List<SnappedPanel>
-            {
-                new SnappedPanel(100, TestGeometry.CreatePlanarFace(new Point3D(0, 0, 0), new Point3D(5, 0, 0), new Point3D(5, 6, 0), new Point3D(0, 6, 0)), 1, 0.3, 0.5),
-                new SnappedPanel(101, TestGeometry.CreatePlanarFace(new Point3D(-5, 0, 0.15), new Point3D(0, 0, 0.15), new Point3D(0, 4, 0.15), new Point3D(-5, 4, 0.15)), 1, 0.3, 0.5),
-                new SnappedPanel(102, TestGeometry.CreatePlanarFace(new Point3D(-5, 0, 3), new Point3D(5, 0, 3), new Point3D(5, 6, 3), new Point3D(-5, 6, 3)), 1, 0.3, 0.5),
-                wall,
-            };
+            return TestGeometry.CreatePlanarFace(new Point3D(-1, -1, z), new Point3D(11, -1, z), new Point3D(11, 7, z), new Point3D(-1, 7, z));
+        }
+
+        [Theory]
+        [InlineData(0.10)]
+        [InlineData(0.50)]
+        [InlineData(2.00)]
+        public void Extend_NarrowSetBackWithoutCrossingWall_StaysOpenWhateverTheReach(double maxExtension)
+        {
+            // Arrange: an intentional 0.15 m lower-storey set-back with no wall at its end (independent review, finding 2).
+            // The wall's lateral reach permits a move; it is not evidence that the lower storey continues.
+            SnappedPanel wall = ShortGroundFloorWall(maxExtension);
+            List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(100, WideCap(0), 1, 0.3, 0.5), new SnappedPanel(101, WideCap(3), 1, 0.3, 0.5), new SnappedPanel(102, WideCap(6), 1, 0.3, 0.5), wall };
 
             // Act
             Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, Tolerance);
 
-            // Assert: the base reaches below the floor at z = 0 along the whole wall.
+            // Assert
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 5.925, 1.5), Tolerance), "The set-back must not be filled through the first floor.");
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 3, -0.025), Tolerance));
+        }
+
+        /// <summary>The short ground-floor wall (lateral reach <paramref name="maxExtension"/>) with a crossing wall at
+        /// y = 6 (x -1..1) from <paramref name="crossingBase"/> to <paramref name="crossingTop"/>, through the conditioning
+        /// order: lateral extend, then vertical extend.</summary>
+        private static SnappedPanel ExtendWithCrossingWall(double maxExtension, double crossingBase, double crossingTop)
+        {
+            SnappedPanel wall = ShortGroundFloorWall(maxExtension);
+            SnappedPanel crossing = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(-1, 6, crossingBase), new Point3D(1, 6, crossingBase), new Point3D(1, 6, crossingTop), new Point3D(-1, 6, crossingTop)), 1, 0.3, 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(100, WideCap(0), 1, 0.3, 0.5), new SnappedPanel(101, WideCap(3), 1, 0.3, 0.5), new SnappedPanel(102, WideCap(6), 1, 0.3, 0.5), wall, crossing };
+
+            Panel3DSnapSolver.ExtendWalls(panels, VerticalAngle, Overshoot, Tolerance);
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, Tolerance);
+            return wall;
+        }
+
+        [Fact]
+        public void ExtendWallsThenExtend_GroundFloorStoppingShortOfACrossingWall_ClosesTheJunction()
+        {
+            // Arrange / Act: the ground-floor part ends 0.15 m short of a crossing ground-floor wall (z 0..3), within the
+            // wall's reach. The lateral extend reads the merged wall's whole plan extent (y 0..6) and leaves it; the
+            // crossing wall in that storey is the evidence that the gap is a junction.
+            SnappedPanel wall = ExtendWithCrossingWall(0.5, 0, 3);
+
+            // Assert
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, 1.5), Tolerance), "The junction with the crossing wall must be closed.");
+        }
+
+        [Theory]
+        [InlineData(0.5, 3.0, 6.0)]  // the crossing wall is upstairs only: no wall to meet below the first floor
+        [InlineData(0.1, 0.0, 3.0)]  // the junction is 0.15 m away, beyond the wall's 0.1 m reach: no permission to move
+        public void ExtendWallsThenExtend_NoCrossingWallInReachBelowTheLevel_SetBackStaysOpen(double maxExtension, double crossingBase, double crossingTop)
+        {
+            // Arrange / Act
+            SnappedPanel wall = ExtendWithCrossingWall(maxExtension, crossingBase, crossingTop);
+
+            // Assert
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 5.925, 1.5), Tolerance));
+        }
+
+        /// <summary>A ground-floor wall (x = 0) with a stepped base, z 0.15 over y 0..4 and z 0.1 over y 4..6, under a ceiling
+        /// at z = 3, with a floor at z = 0 on its east side and a second floor 0.15 m higher (z 0.15, y 0..4) spanning
+        /// x <paramref name="raisedFrom"/>..<paramref name="raisedTo"/>.</summary>
+        private static SnappedPanel ExtendBesideRaisedFloor(double raisedFrom, double raisedTo, double maxExtension)
+        {
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0.15), new Point3D(0, 4, 0.15), new Point3D(0, 4, 0.1), new Point3D(0, 6, 0.1), new Point3D(0, 6, 3), new Point3D(0, 0, 3)), 1, 0.3, maxExtension);
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                new SnappedPanel(100, TestGeometry.CreatePlanarFace(new Point3D(0, 0, 0), new Point3D(5, 0, 0), new Point3D(5, 6, 0), new Point3D(0, 6, 0)), 1, 0.3, 0.5),
+                new SnappedPanel(101, TestGeometry.CreatePlanarFace(new Point3D(raisedFrom, 0, 0.15), new Point3D(raisedTo, 0, 0.15), new Point3D(raisedTo, 4, 0.15), new Point3D(raisedFrom, 4, 0.15)), 1, 0.3, 0.5),
+                new SnappedPanel(102, TestGeometry.CreatePlanarFace(new Point3D(-5, 0, 3), new Point3D(5, 0, 3), new Point3D(5, 6, 3), new Point3D(-5, 6, 3)), 1, 0.3, 0.5),
+                wall,
+            };
+
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, Tolerance);
+            return wall;
+        }
+
+        [Theory]
+        [InlineData(0.05)]
+        [InlineData(0.5)]
+        [InlineData(2.0)]
+        public void Extend_SplitLevelFloorBesideTheWall_DoesNotStopTheExtension(double maxExtension)
+        {
+            // Arrange / Act: the raised floor lies west of the wall only, the lower floor east of it only (whole-level-towers:
+            // floors at 12.24 and 12.384). The wall is the step between them: the east room reaches z = 0.
+            SnappedPanel wall = ExtendBesideRaisedFloor(-5, 0, maxExtension);
+
+            // Assert: the base reaches below the floor at z = 0 along the whole wall, whatever the wall's lateral reach.
             Assert.True(wall.Face3D.Inside(new Point3D(0, 2, 0.05), Tolerance));
             Assert.True(wall.Face3D.Inside(new Point3D(0, 5, 0.05), Tolerance));
+        }
+
+        [Theory]
+        [InlineData(0.05)]
+        [InlineData(0.5)]
+        [InlineData(2.0)]
+        public void Extend_DistinctLevelUnderBothSidesOfTheWall_IsKept(double maxExtension)
+        {
+            // Arrange / Act: control for the split level - the same floor 0.15 m higher, but under both sides of the wall
+            // (x -5..5): it is the wall's own floor, a distinct level above the floor at z = 0, however close.
+            SnappedPanel wall = ExtendBesideRaisedFloor(-5, 5, maxExtension);
+
+            // Assert: the part standing on the raised floor (y 0..4) does not grow through it to z = 0.
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 2, 0.05), Tolerance), "The wall must not grow through its own floor.");
+        }
+
+        // ── Representation independence (independent review, finding 1) ────────────────────────────────
+        // The merged-L wall with two floors of identical footprint at z = 3.00 and z = 3.04. The lower one in one piece,
+        // split equally, split unequally, or listed twice must give the same wall; the two floors stay two levels.
+
+        public static IEnumerable<object[]> LowerFloorRepresentations()
+        {
+            yield return new object[] { "one piece", new[] { new[] { (-1.0, -1.0), (11.0, -1.0), (11.0, 7.0), (-1.0, 7.0) } } };
+            yield return new object[] { "two equal pieces", new[] { new[] { (-1.0, -1.0), (11.0, -1.0), (11.0, 3.0), (-1.0, 3.0) }, new[] { (-1.0, 3.0), (11.0, 3.0), (11.0, 7.0), (-1.0, 7.0) } } };
+            yield return new object[] { "three unequal pieces", new[] { new[] { (-1.0, -1.0), (11.0, -1.0), (11.0, 0.5), (-1.0, 0.5) }, new[] { (-1.0, 0.5), (4.0, 0.5), (4.0, 7.0), (-1.0, 7.0) }, new[] { (4.0, 0.5), (11.0, 0.5), (11.0, 7.0), (4.0, 7.0) } } };
+            yield return new object[] { "listed twice", new[] { new[] { (-1.0, -1.0), (11.0, -1.0), (11.0, 7.0), (-1.0, 7.0) }, new[] { (-1.0, -1.0), (11.0, -1.0), (11.0, 7.0), (-1.0, 7.0) } } };
+        }
+
+        private static SnappedPanel ExtendWithNearbyFloors((double X, double Y)[][] lowerPieces)
+        {
+            SnappedPanel wall = MergedLWall();
+            List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(100, WideCap(0), 1, 0.3, 0.5), new SnappedPanel(102, WideCap(6), 1, 0.3, 0.5) };
+            for (int i = 0; i < lowerPieces.Length; i++)
+            {
+                panels.Add(new SnappedPanel(103 + i, TestGeometry.CreatePlanarFace(lowerPieces[i].Select(p => new Point3D(p.X, p.Y, 3)).ToArray()), 1, 0.3, 0.5));
+            }
+
+            panels.Add(new SnappedPanel(110, WideCap(3.04), 1, 0.3, 0.5));
+            panels.Add(wall);
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, Tolerance);
+            return wall;
+        }
+
+        [Theory]
+        [MemberData(nameof(LowerFloorRepresentations))]
+        public void Extend_NearbyFloorsInAnyRepresentation_SameWallBoundary(string representation, (double X, double Y)[][] lowerPieces)
+        {
+            // Arrange
+            (double Area, string Inside) expected = Signature(ExtendWithNearbyFloors((((double X, double Y)[][])LowerFloorRepresentations().First()[1])), 0, 0, 0);
+
+            // Act
+            SnappedPanel wall = ExtendWithNearbyFloors(lowerPieces);
+
+            // Assert: same boundary as the floor in one piece; the notch is clipped below the upper of the two floors,
+            // which is a level of its own (the review's probe point 6.7 mm below it is outside the wall).
+            (double Area, string Inside) actual = Signature(wall, 0, 0, 0);
+            Assert.True(expected.Area == actual.Area, representation);
+            Assert.True(expected.Inside == actual.Inside, representation);
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 4, 2.966), 1e-6), representation);
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 4, 1.5), 1e-6), representation);
         }
 
         [Fact]

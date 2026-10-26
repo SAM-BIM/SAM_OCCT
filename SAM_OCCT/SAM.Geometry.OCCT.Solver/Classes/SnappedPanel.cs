@@ -1947,14 +1947,15 @@ namespace SAM.Geometry.OCCT.Solver
         /// where the lower storey has none.</para>
         /// </summary>
         /// <param name="original">The face before the extension; never reduced.</param>
-        /// <param name="levels">Elevation and plan extent along the wall (u from, u to; u = p . uAxis, the plan
-        /// axis of the wall) of each intermediate level.</param>
+        /// <param name="levels">Elevation of each intermediate level and the stretches of the wall (u from, u to; u =
+        /// p . uAxis, the plan axis of the wall) where it stops the extension, and the u of the walls crossing this one
+        /// in the storey beyond it.</param>
         /// <param name="up">The direction of the extension.</param>
         /// <param name="band">Material of <paramref name="original"/> within this distance beyond a level does not
         /// count as continuing past it (the wall resting on, or overshooting, the level).</param>
         /// <param name="tolerance">Distance tolerance.</param>
         /// <returns>True when area was removed.</returns>
-        internal bool ClipBeyondLevels(Face3D original, IList<(double Z, double UFrom, double UTo)> levels, bool up, double band, double tolerance)
+        internal bool ClipBeyondLevels(Face3D original, IList<(double Z, IList<(double From, double To)> Columns, IList<double> Crossings)> levels, bool up, double band, double tolerance)
         {
             if (original == null || face3D == null || plane == null || levels == null || levels.Count == 0 || ReferenceEquals(original, face3D))
             {
@@ -1988,7 +1989,7 @@ namespace SAM.Geometry.OCCT.Solver
             double zMin = boundingBox3D.Min.Z - 1, zMax = boundingBox3D.Max.Z + 1;
 
             List<Geometry.Planar.Face2D> shadows = new List<Geometry.Planar.Face2D>();
-            foreach ((double z, double uFrom, double uTo) in levels)
+            foreach ((double z, IList<(double From, double To)> columns, IList<double> crossings) in levels)
             {
                 // Beyond the level: below it for a downward extension, above it for an upward one.
                 double from = up ? z + band + tolerance : zMin;
@@ -2010,25 +2011,32 @@ namespace SAM.Geometry.OCCT.Solver
                     }
                 }
 
-                List<(double From, double To)> free = new List<(double, double)>();
-                double start = System.Math.Max(uFrom, uMin);
-                foreach ((double continuingFrom, double continuingTo) in continuing.OrderBy(x => x.From))
+                // Columns where the original wall continues past the level keep their extension. So does a junction: the
+                // stretch from where the original continues to a wall crossing this one in the storey beyond the level
+                // (the wall stopping short of it there), up to the wall's lateral reach. A stretch without a crossing wall
+                // is an intentional set-back or void, however narrow, and is clipped.
+                List<(double From, double To)> junctions = new List<(double, double)>();
+                foreach ((double freeFrom, double freeTo) in PlanIntervals.Difference(columns, continuing, tolerance))
                 {
-                    free.Add((start, System.Math.Min(continuingFrom, uTo)));
-                    start = System.Math.Max(start, continuingTo);
+                    bool fromContinuing = continuing.Any(x => System.Math.Abs(x.To - freeFrom) <= tolerance);
+                    bool toContinuing = continuing.Any(x => System.Math.Abs(x.From - freeTo) <= tolerance);
+                    foreach (double crossing in crossings ?? new List<double>())
+                    {
+                        if (fromContinuing && crossing > freeFrom + tolerance && crossing <= freeTo + tolerance && crossing - freeFrom <= MaxExtension + tolerance)
+                        {
+                            junctions.Add((freeFrom, System.Math.Min(freeTo, crossing + band)));
+                        }
+
+                        if (toContinuing && crossing < freeTo - tolerance && crossing >= freeFrom - tolerance && freeTo - crossing <= MaxExtension + tolerance)
+                        {
+                            junctions.Add((System.Math.Max(freeFrom, crossing - band), freeTo));
+                        }
+                    }
                 }
 
-                free.Add((start, System.Math.Min(uTo, uMax)));
-
-                // A free stretch of the wall narrower than its lateral reach is a junction gap (the wall stopping short
-                // of a crossing wall), which the lateral extend exists to close: it keeps its fill.
-                foreach ((double freeFrom, double freeTo) in free)
+                foreach ((double freeFrom, double freeTo) in PlanIntervals.Difference(PlanIntervals.Difference(columns, continuing, tolerance), junctions, tolerance))
                 {
-                    double width = System.Math.Min(freeTo, uMax - 1) - System.Math.Max(freeFrom, uMin + 1);
-                    if (width >= System.Math.Max(MaxExtension, tolerance))
-                    {
-                        AddColumn(shadows, uAxis, wAxis, freeFrom, freeTo, from, to, tolerance);
-                    }
+                    AddColumn(shadows, uAxis, wAxis, freeFrom, freeTo, from, to, tolerance);
                 }
             }
 
