@@ -863,6 +863,143 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(SAM.Core.OCCT.OcctDiagnosticSeverity.Error, wall.ExtendDiagnosticSeverities[index]);
         }
 
+        // ── A crossing wall's material at its own base or top (review of 2026-10-26 revision 3, finding 5) ───────
+        // Material running to the crossing wall's base or top counted on to +/- infinity, on the grounds that its own extend
+        // moves it onto its cap. It counts on only as far as that extend is verified to take it.
+
+        /// <summary>The west wall (x = 0, y 0..6) with its upper storey stopping 0.15 m short (y 0..5.85 above z = 3) and a
+        /// crossing wall at y = 6 (x -1..1) from z 0 to 4.2, under <paramref name="caps"/>.</summary>
+        private static (SnappedPanel Wall, SnappedPanel Crossing) ExtendUpWithCrossingEndingAt42(params Face3D[] caps)
+        {
+            SnappedPanel wall = new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                new Point3D(0, 0, 0), new Point3D(0, 6, 0), new Point3D(0, 6, 3), new Point3D(0, 5.85, 3), new Point3D(0, 5.85, 6), new Point3D(0, 0, 6)), 1, 0.3, 0.5);
+            SnappedPanel crossing = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(-1, 6, 0), new Point3D(1, 6, 0), new Point3D(1, 6, 4.2), new Point3D(-1, 6, 4.2)), 1, 0.3, 0.5);
+            List<SnappedPanel> panels = caps.Select((x, i) => new SnappedPanel(100 + i, x, 1, 0.3, 0.5)).ToList();
+            panels.Add(wall);
+            panels.Add(crossing);
+
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, Tolerance);
+            return (wall, crossing);
+        }
+
+        private static Face3D Slab(double z, double x0, double y0, double x1, double y1)
+        {
+            return TestGeometry.CreatePlanarFace(new Point3D(x0, y0, z), new Point3D(x1, y0, z), new Point3D(x1, y1, z), new Point3D(x0, y1, z));
+        }
+
+        [Fact]
+        public void Extend_CrossingWallReachingItsCap_JunctionClosedToTheCap()
+        {
+            // Arrange / Act: control - the crossing wall's own extend takes it from 4.2 to the roof.
+            (SnappedPanel wall, SnappedPanel crossing) = ExtendUpWithCrossingEndingAt42(Slab(0, -2, -1, 2, 7), Slab(3, -2, -1, 2, 7), Slab(6, -2, -1, 2, 7));
+
+            // Assert
+            Assert.True(crossing.Face3D.Inside(new Point3D(0, 6, 5.6), Tolerance), "The crossing wall reaches the roof.");
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, 3.6), Tolerance));
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, 5.6), Tolerance), "The junction is closed where the crossing wall meets it after its extend.");
+        }
+
+        [Fact]
+        public void Extend_CrossingWallWithNoCapAboveIt_JunctionFilledOnlyWhereItHasMaterial()
+        {
+            // Arrange / Act: the roof stops at y 5.9, short of the crossing wall, so the crossing wall's extend finds no cap
+            // and it stays at 4.2.
+            (SnappedPanel wall, SnappedPanel crossing) = ExtendUpWithCrossingEndingAt42(Slab(0, -2, -1, 2, 7), Slab(3, -2, -1, 2, 7), Slab(6, -2, -1, 2, 5.9));
+
+            // Assert: no wall to meet above 4.2; the receiving wall does not invent one.
+            Assert.Equal(4.2, crossing.GetBoundingBox().Max.Z, 4);
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, 3.6), Tolerance), "Below 4.2 the crossing wall meets the line.");
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 5.925, 5.1), Tolerance), "Above 4.2 no wall meets the line.");
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 3, 6.025), Tolerance), "The wall must still reach the roof.");
+        }
+
+        [Fact]
+        public void Extend_CrossingWallClippedByALevelOnItsOtherSide_JunctionFilledOnlyToThatLevel()
+        {
+            // Arrange / Act: a mezzanine at z 5 beyond the crossing wall (x -0.7..0.7, y 6.3..7) covers the crossing wall at
+            // the junction but not the receiving wall: the crossing wall's own clip stops its extension there.
+            (SnappedPanel wall, SnappedPanel crossing) = ExtendUpWithCrossingEndingAt42(Slab(0, -2, -1, 2, 7), Slab(3, -2, -1, 2, 7), Slab(6, -2, -1, 2, 7), Slab(5, -0.7, 6.3, 0.7, 7));
+
+            // Assert: the receiving wall follows the crossing wall's material after its own extend and clip.
+            Assert.False(crossing.Face3D.Inside(new Point3D(0, 6, 5.6), Tolerance), "The crossing wall is clipped at the mezzanine.");
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, 4.6), Tolerance));
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 5.925, 5.6), Tolerance), "Above the mezzanine no wall meets the line.");
+        }
+
+        [Fact]
+        public void Extend_HangingCrossingWallWithNoFloorBelowIt_JunctionFilledOnlyWhereItHasMaterial()
+        {
+            // Arrange: mirrored - the lower storey stops short (y 0..5.85 below z 3) and the crossing wall hangs from z 1.5;
+            // the ground floor stops at y 5.9, so the crossing wall's extend finds no floor.
+            SnappedPanel wall = ShortGroundFloorWall(0.5);
+            SnappedPanel crossing = new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                new Point3D(-1, 6, 1.5), new Point3D(1, 6, 1.5), new Point3D(1, 6, 6), new Point3D(-1, 6, 6)), 1, 0.3, 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                new SnappedPanel(100, Slab(0, -2, -1, 2, 5.9), 1, 0.3, 0.5), new SnappedPanel(101, Slab(3, -2, -1, 2, 7), 1, 0.3, 0.5), new SnappedPanel(102, Slab(6, -2, -1, 2, 7), 1, 0.3, 0.5), wall, crossing,
+            };
+
+            // Act
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, Tolerance);
+
+            // Assert
+            Assert.Equal(1.5, crossing.GetBoundingBox().Min.Z, 4);
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, 2.25), Tolerance), "Above 1.5 the crossing wall meets the line.");
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 5.925, 0.75), Tolerance), "Below 1.5 no wall meets the line.");
+        }
+
+        // ── A tilted crossing wall at an oblique plan angle (review of 2026-10-26 revision 3, finding 7) ─────────
+
+        /// <summary>A crossing wall meeting the west wall's line at (0, 6) at 60 degrees in plan, tilted 3 degrees out of
+        /// the vertical: points at plan offset t along its axis and elevation z. In one storey it reaches the line (t from
+        /// -1.15), in the other it stops 0.46 short of it; it runs on to t = 7, longer than it is tall, so its plan foot
+        /// (SnappedPanel.GetBaseSegment: the longest edge) is its base, not its leaning side. One stepped face or two
+        /// storey faces.</summary>
+        private static List<SnappedPanel> TiltedObliqueCrossing(bool merged, bool meetsBelow)
+        {
+            double c = System.Math.Cos(System.Math.PI / 3), s = System.Math.Sin(System.Math.PI / 3), lean = System.Math.Tan(3 * System.Math.PI / 180);
+            Point3D Q(double t, double z) => new Point3D(t * c - z * lean * s, 6 + t * s + z * lean * c, z);
+            double lower = meetsBelow ? -1.15 : 0.46, upper = meetsBelow ? 0.46 : -1.15;
+            if (merged)
+            {
+                return new List<SnappedPanel> { new SnappedPanel(1, TestGeometry.CreatePlanarFace(Q(lower, 0), Q(7, 0), Q(7, 6), Q(upper, 6), Q(upper, 3), Q(lower, 3)), 1, 0.3, 0) };
+            }
+
+            return new List<SnappedPanel>
+            {
+                new SnappedPanel(1, TestGeometry.CreatePlanarFace(Q(lower, 0), Q(7, 0), Q(7, 3), Q(lower, 3)), 1, 0.3, 0),
+                new SnappedPanel(2, TestGeometry.CreatePlanarFace(Q(upper, 3), Q(7, 3), Q(7, 6), Q(upper, 6)), 1, 0.3, 0),
+            };
+        }
+
+        [Theory]
+        [InlineData(true, true)]   // control: meets the line in the set-back storey: junction closed
+        [InlineData(false, true)]
+        [InlineData(true, false)]  // meets the line upstairs only: set-back open
+        [InlineData(false, false)]
+        public void Extend_TiltedObliqueCrossingWall_JunctionFollowsItsMaterialInAnyRepresentation(bool merged, bool meetsBelow)
+        {
+            // Arrange
+            List<SnappedPanel> Stack(List<SnappedPanel> crossings)
+            {
+                List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(100, Slab(0, -3, -1, 8, 14), 1, 0.3, 0.5), new SnappedPanel(101, Slab(3, -3, -1, 8, 14), 1, 0.3, 0.5), new SnappedPanel(102, Slab(6, -3, -1, 8, 14), 1, 0.3, 0.5), ShortGroundFloorWall(0.5) };
+                panels.AddRange(crossings);
+                return panels;
+            }
+
+            List<SnappedPanel> panels = Stack(TiltedObliqueCrossing(merged, meetsBelow));
+            List<SnappedPanel> split = Stack(TiltedObliqueCrossing(false, meetsBelow));
+
+            // Act
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, Tolerance);
+            Panel3DSnapSolver.Extend(split, VerticalAngle, Overshoot, Tolerance);
+
+            // Assert
+            Assert.Equal(meetsBelow, panels[3].Face3D.Inside(new Point3D(0, 5.925, 1.5), Tolerance));
+            Assert.Equal(split[3].GetArea(), panels[3].GetArea(), 6);
+        }
+
         // ── Cap openings (Softhouse crash at 696dce0, review L1) ──────────────────────────────────────────
         // Softhouse (2026-10-26) Clean3D output reduced to the two faces that reproduce the revision-2 crash at 696dce0: the
         // ground-floor slab with its three openings and one wall over it, exactly as saved (each face's plane and its loops

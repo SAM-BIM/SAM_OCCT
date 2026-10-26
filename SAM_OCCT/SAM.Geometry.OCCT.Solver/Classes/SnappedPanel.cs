@@ -1961,8 +1961,8 @@ namespace SAM.Geometry.OCCT.Solver
         /// <param name="original">The face before the extension; never reduced.</param>
         /// <param name="levels">Elevation of each intermediate level and the stretches of the wall (u from, u to; u =
         /// p . uAxis, the plan axis of the wall) where it stops the extension, and the walls crossing this one in the
-        /// storey beyond it: the u of each and the elevations over which it has material at the junction (unbounded
-        /// where that material runs on to its cap).</param>
+        /// storey beyond it: the u of each and the elevations over which it has material at the junction (where that
+        /// material runs to the crossing wall's own base or top, as far as that wall's own extend is verified to take it).</param>
         /// <param name="up">The direction of the extension.</param>
         /// <param name="band">Material of <paramref name="original"/> within this distance beyond a level does not
         /// count as continuing past it (the wall resting on, or overshooting, the level).</param>
