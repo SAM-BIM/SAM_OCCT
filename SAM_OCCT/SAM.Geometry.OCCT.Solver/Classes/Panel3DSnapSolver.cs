@@ -2855,14 +2855,17 @@ namespace SAM.Geometry.OCCT.Solver
                 return result;
             }
 
-            List<Geometry.Planar.IClosed2D> openings = (cap.GetInternalEdge3Ds() ?? new List<IClosedPlanar3D>())
+            // Openings are subtracted one at a time from the outline's pieces in the band: a plan face built with several
+            // openings at once unions them, and that union can yield null edges (Softhouse slabs with several openings).
+            List<Geometry.Planar.Face2D> openings = (cap.GetInternalEdge3Ds() ?? new List<IClosedPlanar3D>())
                 .Select(x => (x as ISegmentable3D)?.GetPoints())
                 .Where(x => x != null && x.Count >= 3)
-                .Select(x => (Geometry.Planar.IClosed2D)new Geometry.Planar.Polygon2D(x.ConvertAll(ToPlan)))
+                .Select(x => Geometry.Planar.Create.Face2D(new Geometry.Planar.Polygon2D(x.ConvertAll(ToPlan)), null))
+                .Where(x => x != null && x.GetArea() > toleranceDistance)
                 .ToList();
 
             double near = frame.Line + side * frame.Reach, far = frame.Line + side * 2 * frame.Reach;
-            Geometry.Planar.Face2D plan = Geometry.Planar.Create.Face2D(new Geometry.Planar.Polygon2D(external.ConvertAll(ToPlan)), openings);
+            Geometry.Planar.Face2D plan = Geometry.Planar.Create.Face2D(new Geometry.Planar.Polygon2D(external.ConvertAll(ToPlan)), null);
             Geometry.Planar.Face2D strip = Geometry.Planar.Create.Face2D(new Geometry.Planar.Polygon2D(new List<Geometry.Planar.Point2D>
             {
                 new Geometry.Planar.Point2D(frame.UMin, System.Math.Min(near, far)), new Geometry.Planar.Point2D(frame.UMax, System.Math.Min(near, far)),
@@ -2874,7 +2877,16 @@ namespace SAM.Geometry.OCCT.Solver
                 return result;
             }
 
-            foreach (Geometry.Planar.Face2D piece in Geometry.Planar.Query.Intersection(plan, strip, toleranceDistance) ?? new List<Geometry.Planar.Face2D>())
+            List<Geometry.Planar.Face2D> pieces = (Geometry.Planar.Query.Intersection(plan, strip, toleranceDistance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null);
+            foreach (Geometry.Planar.Face2D opening in openings)
+            {
+                Geometry.Planar.BoundingBox2D openingBox = opening.GetBoundingBox();
+                pieces = pieces.SelectMany(x => !x.GetBoundingBox().InRange(openingBox, toleranceDistance)
+                    ? new List<Geometry.Planar.Face2D> { x }
+                    : (Geometry.Planar.Query.Difference(x, opening, toleranceDistance) ?? new List<Geometry.Planar.Face2D>()).FindAll(y => y != null)).ToList();
+            }
+
+            foreach (Geometry.Planar.Face2D piece in pieces)
             {
                 List<Geometry.Planar.Point2D> point2Ds = (piece?.ExternalEdge2D as Geometry.Planar.ISegmentable2D)?.GetPoints();
                 if (point2Ds != null && point2Ds.Count != 0 && piece.GetArea() > toleranceDistance)

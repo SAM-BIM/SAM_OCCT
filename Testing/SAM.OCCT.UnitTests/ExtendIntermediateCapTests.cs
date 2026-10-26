@@ -592,6 +592,31 @@ namespace SAM.OCCT.UnitTests
             Assert.True(wall.Face3D.Inside(new Point3D(0, 1, -0.025), 1e-4));
         }
 
+        [Fact]
+        public void Extend_FloorWithSeveralOpeningsAtTheWall_EachOpeningKeepsTheExtension()
+        {
+            // Arrange: the merged-L wall under a first floor (x -4..10) with two stair openings over the wall line (y 2.5..3.2
+            // and y 4..5.5). A plan face built with several openings at once unions them, which can leave null edges
+            // (Softhouse); each opening must still count.
+            Face3D floor = Face3D.Create(new List<IClosedPlanar3D>
+            {
+                new Polygon3D(new List<Point3D> { new Point3D(-4, 0, 3), new Point3D(10, 0, 3), new Point3D(10, 6, 3), new Point3D(-4, 6, 3) }),
+                new Polygon3D(new List<Point3D> { new Point3D(-1, 2.5, 3), new Point3D(1, 2.5, 3), new Point3D(1, 3.2, 3), new Point3D(-1, 3.2, 3) }),
+                new Polygon3D(new List<Point3D> { new Point3D(-1, 4, 3), new Point3D(1, 4, 3), new Point3D(1, 5.5, 3), new Point3D(-1, 5.5, 3) }),
+            });
+            SnappedPanel wall = MergedLWall();
+            List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(100, WideCap(0), 1, 0.3, 0.5), new SnappedPanel(101, floor, 1, 0.3, 0.5), new SnappedPanel(102, WideCap(6), 1, 0.3, 0.5), wall };
+
+            // Act
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, Tolerance);
+
+            // Assert: under each opening the existing extend applies; elsewhere the floor stops the wall.
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 2.85, 1.5), 1e-4));
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 4.75, 1.5), 1e-4));
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 3.6, 1.5), 1e-4));
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 5.8, 1.5), 1e-4));
+        }
+
         [Theory]
         [InlineData(0.0, 0.0, 0.0)]
         [InlineData(0.0, 0.0, 37.0)]
