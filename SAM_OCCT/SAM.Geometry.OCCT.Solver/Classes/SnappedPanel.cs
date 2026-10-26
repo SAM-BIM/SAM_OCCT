@@ -2093,28 +2093,31 @@ namespace SAM.Geometry.OCCT.Solver
                 return false;
             }
 
-            // Only the extension is clipped: the original face is united back whole, so no clip ever removes material the
-            // wall had before the extend, whatever the shadows overlap. (SAM's planar Difference returns null for an empty
-            // result as well as on failure, so null reads as empty here.)
-            // Every residual piece - an addition, a removed or kept part of one, original material missing from the result,
-            // a piece left apart from the wall - is judged by its own width (IsSliver): noise of the planar operations is a
+            // Only the extension is clipped: what is removed is the extension's part in the shadows, never material the wall
+            // had before the extend, whatever the shadows overlap. (SAM's planar Difference returns null for an empty result
+            // as well as on failure, so null reads as empty here.)
+            // Every residual piece - an addition, a removed part of one, original material missing from the result, a piece
+            // left apart from the wall - is judged by its own width (IsSliver): noise of the planar operations is a
             // sliver along an edge, however long the wall.
             List<Geometry.Planar.Face2D> additions = (Geometry.Planar.Query.Difference(extended2D, original2D, tolerance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null && !IsSliver(x, tolerance));
-            List<Geometry.Planar.Face2D> keptAdditions = additions.SelectMany(x => Geometry.Planar.Query.Difference(x, shadows, tolerance) ?? new List<Geometry.Planar.Face2D>()).Where(x => x != null && !IsSliver(x, tolerance)).ToList();
 
             // Nothing but slivers removed (a shadow grazing the extension's edge): no clip. Softhouse wall #17: a graze removed
             // 1e-5 m2 along the wall; compared as an area with the 1e-6 m distance tolerance it read as a clip.
-            List<Geometry.Planar.Face2D> removed = additions.SelectMany(x => shadows.SelectMany(y => Geometry.Planar.Query.Intersection(x, y, tolerance) ?? new List<Geometry.Planar.Face2D>())).ToList();
-            if (removed.TrueForAll(x => x == null || IsSliver(x, tolerance)))
+            List<Geometry.Planar.Face2D> removed = additions.SelectMany(x => shadows.SelectMany(y => Geometry.Planar.Query.Intersection(x, y, tolerance) ?? new List<Geometry.Planar.Face2D>())).Where(x => x != null && !IsSliver(x, tolerance)).ToList();
+            if (removed.Count == 0)
             {
                 return false;
             }
 
-            // The wall is one face: the piece holding the original. Every kept extension piece must be in it; one that is
-            // not (not connected to the wall) is reported, never dropped silently. A clip that cannot keep the whole original
-            // (beyond slivers) or gives an invalid face is not made.
-            List<Geometry.Planar.Face2D> united = Geometry.Planar.Query.Union(new List<Geometry.Planar.Face2D> { original2D }.Concat(keptAdditions).ToList(), tolerance)?.FindAll(x => x != null);
-            Geometry.Planar.Face2D kept = united?.OrderByDescending(x => x.GetArea()).FirstOrDefault();
+            // The clipped face is the extended face cut by the removed pieces - a local cut where the extension is removed.
+            // It is not re-assembled from the original and the kept extension pieces: such a union can leave a crack of the
+            // tolerance's width between pieces whose shared edge is offset by it (AdjacencyCluster-home #20 on the Clean3D ->
+            // Extend3D path: a 1 um slit down the wall from its top, through which the native build lost every room along
+            // it). The wall is one face, the piece holding the original; a kept extension piece not connected to it is
+            // reported, never dropped silently. A clip that cannot keep the whole original (beyond slivers) or gives an
+            // invalid face is not made.
+            List<Geometry.Planar.Face2D> united = (Geometry.Planar.Query.Difference(extended2D, removed, tolerance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null && !IsSliver(x, tolerance));
+            Geometry.Planar.Face2D kept = united.OrderByDescending(x => x.GetArea()).FirstOrDefault();
             List<Geometry.Planar.Face2D> lost = kept == null ? null : (Geometry.Planar.Query.Difference(original2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null && !IsSliver(x, tolerance));
             Face3D clipped = null;
             string failure = null;
@@ -2137,7 +2140,7 @@ namespace SAM.Geometry.OCCT.Solver
                 return ClipFailed(levels, up, failure);
             }
 
-            List<Geometry.Planar.Face2D> discarded = united.FindAll(x => !ReferenceEquals(x, kept) && !IsSliver(x, tolerance));
+            List<Geometry.Planar.Face2D> discarded = united.OrderByDescending(x => x.GetArea()).Skip(1).ToList();
 
             List<Point3D> removedPoints = (Geometry.Planar.Query.Difference(extended2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>())
                 .FindAll(x => x != null)

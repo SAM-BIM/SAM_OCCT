@@ -48,7 +48,8 @@ namespace SAM.OCCT.GrasshopperTests
         [Fact]
         public void LatestComponentVersions_AreBumpedForTheChange()
         {
-            Assert.Equal("0.7.1", new SAMOCCTSolve3D().LatestComponentVersion);
+            // 0.7.1 -> 0.8.0: the managed extend/clip computes different panels (Extend3D no-invented-walls; GH-F2/H2).
+            Assert.Equal("0.8.0", new SAMOCCTSolve3D().LatestComponentVersion);
             Assert.Equal("0.2.1", new SAMOCCTCreateAdjacencyCluster().LatestComponentVersion);
             // 0.3.1 -> 0.4.0: the sew guard changes the computed result of a sewing build (GH_COMPONENT_STANDARDS GH-F2/H2).
             Assert.Equal("0.4.0", new SAMOCCTCreateShells().LatestComponentVersion);

@@ -36,7 +36,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     public class SAMOCCTAutoTune3DDiscover : GH_SAMVariableOutputParameterComponent
     {
         public override Guid ComponentGuid => new Guid("dce4ce6d-581a-4225-b792-3ad04f239460");
-        public override string LatestComponentVersion => "0.4.0";
+        public override string LatestComponentVersion => "0.5.0";
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_AlgorithmGet;
 
         public SAMOCCTAutoTune3DDiscover()

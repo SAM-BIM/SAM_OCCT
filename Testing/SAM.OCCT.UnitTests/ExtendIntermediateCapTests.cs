@@ -1072,6 +1072,127 @@ namespace SAM.OCCT.UnitTests
             Assert.True(wall.GetArea() >= area - 1e-6, "The wall must keep its original area.");
         }
 
+        // ── The clipped face keeps the wall's topology (2026-10-26, #20 / WorkflowParity workflow B) ─────────────────
+        // AdjacencyCluster-home #20 (the north wall) on the Clean3D -> Extend3D path, exactly as its bottom clip received it
+        // (captured from the solver; plane and loops as SAM stores them). The original - the wall after its top extend -
+        // carries a 1 um wide crack down from its top at x 6.036 and a 1 um tall hole along the storey line, seams of the
+        // top extend over the wall's 1 um jagged top; the bottom extend's own outline has no crack. Re-assembling the clipped
+        // wall from the original brought the crack back, and the native build of the extended panels then lost every room
+        // along the wall (18 -> 8); with the crack and the hole gone it keeps all 18.
+        private static readonly double[] AchNorthWallPlane = { 1.3273034213443697, 4.799728967990978, 2.0454545381369176, 3.167683571486802E-08, 0.9999999999999978, -5.8475066245224754E-08, -1.8523050668660122E-15, -5.847506624522473E-08, -0.9999999999999983 };
+        private static readonly double[][] AchNorthWallOriginalLoops =
+        {
+            new[] { 10.207955, -2.332495, 6.807955, -2.332488, 4.708852, -2.332488, 4.708853, -0.954546, 4.708852, -0.954546, 4.708852, -2.332487, 2.307954, -2.33249, 0.307954, -2.332491, -0.792046, -2.332492, -4.417045, -2.332492, -4.417045, -0.954545, -4.192045, -0.954545, -4.192045, 2.045455, -4.042045, 2.045455, 1.107955, 2.045455, 1.257955, 2.045455, 2.307955, 2.045455, 2.407955, 2.045455, 2.907955, 2.045455, 3.557955, 2.045455, 3.707955, 2.045455, 4.708853, 2.045455, 5.607955, 2.045455, 5.757955, 2.045455, 6.807955, 2.045455, 10.057955, 2.045455, 10.207955, 2.045455, 10.207955, -0.954546 },
+            new[] { 5.607955, -0.954546, 5.757955, -0.954546, 6.807955, -0.954546, 6.907955, -0.954546, 6.807955, -0.954545, 5.757955, -0.954545, 5.607955, -0.954545, 4.807955, -0.954546 },
+        };
+
+        private static readonly double[][] AchNorthWallExtendedLoops =
+        {
+            new[] { 2.307954, -2.33249, 0.307954, -2.332491, -0.792046, -2.332492, -4.417045, -2.332492, -4.417045, -0.954545, -4.417045, 2.095455, 10.207955, 2.095455, 10.207955, 2.045455, 10.207955, -0.954546, 10.207955, -2.332495, 6.807955, -2.332488, 4.708852, -2.332488, 4.708852, -2.332487 },
+            new[] { 5.607955, -0.954546, 5.757955, -0.954546, 6.807955, -0.954546, 6.907955, -0.954546, 6.807955, -0.954545, 5.757955, -0.954545, 5.607955, -0.954545, 4.807955, -0.954546 },
+        };
+
+        /// <summary>The level of #20's bottom clip as the solver passed it: z, the stretches it stops the wall over (plan
+        /// parameter u = -x), and the walls crossing #20's line with their material at the junction.</summary>
+        private static List<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> AchNorthWallLevels()
+        {
+            return new List<(double, IList<(double, double)>, IList<(double, double, double)>)>
+            {
+                (2.99999998704501, new List<(double, double)> { (-11.53525791670941, 3.0897420243179567) }, new List<(double, double, double)>
+                {
+                    (6.069742404284901, -0.050000000000000044, 4.419901979362232), (3.9097422822189687, -0.050000000000000044, 4.419901979409231),
+                    (-4.235257809272064, -0.050000000000000266, 3.050000063041277), (2.8647421320389923, -0.050000000000000266, 3.050000063041277),
+                    (-8.135257754455449, -0.050000000000000266, 4.419895989148258), (-6.036155833692781, -0.050000000000000266, 4.419895000809295),
+                    (-11.53525791670941, -0.050000000000000266, 4.419909014984024),
+                }),
+            };
+        }
+
+        /// <summary>Pairs of outline edges of <paramref name="face3D"/> that run opposite to each other within
+        /// <paramref name="gap"/> over more than <paramref name="length"/>: a crack of (almost) no width into the face.</summary>
+        private static List<string> Cracks(Face3D face3D, double gap, double length)
+        {
+            List<Point3D> points = ((ISegmentable3D)face3D.GetExternalEdge3D()).GetPoints();
+            List<string> result = new List<string>();
+            for (int i = 0; i < points.Count; i++)
+            {
+                Segment3D a = new Segment3D(points[i], points[(i + 1) % points.Count]);
+                for (int j = i + 2; j < points.Count; j++)
+                {
+                    Segment3D b = new Segment3D(points[j], points[(j + 1) % points.Count]);
+                    if ((j + 1) % points.Count == i || a.GetLength() <= length || b.GetLength() <= length || a.Direction.DotProduct(b.Direction) > -1 + 1e-9)
+                    {
+                        continue;
+                    }
+
+                    double overlap = System.Math.Min(a.GetLength(), b.GetLength());
+                    if (a.Distance(b.GetStart()) <= gap && a.Distance(b.GetEnd()) <= gap && overlap > length)
+                    {
+                        result.Add($"{a.GetStart()}-{a.GetEnd()} / {b.GetStart()}-{b.GetEnd()}");
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        [Fact]
+        public void ClipBeyondLevels_AdjacencyClusterHomeNorthWall_CutsOnlyTheStubWithoutCrackOrSliverHole()
+        {
+            // Arrange
+            Face3D original = SavedFace3D(AchNorthWallPlane, AchNorthWallOriginalLoops);
+            SnappedPanel wall = new SnappedPanel(20, SavedFace3D(AchNorthWallPlane, AchNorthWallExtendedLoops), 1, 0.3, 0.5);
+            double area = wall.GetArea();
+            Assert.NotEmpty(Cracks(original, 1e-5, 1e-3)); // the crack the input carries
+
+            // Act
+            bool clipped = wall.ClipBeyondLevels(original, AchNorthWallLevels(), false, Overshoot, SAM.Core.Tolerance.Distance, out bool failed);
+
+            // Assert: the clip removes the 0.675 m2 stub below the overhang (x -3.09..-2.865) and nothing else; the wall has
+            // no crack and no hole of (almost) no size, and still holds the original.
+            Assert.True(clipped);
+            Assert.False(failed);
+            Assert.Equal(area - 0.675, wall.GetArea(), 4);
+            Assert.Empty(Cracks(wall.Face3D, 1e-5, 1e-3));
+            Assert.Empty(wall.Face3D.GetInternalEdge3Ds() ?? new List<IClosedPlanar3D>());
+            Assert.False(wall.Face3D.Inside(new Point3D(-3.0, 4.799729, 1.5), 1e-5), "The stub below the overhang is removed.");
+            Assert.True(wall.Face3D.Inside(new Point3D(-3.0, 4.799729, 3.5), 1e-5), "The overhang itself stays.");
+            Assert.Contains(wall.ExtendDiagnostics, x => x.StartsWith("SAM_OCCT_EXTEND3D_LEVEL_CLIP:") && x.Contains("0.675 m2") && x.Contains("(-3.09, 4.8, -0.05)-(-2.865, 4.8, 2.95)"));
+        }
+
+        /// <summary>A wall (x = 0, y 0..4) from <paramref name="z0"/> to 6 with one opening at y 2..2+<paramref name="width"/>,
+        /// z 4..5.</summary>
+        private static Face3D WallWithOpening(double z0, double width)
+        {
+            return Face3D.Create(new List<IClosedPlanar3D>
+            {
+                new Polygon3D(new List<Point3D> { new Point3D(0, 0, z0), new Point3D(0, 4, z0), new Point3D(0, 4, 6), new Point3D(0, 0, 6) }),
+                new Polygon3D(new List<Point3D> { new Point3D(0, 2, 4), new Point3D(0, 2 + width, 4), new Point3D(0, 2 + width, 5), new Point3D(0, 2, 5) }),
+            });
+        }
+
+        [Fact]
+        public void ClipBeyondLevels_OpeningWiderThanTheTolerance_IsKept()
+        {
+            // Arrange: preservation control - the same cut on a wall with a real 20 mm x 1 m opening above the clip.
+            Face3D original = WallWithOpening(3, 0.02);
+            SnappedPanel wall = new SnappedPanel(0, WallWithOpening(-0.05, 0.02), 1, 0.3, 0.5);
+            List<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> levels = new List<(double, IList<(double, double)>, IList<(double, double, double)>)>
+            {
+                (3.0, new List<(double, double)> { (-0.3, 4.3) }, new List<(double, double, double)>()),
+            };
+
+            // Act
+            bool clipped = wall.ClipBeyondLevels(original, levels, false, Overshoot, Tolerance, out bool failed);
+
+            // Assert
+            Assert.True(clipped);
+            Assert.False(failed);
+            Assert.Single(wall.Face3D.GetInternalEdge3Ds());
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 2.01, 4.5), Tolerance), "The opening must stay open.");
+            Assert.Equal(4 * 3.05 - 0.02, wall.GetArea(), 4); // the original (z 3..6) and the overshoot band below the level
+        }
+
         // Softhouse (2026-10-26) Clean3D output reduced to the three faces on which the level clip judged a numerical
         // sliver as a clip (review L2): the first-floor slab with its seven openings, the roof over the wall and a wall
         // stepped at both floors, exactly as saved.
