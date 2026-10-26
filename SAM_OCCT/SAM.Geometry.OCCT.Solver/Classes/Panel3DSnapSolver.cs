@@ -2413,10 +2413,10 @@ namespace SAM.Geometry.OCCT.Solver
                 }
             }
 
-            // The walls' plan feet and elevation ranges before any of them moves, so the crossing walls the clip reads
+            // The walls' plan feet and faces before any of them moves, so the crossing walls the clip reads
             // (ClipBeyondIntermediateCaps) do not depend on the order the walls are extended in.
-            List<(SnappedPanel Wall, Segment3D Foot, BoundingBox3D Box)> wallFeet = walls
-                .Select(x => (x, x.GetBaseSegment(toleranceDistance), x.GetBoundingBox()))
+            List<(SnappedPanel Wall, Segment3D Foot, Face3D Face)> wallFeet = walls
+                .Select(x => (x, x.GetBaseSegment(toleranceDistance), x.Face3D))
                 .Where(x => x.Item2 != null && x.Item3 != null)
                 .ToList();
 
@@ -2451,7 +2451,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// spanning two roof planes still receives its correct multi-slope top from the native kernel, which
         /// trims it against every roof face in the cell complex.</para>
         /// </summary>
-        private static void ExtendWallToNearestCap(SnappedPanel wall, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double overshoot, double roofOvershoot, double toleranceDistance, bool up, List<ExtendRecord> records = null, int wallPanelIndex = -1, List<int> capPanelIndices = null, List<int> capSourceIndices = null, List<Face3D> capFaces = null, List<(SnappedPanel Wall, Segment3D Foot, BoundingBox3D Box)> wallFeet = null)
+        private static void ExtendWallToNearestCap(SnappedPanel wall, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double overshoot, double roofOvershoot, double toleranceDistance, bool up, List<ExtendRecord> records = null, int wallPanelIndex = -1, List<int> capPanelIndices = null, List<int> capSourceIndices = null, List<Face3D> capFaces = null, List<(SnappedPanel Wall, Segment3D Foot, Face3D Face)> wallFeet = null)
         {
             double wallExtreme = up ? wallBox.Max.Z : wallBox.Min.Z;
             double centreX = 0.5 * (wallBox.Min.X + wallBox.Max.X);
@@ -2560,7 +2560,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// </list>
         /// Walls without such a level - every plain rectangle - are left exactly as extended.
         /// </summary>
-        private static void ClipBeyondIntermediateCaps(SnappedPanel wall, Face3D before, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, List<Face3D> capFaces, int capIndex, bool up, double band, double toleranceDistance, List<(SnappedPanel Wall, Segment3D Foot, BoundingBox3D Box)> wallFeet = null)
+        private static void ClipBeyondIntermediateCaps(SnappedPanel wall, Face3D before, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, List<Face3D> capFaces, int capIndex, bool up, double band, double toleranceDistance, List<(SnappedPanel Wall, Segment3D Foot, Face3D Face)> wallFeet = null)
         {
             if (before == null || ReferenceEquals(before, wall.Face3D) || capIndex < 0 || capFaces == null || capFaces.Count != capBoxes.Count || capPlanes == null || capPlanes.Count != capBoxes.Count)
             {
@@ -2574,9 +2574,9 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             double targetZ = CapZAtPlan(capPlanes[capIndex], frame.CentreX, frame.CentreY, up ? capBoxes[capIndex].Min.Z : capBoxes[capIndex].Max.Z);
-            // Where other walls cross this wall's line (plan parameter u) and over which elevations: the room boundaries the
-            // caps' coverage is aligned to (AlignToCrossings), and the junctions ClipBeyondLevels keeps.
-            List<(double U, double ZMin, double ZMax)> crossings = Crossings(wall, frame, wallFeet, band, toleranceDistance);
+            // Where other walls cross this wall's line (plan parameter u) and over which elevations they have material there:
+            // the room boundaries the caps' coverage is aligned to (AlignToCrossings), and the junctions ClipBeyondLevels keeps.
+            List<(double U, double ZMin, double ZMax, bool AtBase, bool AtTop)> crossings = Crossings(wall, frame, wallFeet, band, toleranceDistance);
             (List<(double From, double To)> Minus, List<(double From, double To)> Plus) target = AlignToCrossings(
                 LevelCoverage(SameSurfaceCaps(capIndex, capBoxes, capPlanes, frame, toleranceDistance), capBoxes, capFaces, frame, toleranceDistance),
                 crossings, wallBox.Min.Z, wallBox.Max.Z, wall.BucketSize, toleranceDistance);
@@ -2599,7 +2599,7 @@ namespace SAM.Geometry.OCCT.Solver
                 }
             }
 
-            List<(double Z, IList<(double From, double To)> Columns, IList<double> Crossings)> levels = new List<(double, IList<(double, double)>, IList<double>)>();
+            List<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> levels = new List<(double, IList<(double, double)>, IList<(double, double, double)>)>();
             foreach (List<(int Index, double Z)> level in GroupSameSurface(intermediate, capPlanes, toleranceDistance))
             {
                 // The level's extreme towards the wall's own part: the clip never reaches past any of its caps.
@@ -2617,10 +2617,16 @@ namespace SAM.Geometry.OCCT.Solver
                 if (columns.Count != 0)
                 {
                     // The walls crossing the line beyond the level (between it and the target), where the storey beyond
-                    // the level has a wall for this one to meet.
+                    // the level has a wall for this one to meet: material at the junction there, not the crossing wall's
+                    // overall extent (a wall merged across storeys may meet this line in one storey only). Its material
+                    // counts over the elevations it has it; material running to the crossing wall's own base or top
+                    // counts on past it, since that wall's own extend moves it onto its cap.
                     double beyondFrom = up ? z : targetZ, beyondTo = up ? targetZ : z;
-                    List<double> crossingUs = crossings.Where(x => System.Math.Min(x.ZMax, beyondTo) - System.Math.Max(x.ZMin, beyondFrom) > band + toleranceDistance).Select(x => x.U).ToList();
-                    levels.Add((z, columns, crossingUs));
+                    List<(double U, double ZMin, double ZMax)> junctionCrossings = crossings
+                        .Where(x => System.Math.Min(x.ZMax, beyondTo) - System.Math.Max(x.ZMin, beyondFrom) > band + toleranceDistance)
+                        .Select(x => (x.U, x.AtBase ? double.NegativeInfinity : x.ZMin, x.AtTop ? double.PositiveInfinity : x.ZMax))
+                        .ToList();
+                    levels.Add((z, columns, junctionCrossings));
                 }
             }
 
@@ -2633,14 +2639,14 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>
         /// Aligns a level's coverage of the wall line to the room boundaries: an end of a covered stretch within the
         /// wall's capture half-width (<paramref name="capture"/>) of a wall crossing the line where this wall stands
-        /// (overlapping its elevations <paramref name="zMin"/>..<paramref name="zMax"/>) is moved onto that wall's line.
-        /// Caps are modelled to the faces of the walls that bound
+        /// (with material at the junction within its elevations <paramref name="zMin"/>..<paramref name="zMax"/>,
+        /// <see cref="Crossings"/>) is moved onto that wall's line. Caps are modelled to the faces of the walls that bound
         /// them, half a wall short of (or past) the crossing wall's line; read as they are, the clip would step a wall's
         /// base or top a few centimetres beside the junction, leaving an open sliver there.
         /// </summary>
-        private static (List<(double From, double To)> Minus, List<(double From, double To)> Plus) AlignToCrossings((List<(double From, double To)> Minus, List<(double From, double To)> Plus) coverage, List<(double U, double ZMin, double ZMax)> crossings, double zMin, double zMax, double capture, double toleranceDistance)
+        private static (List<(double From, double To)> Minus, List<(double From, double To)> Plus) AlignToCrossings((List<(double From, double To)> Minus, List<(double From, double To)> Plus) coverage, List<(double U, double ZMin, double ZMax, bool AtBase, bool AtTop)> crossings, double zMin, double zMax, double capture, double toleranceDistance)
         {
-            List<double> us = (crossings ?? new List<(double, double, double)>())
+            List<double> us = (crossings ?? new List<(double, double, double, bool, bool)>())
                 .Where(x => System.Math.Min(x.ZMax, zMax) - System.Math.Max(x.ZMin, zMin) > toleranceDistance)
                 .Select(x => x.U)
                 .ToList();
@@ -2663,14 +2669,18 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>
         /// The other walls whose plan foot meets this wall's line (within <paramref name="band"/> of the foot's ends): the
-        /// plan parameter u of the meeting point and the crossing wall's elevation range. A wall parallel to the line
-        /// never crosses it.
+        /// plan parameter u of the meeting point and each stretch of elevations over which the crossing wall has material
+        /// at the meeting point (<see cref="MaterialAtJunction"/>), with whether it runs to the crossing wall's own base
+        /// or top. The foot is the crossing wall's whole plan extent; its material at the junction is what tells whether
+        /// it meets this wall's line in a storey: a wall merged across storeys whose other storey stops short of the line,
+        /// or an opening at the junction, gives no material there. A wall parallel to the line never crosses it.
         /// </summary>
-        private static List<(double U, double ZMin, double ZMax)> Crossings(SnappedPanel wall, WallPlanFrame frame, List<(SnappedPanel Wall, Segment3D Foot, BoundingBox3D Box)> wallFeet, double band, double toleranceDistance)
+        private static List<(double U, double ZMin, double ZMax, bool AtBase, bool AtTop)> Crossings(SnappedPanel wall, WallPlanFrame frame, List<(SnappedPanel Wall, Segment3D Foot, Face3D Face)> wallFeet, double band, double toleranceDistance)
         {
-            List<(double U, double ZMin, double ZMax)> result = new List<(double, double, double)>();
-            foreach ((SnappedPanel other, Segment3D foot, BoundingBox3D box) in wallFeet ?? new List<(SnappedPanel, Segment3D, BoundingBox3D)>())
+            List<(double U, double ZMin, double ZMax, bool AtBase, bool AtTop)> result = new List<(double, double, double, bool, bool)>();
+            foreach ((SnappedPanel other, Segment3D foot, Face3D face3D) in wallFeet ?? new List<(SnappedPanel, Segment3D, Face3D)>())
             {
+                BoundingBox3D box = face3D?.GetBoundingBox();
                 if (ReferenceEquals(other, wall) || foot == null || box == null)
                 {
                     continue;
@@ -2692,10 +2702,81 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
-                result.Add((uA + t * (uB - uA), box.Min.Z, box.Max.Z));
+                // The meeting point in plan, and the crossing wall's material within the band of it along its plan axis.
+                double planLength = System.Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+                if (planLength <= toleranceDistance)
+                {
+                    continue;
+                }
+
+                Vector3D along = new Vector3D((b.X - a.X) / planLength, (b.Y - a.Y) / planLength, 0);
+                Point3D meeting = new Point3D(a.X + t * (b.X - a.X), a.Y + t * (b.Y - a.Y), 0);
+                foreach ((double zMin, double zMax) in MaterialAtJunction(face3D, meeting, along, band + toleranceDistance, toleranceDistance))
+                {
+                    result.Add((uA + t * (uB - uA), zMin, zMax, zMin <= box.Min.Z + toleranceDistance, zMax >= box.Max.Z - toleranceDistance));
+                }
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// The stretches of elevation over which <paramref name="face3D"/> (a wall, its openings excluded) has material
+        /// within <paramref name="halfWidth"/> of the plan point <paramref name="point"/>, measured along the wall's plan
+        /// axis <paramref name="along"/>: the face cut by the column of its own plane over that stretch of the axis. A
+        /// tilted wall is read in its own plane (the column follows the tilt).
+        /// </summary>
+        private static List<(double From, double To)> MaterialAtJunction(Face3D face3D, Point3D point, Vector3D along, double halfWidth, double toleranceDistance)
+        {
+            List<(double From, double To)> result = new List<(double, double)>();
+            Plane plane = face3D?.GetPlane();
+            Vector3D normal = plane?.Normal?.Unit;
+            BoundingBox3D box = face3D?.GetBoundingBox();
+            if (normal == null || box == null)
+            {
+                return result;
+            }
+
+            // A point of the plane at plan offset s along the axis from the point and elevation z: moved across the axis
+            // (horizontally) onto the plane.
+            Vector3D across = new Vector3D(-along.Y, along.X, 0);
+            double denominator = normal.DotProduct(across);
+            if (System.Math.Abs(denominator) <= 1e-9)
+            {
+                return result;
+            }
+
+            Point3D origin = plane.Origin;
+            Point3D InPlane(double s, double z)
+            {
+                double x = point.X + s * along.X, y = point.Y + s * along.Y;
+                double k = -(normal.X * (x - origin.X) + normal.Y * (y - origin.Y) + normal.Z * (z - origin.Z)) / denominator;
+                return new Point3D(x + k * across.X, y + k * across.Y, z);
+            }
+
+            double zLow = box.Min.Z - 1, zHigh = box.Max.Z + 1;
+            Geometry.Planar.Face2D face2D = plane.Convert(face3D);
+            Geometry.Planar.Face2D column = Geometry.Planar.Create.Face2D(new Geometry.Planar.Polygon2D(new List<Point3D>
+            {
+                InPlane(-halfWidth, zLow), InPlane(halfWidth, zLow), InPlane(halfWidth, zHigh), InPlane(-halfWidth, zHigh),
+            }.ConvertAll(x => plane.Convert(x))), null);
+            if (face2D == null || column == null)
+            {
+                return result;
+            }
+
+            foreach (Geometry.Planar.Face2D piece in Geometry.Planar.Query.Intersection(face2D, column, toleranceDistance) ?? new List<Geometry.Planar.Face2D>())
+            {
+                List<Geometry.Planar.Point2D> point2Ds = (piece?.ExternalEdge2D as Geometry.Planar.ISegmentable2D)?.GetPoints();
+                if (point2Ds != null && point2Ds.Count != 0 && piece.GetArea() > toleranceDistance)
+                {
+                    List<double> zs = point2Ds.ConvertAll(x => plane.Convert(x).Z);
+                    result.Add((zs.Min(), zs.Max()));
+                }
+            }
+
+            // Elevations, as intervals: merged as the plan stretches are.
+            return PlanIntervals.Normalise(result, toleranceDistance);
         }
 
         /// <summary>
@@ -2719,7 +2800,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// target within the wall's reach (<see cref="ContinuationStretches"/>). Otherwise the wall is extended to the
         /// target and the passed caps, as intermediate levels, are clipped column by column
         /// (<see cref="ClipBeyondIntermediateCaps"/>).</summary>
-        private static bool RestsOnPassedCaps(SnappedPanel wall, List<int> passedCaps, int capIndex, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, List<Face3D> capFaces, double band, double toleranceDistance, List<(SnappedPanel Wall, Segment3D Foot, BoundingBox3D Box)> wallFeet = null)
+        private static bool RestsOnPassedCaps(SnappedPanel wall, List<int> passedCaps, int capIndex, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, List<Face3D> capFaces, double band, double toleranceDistance, List<(SnappedPanel Wall, Segment3D Foot, Face3D Face)> wallFeet = null)
         {
             if (passedCaps == null || passedCaps.Count == 0)
             {
@@ -2738,7 +2819,7 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             double CapZ(int i) => CapZAtPlan(capPlanes[i], frame.CentreX, frame.CentreY, 0.5 * (capBoxes[i].Min.Z + capBoxes[i].Max.Z));
-            List<(double U, double ZMin, double ZMax)> crossings = Crossings(wall, frame, wallFeet, band, toleranceDistance);
+            List<(double U, double ZMin, double ZMax, bool AtBase, bool AtTop)> crossings = Crossings(wall, frame, wallFeet, band, toleranceDistance);
             double targetZ = CapZ(capIndex);
             BoundingBox3D wallBox = wall.GetBoundingBox();
 

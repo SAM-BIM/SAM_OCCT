@@ -1948,14 +1948,15 @@ namespace SAM.Geometry.OCCT.Solver
         /// </summary>
         /// <param name="original">The face before the extension; never reduced.</param>
         /// <param name="levels">Elevation of each intermediate level and the stretches of the wall (u from, u to; u =
-        /// p . uAxis, the plan axis of the wall) where it stops the extension, and the u of the walls crossing this one
-        /// in the storey beyond it.</param>
+        /// p . uAxis, the plan axis of the wall) where it stops the extension, and the walls crossing this one in the
+        /// storey beyond it: the u of each and the elevations over which it has material at the junction (unbounded
+        /// where that material runs on to its cap).</param>
         /// <param name="up">The direction of the extension.</param>
         /// <param name="band">Material of <paramref name="original"/> within this distance beyond a level does not
         /// count as continuing past it (the wall resting on, or overshooting, the level).</param>
         /// <param name="tolerance">Distance tolerance.</param>
         /// <returns>True when area was removed.</returns>
-        internal bool ClipBeyondLevels(Face3D original, IList<(double Z, IList<(double From, double To)> Columns, IList<double> Crossings)> levels, bool up, double band, double tolerance)
+        internal bool ClipBeyondLevels(Face3D original, IList<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> levels, bool up, double band, double tolerance)
         {
             if (original == null || face3D == null || plane == null || levels == null || levels.Count == 0 || ReferenceEquals(original, face3D))
             {
@@ -1989,7 +1990,7 @@ namespace SAM.Geometry.OCCT.Solver
             double zMin = boundingBox3D.Min.Z - 1, zMax = boundingBox3D.Max.Z + 1;
 
             List<Geometry.Planar.Face2D> shadows = new List<Geometry.Planar.Face2D>();
-            foreach ((double z, IList<(double From, double To)> columns, IList<double> crossings) in levels)
+            foreach ((double z, IList<(double From, double To)> columns, IList<(double U, double ZMin, double ZMax)> crossings) in levels)
             {
                 // Beyond the level: below it for a downward extension, above it for an upward one.
                 double from = up ? z + band + tolerance : zMin;
@@ -2016,30 +2017,54 @@ namespace SAM.Geometry.OCCT.Solver
 
                 // A junction keeps its extension too: the stretch from where the original continues up to the line of a
                 // wall crossing this one in the storey beyond the level (the wall stopping short of it there), up to the
-                // wall's lateral reach. A stretch without a crossing wall is an intentional set-back or void, however
-                // narrow, and is clipped.
-                List<(double From, double To)> junctions = new List<(double, double)>();
+                // wall's lateral reach, over the elevations at which the crossing wall has material at the junction. A
+                // stretch without a crossing wall is an intentional set-back or void, however narrow, and is clipped; so
+                // are the elevations at which the crossing wall does not meet this wall's line (an opening there).
+                List<(double From, double To, double ZFrom, double ZTo)> junctions = new List<(double, double, double, double)>();
                 foreach ((double freeFrom, double freeTo) in free)
                 {
                     bool fromContinuing = continuing.Any(x => System.Math.Abs(x.To - freeFrom) <= tolerance);
                     bool toContinuing = continuing.Any(x => System.Math.Abs(x.From - freeTo) <= tolerance);
-                    foreach (double crossing in crossings ?? new List<double>())
+                    foreach ((double crossing, double crossingZMin, double crossingZMax) in crossings ?? new List<(double, double, double)>())
                     {
+                        double zFrom = System.Math.Max(from, crossingZMin), zTo = System.Math.Min(to, crossingZMax);
+                        if (zTo - zFrom <= tolerance)
+                        {
+                            continue;
+                        }
+
                         if (fromContinuing && crossing > freeFrom + tolerance && crossing <= freeTo + tolerance && crossing - freeFrom <= MaxExtension + tolerance)
                         {
-                            junctions.Add((freeFrom, System.Math.Min(freeTo, crossing)));
+                            junctions.Add((freeFrom, System.Math.Min(freeTo, crossing), zFrom, zTo));
                         }
 
                         if (toContinuing && crossing < freeTo - tolerance && crossing >= freeFrom - tolerance && freeTo - crossing <= MaxExtension + tolerance)
                         {
-                            junctions.Add((System.Math.Max(freeFrom, crossing), freeTo));
+                            junctions.Add((System.Math.Max(freeFrom, crossing), freeTo, zFrom, zTo));
                         }
                     }
                 }
 
-                foreach ((double freeFrom, double freeTo) in PlanIntervals.Difference(free, junctions, tolerance))
+                foreach ((double freeFrom, double freeTo) in PlanIntervals.Difference(free, junctions.Select(x => (x.From, x.To)), tolerance))
                 {
                     AddColumn(shadows, uAxis, wAxis, freeFrom, freeTo, from, to, tolerance);
+                }
+
+                // Within the junction stretches, the elevations no crossing wall's material covers (intervals of elevation).
+                List<double> breaks = junctions.SelectMany(x => new[] { x.From, x.To }).Distinct().OrderBy(x => x).ToList();
+                for (int i = 0; i + 1 < breaks.Count; i++)
+                {
+                    double uFrom = breaks[i], uTo = breaks[i + 1], u = 0.5 * (uFrom + uTo);
+                    List<(double From, double To)> material = junctions.Where(x => x.From <= u && x.To >= u).Select(x => (x.ZFrom, x.ZTo)).ToList();
+                    if (uTo - uFrom <= tolerance || material.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    foreach ((double zFrom, double zTo) in PlanIntervals.Difference(new[] { (from, to) }, material, tolerance))
+                    {
+                        AddColumn(shadows, uAxis, wAxis, uFrom, uTo, zFrom, zTo, tolerance);
+                    }
                 }
             }
 

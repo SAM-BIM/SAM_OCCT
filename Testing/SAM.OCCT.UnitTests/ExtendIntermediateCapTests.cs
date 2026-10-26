@@ -639,5 +639,143 @@ namespace SAM.OCCT.UnitTests
             Assert.True(wall.Face3D.Inside(T(0, 1, -0.025), 1e-4));
             Assert.InRange(wall.GetArea(), 24.0, 24.0 + 12 * Overshoot + 1e-4);
         }
+
+        // ── Crossing walls merged across storeys (review of 2026-10-26, M2) ─────────────────────────────
+        // A junction is read from the crossing wall's material at this wall's line in the storey beyond the level, not
+        // from its overall extent: one stepped face (as Clean3D merges it) and the same wall as two storey rectangles
+        // must give the same result.
+
+        /// <summary>A crossing wall at y = 6 reaching the west wall's line (x -1..1) in one storey and stopping 0.4 m short
+        /// of it (x 0.4..1) in the other: one stepped face or two storey rectangles. No lateral reach of its own, so its
+        /// geometry at the junction is what the test sets.</summary>
+        private static List<SnappedPanel> CrossingWall(bool merged, bool meetsBelow)
+        {
+            double lower = meetsBelow ? -1 : 0.4, upper = meetsBelow ? 0.4 : -1;
+            if (merged)
+            {
+                return new List<SnappedPanel> { new SnappedPanel(1, TestGeometry.CreatePlanarFace(
+                    new Point3D(lower, 6, 0), new Point3D(1, 6, 0), new Point3D(1, 6, 6), new Point3D(upper, 6, 6), new Point3D(upper, 6, 3), new Point3D(lower, 6, 3)), 1, 0.3, 0) };
+            }
+
+            return new List<SnappedPanel>
+            {
+                new SnappedPanel(1, TestGeometry.CreatePlanarFace(new Point3D(lower, 6, 0), new Point3D(1, 6, 0), new Point3D(1, 6, 3), new Point3D(lower, 6, 3)), 1, 0.3, 0),
+                new SnappedPanel(2, TestGeometry.CreatePlanarFace(new Point3D(upper, 6, 3), new Point3D(1, 6, 3), new Point3D(1, 6, 6), new Point3D(upper, 6, 6)), 1, 0.3, 0),
+            };
+        }
+
+        /// <summary>The west wall (x = 0, reach 0.5) with one storey stopping 0.15 m short of the crossing wall's line
+        /// (y 0..5.85) and the other reaching it (y 0..6): the lower storey short (<paramref name="shortBelow"/>, extended
+        /// down through the first floor) or the upper one (extended up through it), with the crossing walls, in the
+        /// stack of wide caps; optionally the lateral extend first.</summary>
+        private static SnappedPanel ExtendBesideCrossingWalls(bool shortBelow, List<SnappedPanel> crossings, bool lateral)
+        {
+            SnappedPanel wall = shortBelow
+                ? ShortGroundFloorWall(0.5)
+                : new SnappedPanel(0, TestGeometry.CreatePlanarFace(
+                    new Point3D(0, 0, 0), new Point3D(0, 6, 0), new Point3D(0, 6, 3), new Point3D(0, 5.85, 3), new Point3D(0, 5.85, 6), new Point3D(0, 0, 6)), 1, 0.3, 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(100, WideCap(0), 1, 0.3, 0.5), new SnappedPanel(101, WideCap(3), 1, 0.3, 0.5), new SnappedPanel(102, WideCap(6), 1, 0.3, 0.5), wall };
+            panels.AddRange(crossings);
+
+            if (lateral)
+            {
+                Panel3DSnapSolver.ExtendWalls(panels, VerticalAngle, Overshoot, Tolerance);
+            }
+
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, Tolerance);
+            return wall;
+        }
+
+        [Theory]
+        [InlineData(true, false, false)]  // the review's counterexample: before the fix the lower junction was filled
+        [InlineData(true, true, false)]
+        [InlineData(false, false, false)]  // the same wall as two storey rectangles (always open)
+        [InlineData(false, true, false)]
+        [InlineData(true, false, true)]   // upward: a crossing wall meeting the line downstairs only
+        [InlineData(true, true, true)]
+        [InlineData(false, false, true)]
+        [InlineData(false, true, true)]
+        public void Extend_CrossingWallMeetingTheLineInTheOtherStoreyOnly_SetBackStaysOpenInAnyRepresentation(bool merged, bool lateral, bool upward)
+        {
+            // Arrange: the crossing wall meets the west wall's line only in the storey the west wall reaches it in; in the
+            // set-back storey it stops 0.4 m short - no wall to meet there.
+            bool shortBelow = !upward;
+
+            // Act
+            SnappedPanel wall = ExtendBesideCrossingWalls(shortBelow, CrossingWall(merged, meetsBelow: !shortBelow), lateral);
+            SnappedPanel split = ExtendBesideCrossingWalls(shortBelow, CrossingWall(false, meetsBelow: !shortBelow), lateral);
+
+            // Assert: the set-back stays open, as with the split representation.
+            Point3D setBack = new Point3D(0, 5.925, shortBelow ? 1.5 : 4.5);
+            Assert.False(wall.Face3D.Inside(setBack, Tolerance), "No crossing wall meets the line in the set-back storey: no junction to close.");
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 3, shortBelow ? -0.025 : 6.025), Tolerance), "The wall must still reach its cap.");
+            Assert.Equal(split.GetArea(), wall.GetArea(), 6);
+        }
+
+        [Theory]
+        [InlineData(true, false, false)]
+        [InlineData(true, true, false)]
+        [InlineData(false, false, false)]
+        [InlineData(false, true, false)]
+        [InlineData(true, false, true)]
+        [InlineData(true, true, true)]
+        [InlineData(false, false, true)]
+        [InlineData(false, true, true)]
+        public void Extend_CrossingWallMeetingTheLineInTheSetBackStorey_JunctionClosedInAnyRepresentation(bool merged, bool lateral, bool upward)
+        {
+            // Arrange: control - the crossing wall meets the west wall's line in the set-back storey (and stops short of it
+            // in the other): the set-back is a junction within the wall's reach.
+            bool shortBelow = !upward;
+
+            // Act
+            SnappedPanel wall = ExtendBesideCrossingWalls(shortBelow, CrossingWall(merged, meetsBelow: shortBelow), lateral);
+            SnappedPanel split = ExtendBesideCrossingWalls(shortBelow, CrossingWall(false, meetsBelow: shortBelow), lateral);
+
+            // Assert: closed up to the crossing wall's line, no fin past it.
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, shortBelow ? 1.5 : 4.5), Tolerance), "The junction with the crossing wall must be closed.");
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 6.03, shortBelow ? 1.5 : 4.5), Tolerance), "No fin past the crossing wall.");
+            Assert.Equal(split.GetArea(), wall.GetArea(), 6);
+        }
+
+        /// <summary>A crossing wall at y = 6 (x -1..1, z 0..6) with one opening (x <paramref name="openingFrom"/>..
+        /// <paramref name="openingTo"/>, z 0.2..2.8) in the lower storey.</summary>
+        private static List<SnappedPanel> CrossingWallWithOpening(double openingFrom, double openingTo)
+        {
+            Face3D face3D = Face3D.Create(new List<IClosedPlanar3D>
+            {
+                new Polygon3D(new List<Point3D> { new Point3D(-1, 6, 0), new Point3D(1, 6, 0), new Point3D(1, 6, 6), new Point3D(-1, 6, 6) }),
+                new Polygon3D(new List<Point3D> { new Point3D(openingFrom, 6, 0.2), new Point3D(openingTo, 6, 0.2), new Point3D(openingTo, 6, 2.8), new Point3D(openingFrom, 6, 2.8) }),
+            });
+
+            return new List<SnappedPanel> { new SnappedPanel(1, face3D, 1, 0.3, 0) };
+        }
+
+        [Fact]
+        public void ExtendWallsThenExtend_CrossingWallOpenAtTheJunction_FillOnlyWhereItHasMaterial()
+        {
+            // Arrange: the crossing wall has an opening over the junction (x -0.3..0.3) in the lower storey.
+            List<SnappedPanel> crossings = CrossingWallWithOpening(-0.3, 0.3);
+
+            // Act
+            SnappedPanel wall = ExtendBesideCrossingWalls(true, crossings, true);
+
+            // Assert: the junction is closed below and above the opening, open beside it.
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, 0.1), Tolerance), "Below the opening the crossing wall meets the line.");
+            Assert.False(wall.Face3D.Inside(new Point3D(0, 5.925, 1.5), Tolerance), "Beside the opening no wall meets the line.");
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, 2.9), Tolerance), "Above the opening the crossing wall meets the line.");
+        }
+
+        [Fact]
+        public void ExtendWallsThenExtend_CrossingWallOpeningAwayFromTheJunction_JunctionClosed()
+        {
+            // Arrange: control - the same opening 0.4 m away from the junction (x 0.4..0.8).
+            List<SnappedPanel> crossings = CrossingWallWithOpening(0.4, 0.8);
+
+            // Act
+            SnappedPanel wall = ExtendBesideCrossingWalls(true, crossings, true);
+
+            // Assert
+            Assert.True(wall.Face3D.Inside(new Point3D(0, 5.925, 1.5), Tolerance), "The junction with the crossing wall must be closed.");
+        }
     }
 }
