@@ -875,5 +875,56 @@ namespace SAM.OCCT.UnitTests
             Assert.True(wall.Face3D.IsValid());
             Assert.True(wall.GetArea() >= area - 1e-6, "The wall must keep its original area.");
         }
+
+        // Softhouse (2026-10-26) Clean3D output reduced to the three faces on which the level clip judged a numerical
+        // sliver as a clip (review L2): the first-floor slab with its seven openings, the roof over the wall and a wall
+        // stepped at both floors, exactly as saved.
+        private static readonly double[] SoftHouseFirstFloorPlane = { -6.8886449337005615, -1.6046118005828858, 3.4750000238418575, 0, 0, -1, 0, -1, 0 };
+        private static readonly double[][] SoftHouseFirstFloorLoops =
+        {
+            new[] { 9.514946, -10.127471, 8.871261, -10.127471, 5.986253, -10.127471, 3.741835, -10.127472, 3.087584, -10.127471, 0.248594, -10.127471, 0.248594, -6.491673, 0.248594, -5.431673, 0.248594, -4.783551, 0.248594, -4.279703, 0.248594, -3.15955, 0.248594, -0.923551, 3.507584, -0.923551, 3.507584, -3.15955, 3.41325, -3.15955, 3.466073, -4.279704, 3.489833, -4.783551, 3.570469, -6.493551, 3.570471, -6.493551, 4.730834, -6.493551, 4.730834, -4.254889, 3.554334, -4.282314, 3.534464, -1.213806, 3.522153, -0.192, 3.507584, 0.829782, 0.248594, 0.829782, 0.248594, -0.922067, -0.248594, -0.922067, -0.248594, 0.922067, -0.511406, 0.922066, -0.511406, 5.012933, 5.54718, 5.012933, 11.544637, 5.012933, 17.461047, 5.012933, 17.60135, 1.282359, 11.80479, 1.282333, 11.78215, 1.279669, 11.8049, 0.922067, 17.6149, 0.922067, 17.6149, 1.144846, 23.39876, 1.144846, 23.39876, -4.224402, 22.11282, -4.254704, 22.126246, -4.254704, 22.151246, -4.254704, 23.39876, -4.254704, 23.39876, -6.496417, 23.39876, -6.523269, 23.39876, -7.943429, 23.398759, -8.198545, 23.39876, -8.198545, 23.39876, -10.127471, 21.074946, -10.127471, 20.480451, -10.127471, 20.48045, -8.198545, 20.48045, -10.127471, 17.6149, -10.127471, 15.304947, -10.127471, 14.695476, -10.127471, 11.804901, -10.127471, 9.514947, -10.127471 },
+            new[] { 9.405673, -7.617228, 9.311261, -7.617228, 9.311261, -7.617224, 9.136631, -5.467228, 9.312081, -5.467228 },
+            new[] { 9.435306, -4.254704, 9.2593, -4.254704, 9.251379, -4.072756 },
+            new[] { 5.986253, -4.254704, 4.738775, -4.254704, 5.811252, -4.229704, 5.873752, -3.15955, 5.910377, -0.767707, 6.086796, -0.942228, 5.986253, -0.942228, 5.986253, -3.15955 },
+            new[] { 6.03654, 0.922067, 5.936252, 0.922067, 5.898394, 0.922067, 0.248594, 0.922067, 0.248594, 1.28226, 5.898393, 1.282446, 5.898393, 1.282346, 5.947584, 1.282346, 5.94949, 1.264587, 5.986177, 1.282309, 5.986258, 1.282309 },
+            new[] { 17.6149, -4.254704, 16.390801, -4.254704, 16.365801, -4.254704, 16.3658, -4.254704, 17.439901, -4.229704, 17.502401, -3.15955, 17.6149, 0.838749, 17.6149, 0.831732, 20.952301, 0.831732, 20.952301, -0.938268, 17.6149, -0.938268, 17.6149, -3.15955 },
+            new[] { 10.562812, -4.254704, 10.545195, -4.254704, 11.6299, -4.229703, 11.6924, -3.159549, 11.804901, 0.90744, 11.804901, 0.829884, 15.124149, 0.829884, 15.124149, -0.900116, 11.804901, -0.900116, 11.804901, -3.15955, 11.804901, -4.254704 },
+            new[] { 8.884077, 1.282346, 11.781976, 1.282383, 11.781979, 1.282346 },
+        };
+
+        private static readonly double[] SoftHouseRoofPlane = { 15.015178442001345, 6.7073322534561157, 9.4499998092651314, 0, 0, -1, 0, -1, 0 };
+        private static readonly double[][] SoftHouseRoofLoops =
+        {
+            new[] { -15.917571, -1.815527, -18.816239, -1.815527, -21.655229, -1.815527, -21.655229, 1.820271, -21.655229, 2.880271, -21.655229, 3.528393, -21.655229, 9.59429, -16.00543, 9.59429, -15.917571, 9.59429, -10.098923, 9.59429, -4.288923, 9.59429, 1.494936, 9.59429, 1.494936, 7.274402, 1.494936, 1.815527, 1.494936, -1.815527, -1.423373, -1.815527, -1.494936, -1.815527, -4.288923, -1.815527, -10.098923, -1.815527, -13.032562, -1.815527 },
+        };
+
+        private static readonly double[] SoftHouseSteppedWallPlane = { -0.90239229798316956, 3.773711621761322, 1.7500000121071937, -1, 0, 0, 0, 0, -1 };
+        private static readonly double[][] SoftHouseSteppedWallLoops =
+        {
+            new[] { -6.660669, -7.7, -6.660669, -4.725, -7.118981, -4.725, -7.118981, -1.7, -6.660669, -1.7, -6.300391, -1.7, -6.300391, 1.725, -2.218774, 1.725, -1.12362, 1.725, -1.09862, 1.725, 1.115228, 1.725, 1.12362, 1.725, 2.565106, 1.725, 4.749148, 1.725, 4.749148, -1.7, 4.749148, -1.725, 4.749148, -4.725, 4.749147, -4.725, 4.749147, -7.7, 1.118094, -7.7, 1.115228, -7.7, 0.088905, -7.7, -4.363802, -7.7 },
+        };
+
+        [Fact]
+        public void Extend_ShadowGrazingTheExtension_IsNotAClipNorAFailure()
+        {
+            // Arrange: the clip's shadow grazes the wall's top extension (about 1e-5 m2 along a 12 m wall); compared with the
+            // 1e-6 distance tolerance as an area, that sliver made the clip run and then report the original 1.5e-6 m2 short
+            // (SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED at 5600f90; silently kept whole before).
+            SnappedPanel wall = new SnappedPanel(2, SavedFace3D(SoftHouseSteppedWallPlane, SoftHouseSteppedWallLoops), 1, 0.3, 0.5);
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                new SnappedPanel(0, SavedFace3D(SoftHouseFirstFloorPlane, SoftHouseFirstFloorLoops), 1, 0.3, 0.5),
+                new SnappedPanel(1, SavedFace3D(SoftHouseRoofPlane, SoftHouseRoofLoops), 1, 0.3, 0.5),
+                wall,
+            };
+
+            // Act
+            Panel3DSnapSolver.Extend(panels, VerticalAngle, Overshoot, SAM.Core.Tolerance.Distance);
+
+            // Assert: nothing material to clip at the top, and nothing reported as failed.
+            Assert.DoesNotContain(wall.ExtendDiagnostics, x => x.StartsWith("SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED"));
+            Assert.DoesNotContain(wall.ExtendDiagnostics, x => x.StartsWith("SAM_OCCT_EXTEND3D_LEVEL_CLIP:") && x.Contains(" top extension"));
+            Assert.True(wall.Face3D.IsValid());
+        }
     }
 }

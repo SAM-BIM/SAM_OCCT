@@ -2078,7 +2078,13 @@ namespace SAM.Geometry.OCCT.Solver
             // result as well as on failure, so null reads as empty here.)
             List<Geometry.Planar.Face2D> additions = (Geometry.Planar.Query.Difference(extended2D, original2D, tolerance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null && x.GetArea() > tolerance);
             List<Geometry.Planar.Face2D> keptAdditions = additions.SelectMany(x => Geometry.Planar.Query.Difference(x, shadows, tolerance) ?? new List<Geometry.Planar.Face2D>()).Where(x => x != null && x.GetArea() > tolerance).ToList();
-            if (keptAdditions.Sum(x => x.GetArea()) >= additions.Sum(x => x.GetArea()) - tolerance)
+
+            // Areas are compared with a sliver of the distance tolerance's width along the face's boundary - the noise of the
+            // planar operations on this face - not with the tolerance itself (an area of 1e-6 m2 is a 1 mm square; a 1e-6 m
+            // sliver along a 12 m wall is 1.2e-5 m2). Softhouse: a shadow grazing a wall's extension removed 1e-5 m2, so the
+            // clip ran and then judged the original 1.5e-6 m2 short.
+            double sliver = tolerance * extended2D.GetPerimeter();
+            if (keptAdditions.Sum(x => x.GetArea()) >= additions.Sum(x => x.GetArea()) - sliver)
             {
                 return false;
             }
@@ -2088,7 +2094,7 @@ namespace SAM.Geometry.OCCT.Solver
             List<Geometry.Planar.Face2D> united = Geometry.Planar.Query.Union(new List<Geometry.Planar.Face2D> { original2D }.Concat(keptAdditions).ToList(), tolerance)?.FindAll(x => x != null);
             Geometry.Planar.Face2D kept = united?.OrderByDescending(x => x.GetArea()).FirstOrDefault();
             double lost = kept == null ? double.MaxValue : (Geometry.Planar.Query.Difference(original2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>()).Where(x => x != null).Sum(x => x.GetArea());
-            if (kept == null || lost > tolerance)
+            if (kept == null || lost > sliver)
             {
                 return ClipFailed(levels, up, "the clipped face would not hold the whole original wall");
             }
@@ -2099,7 +2105,7 @@ namespace SAM.Geometry.OCCT.Solver
                 return ClipFailed(levels, up, "the clipped face is not valid");
             }
 
-            List<Geometry.Planar.Face2D> discarded = united.FindAll(x => !ReferenceEquals(x, kept) && x.GetArea() > tolerance);
+            List<Geometry.Planar.Face2D> discarded = united.FindAll(x => !ReferenceEquals(x, kept) && x.GetArea() > sliver);
 
             List<Point3D> removedPoints = (Geometry.Planar.Query.Difference(extended2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>())
                 .FindAll(x => x != null)
