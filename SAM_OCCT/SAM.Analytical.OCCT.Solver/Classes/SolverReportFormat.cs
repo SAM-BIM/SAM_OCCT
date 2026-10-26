@@ -137,9 +137,10 @@ namespace SAM.Analytical.OCCT.Solver
         }
 
         /// <summary>
-        /// The per-panel extend diagnostics recorded on the conditioned panels themselves - currently only
+        /// The per-panel extend diagnostics recorded on the conditioned panels themselves:
         /// <c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c>, emitted when a footprint trim clips or drops an internal
-        /// opening (E1 / R6). These live on the <see cref="SnappedPanel"/> and were previously not surfaced
+        /// opening (E1 / R6), and <c>SAM_OCCT_EXTEND3D_LEVEL_CLIP</c>, emitted when a vertical extension is kept
+        /// from growing past another level. These live on the <see cref="SnappedPanel"/> and were previously not surfaced
         /// beyond the panel; E3 flows them out to the diagnostics list so a dropped window is never silent.
         /// Already fully-formed coded lines, returned verbatim.
         /// </summary>

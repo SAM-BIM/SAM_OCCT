@@ -2382,6 +2382,7 @@ namespace SAM.Geometry.OCCT.Solver
             List<Plane> capPlanes = new List<Plane>();
             List<int> capPanelIndices = new List<int>();        // position in `panels` per cap, for E3 records
             List<int> capSourceIndices = new List<int>();       // representative source per cap, for E3 records
+            List<Face3D> capFaces = new List<Face3D>();         // actual cap geometry per cap, for the intermediate-level clip
             for (int panelIndex = 0; panelIndex < panels.Count; panelIndex++)
             {
                 SnappedPanel panel = panels[panelIndex];
@@ -2408,6 +2409,7 @@ namespace SAM.Geometry.OCCT.Solver
                     capPlanes.Add(panel.Plane);
                     capPanelIndices.Add(panelIndex);
                     capSourceIndices.Add(RepresentativeSource(panel));
+                    capFaces.Add(panel.Face3D);
                 }
             }
 
@@ -2420,8 +2422,8 @@ namespace SAM.Geometry.OCCT.Solver
                     continue;
                 }
 
-                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, overshoot, roofOvershoot, toleranceDistance, true, records, wallPanelIndices[w], capPanelIndices, capSourceIndices);
-                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, overshoot, roofOvershoot, toleranceDistance, false, records, wallPanelIndices[w], capPanelIndices, capSourceIndices);
+                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, overshoot, roofOvershoot, toleranceDistance, true, records, wallPanelIndices[w], capPanelIndices, capSourceIndices, capFaces);
+                ExtendWallToNearestCap(wall, wallBox, capBoxes, capPlanes, overshoot, roofOvershoot, toleranceDistance, false, records, wallPanelIndices[w], capPanelIndices, capSourceIndices, capFaces);
             }
         }
 
@@ -2442,13 +2444,24 @@ namespace SAM.Geometry.OCCT.Solver
         /// spanning two roof planes still receives its correct multi-slope top from the native kernel, which
         /// trims it against every roof face in the cell complex.</para>
         /// </summary>
-        private static void ExtendWallToNearestCap(SnappedPanel wall, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double overshoot, double roofOvershoot, double toleranceDistance, bool up, List<ExtendRecord> records = null, int wallPanelIndex = -1, List<int> capPanelIndices = null, List<int> capSourceIndices = null)
+        private static void ExtendWallToNearestCap(SnappedPanel wall, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double overshoot, double roofOvershoot, double toleranceDistance, bool up, List<ExtendRecord> records = null, int wallPanelIndex = -1, List<int> capPanelIndices = null, List<int> capSourceIndices = null, List<Face3D> capFaces = null)
         {
             double wallExtreme = up ? wallBox.Max.Z : wallBox.Min.Z;
             double centreX = 0.5 * (wallBox.Min.X + wallBox.Max.X);
             double centreY = 0.5 * (wallBox.Min.Y + wallBox.Max.Y);
 
-            int capIndex = NearestCoveringCap(wallBox, centreX, centreY, capBoxes, capPlanes, toleranceDistance, up, wallExtreme);
+            // A wall whose extreme already passes its cap by no more than the extend overshoot (the state this extend
+            // itself leaves a wall in) meets that cap: it is not grown on to the next cap, a storey away.
+            int capIndex = NearestCoveringCap(wallBox, centreX, centreY, capBoxes, capPlanes, toleranceDistance, up, wallExtreme, out bool passed, overshoot, wall.MaxExtension);
+            if (passed)
+            {
+                records?.Add(ExtendRecord.Skip(
+                    wallPanelIndex, RepresentativeSource(wall), up ? ExtendOperationKind.Top : ExtendOperationKind.Bottom,
+                    ExtendSkipReason.AlreadyMeetsTarget,
+                    string.Format(System.Globalization.CultureInfo.InvariantCulture, "wall {0} {1:0.###} already passes its cap by at most the overshoot ({2:0.###} m)", up ? "top" : "base", wallExtreme, overshoot)));
+                return;
+            }
+
             if (capIndex < 0)
             {
                 if (records != null)
@@ -2484,6 +2497,7 @@ namespace SAM.Geometry.OCCT.Solver
             BoundingBox3D preBox = records != null ? wall.GetBoundingBox() : null;
 
             bool flatRelative = IsCapFlatRelativeToWall(wall, capPlane);
+            Face3D before = wall.Face3D;
             if (up)
             {
                 if (flatRelative)
@@ -2507,11 +2521,168 @@ namespace SAM.Geometry.OCCT.Solver
                 }
             }
 
+            ClipBeyondIntermediateCaps(wall, before, wallBox, capBoxes, capFaces, capIndex, up, overshoot, toleranceDistance);
+
             if (records != null && preBox != null)
             {
                 RecordCapExtend(records, wall, wallPanelIndex, preBox, up, capIndex, capBox, capPlane, flatRelative,
                     flatRelative ? scalarOvershoot : overshoot, capPanelIndices, capSourceIndices, toleranceDistance);
             }
+        }
+
+        /// <summary>
+        /// After a vertical extend, removes the area grown past an intermediate level: a flat cap (floor or
+        /// ceiling) lying between the wall's opposite extreme and the extend target, over columns of the wall
+        /// that do not themselves continue past that level (<see cref="SnappedPanel.ClipBeyondLevels"/>). A wall
+        /// merged across storeys extends to its own cap and never through another storey's floor.
+        /// <para>Where a level covers the wall is read from the caps' actual outlines (concave parts and openings
+        /// kept) within the wall's capture half-width (<see cref="SnappedPanel.BucketSize"/>) of its plan line, and
+        /// the caps at one elevation are taken together: a floor split into pieces covers the wall exactly as the
+        /// same floor in one piece. A column under an opening in the level, or beside a concave corner of it, is
+        /// not covered and keeps the extension.</para>
+        /// Walls without such a level - every plain rectangle - are left exactly as extended.
+        /// </summary>
+        private static void ClipBeyondIntermediateCaps(SnappedPanel wall, Face3D before, BoundingBox3D wallBox, List<BoundingBox3D> capBoxes, List<Face3D> capFaces, int capIndex, bool up, double band, double toleranceDistance)
+        {
+            if (before == null || ReferenceEquals(before, wall.Face3D) || capIndex < 0 || capFaces == null || capFaces.Count != capBoxes.Count)
+            {
+                return;
+            }
+
+            Vector3D normal = wall.Plane?.Normal?.Unit;
+            Vector3D uAxis = normal == null ? null : new Vector3D(-normal.Y, normal.X, 0);
+            if (uAxis == null || uAxis.Length <= 1e-9)
+            {
+                return;
+            }
+
+            uAxis = uAxis.Unit;
+            Vector3D wAxis = new Vector3D(uAxis.Y, -uAxis.X, 0);
+            List<Point3D> wallPoints = (before.GetExternalEdge3D() as ISegmentable3D)?.GetPoints();
+            if (wallPoints == null || wallPoints.Count == 0)
+            {
+                return;
+            }
+
+            double line = wallPoints.Average(x => x.X * wAxis.X + x.Y * wAxis.Y);
+            double uMin = wallPoints.Min(x => x.X * uAxis.X + x.Y * uAxis.Y) - wall.BucketSize, uMax = wallPoints.Max(x => x.X * uAxis.X + x.Y * uAxis.Y) + wall.BucketSize;
+            double reach = System.Math.Max(wall.BucketSize, band);
+
+            double targetZ = up ? capBoxes[capIndex].Min.Z : capBoxes[capIndex].Max.Z;
+            List<(double Z, double From, double To)> covered = new List<(double, double, double)>();
+            for (int i = 0; i < capBoxes.Count; i++)
+            {
+                BoundingBox3D capBox = capBoxes[i];
+                if (i == capIndex || capBox == null || capFaces[i] == null || capBox.Max.Z - capBox.Min.Z > toleranceDistance + 0.1)
+                {
+                    continue;
+                }
+
+                double z = 0.5 * (capBox.Min.Z + capBox.Max.Z);
+                bool between = up ? z > wallBox.Min.Z + toleranceDistance && z < targetZ - toleranceDistance : z < wallBox.Max.Z - toleranceDistance && z > targetZ + toleranceDistance;
+
+                // A level within the wall's reach of the target is a step of the target's own level (a split-level floor
+                // beside the wall), not another storey: it does not stop the extension.
+                if (!between || System.Math.Abs(z - targetZ) <= System.Math.Max(wall.MaxExtension, band))
+                {
+                    continue;
+                }
+
+                foreach ((double from, double to) in CapCoverage(capFaces[i], uAxis, wAxis, line, uMin, uMax, reach, toleranceDistance))
+                {
+                    covered.Add((z, from, to));
+                }
+            }
+
+            // One level per elevation (caps within the band of each other): the coverage of all its caps, merged.
+            List<List<(double Z, double From, double To)>> groups = new List<List<(double, double, double)>>();
+            foreach ((double Z, double From, double To) item in covered.OrderBy(x => x.Z))
+            {
+                if (groups.Count == 0 || item.Z - groups[groups.Count - 1][groups[groups.Count - 1].Count - 1].Z > System.Math.Max(band, toleranceDistance))
+                {
+                    groups.Add(new List<(double, double, double)>());
+                }
+
+                groups[groups.Count - 1].Add(item);
+            }
+
+            List<(double Z, double UFrom, double UTo)> levels = new List<(double, double, double)>();
+            foreach (List<(double Z, double From, double To)> group in groups)
+            {
+                double z = group.Average(x => x.Z);
+                (double From, double To)? current = null;
+                foreach ((double _, double from, double to) in group.OrderBy(x => x.From))
+                {
+                    if (current.HasValue && from <= current.Value.To + toleranceDistance)
+                    {
+                        current = (current.Value.From, System.Math.Max(current.Value.To, to));
+                        continue;
+                    }
+
+                    if (current.HasValue)
+                    {
+                        levels.Add((z, current.Value.From, current.Value.To));
+                    }
+
+                    current = (from, to);
+                }
+
+                if (current.HasValue)
+                {
+                    levels.Add((z, current.Value.From, current.Value.To));
+                }
+            }
+
+            if (levels.Count != 0)
+            {
+                wall.ClipBeyondLevels(before, levels, up, band, toleranceDistance);
+            }
+        }
+
+        /// <summary>
+        /// The stretches of a wall's plan line (plan parameter u along <paramref name="uAxis"/>, offset
+        /// <paramref name="line"/> along <paramref name="wAxis"/>) that a flat cap covers: its outline with its
+        /// openings, intersected with the band within <paramref name="reach"/> of the line.
+        /// </summary>
+        private static List<(double From, double To)> CapCoverage(Face3D cap, Vector3D uAxis, Vector3D wAxis, double line, double uMin, double uMax, double reach, double toleranceDistance)
+        {
+            List<(double From, double To)> result = new List<(double, double)>();
+            Geometry.Planar.Point2D ToPlan(Point3D x) => new Geometry.Planar.Point2D(x.X * uAxis.X + x.Y * uAxis.Y, x.X * wAxis.X + x.Y * wAxis.Y);
+
+            List<Point3D> external = (cap.GetExternalEdge3D() as ISegmentable3D)?.GetPoints();
+            if (external == null || external.Count < 3)
+            {
+                return result;
+            }
+
+            List<Geometry.Planar.IClosed2D> openings = (cap.GetInternalEdge3Ds() ?? new List<IClosedPlanar3D>())
+                .Select(x => (x as ISegmentable3D)?.GetPoints())
+                .Where(x => x != null && x.Count >= 3)
+                .Select(x => (Geometry.Planar.IClosed2D)new Geometry.Planar.Polygon2D(x.ConvertAll(ToPlan)))
+                .ToList();
+
+            Geometry.Planar.Face2D plan = Geometry.Planar.Create.Face2D(new Geometry.Planar.Polygon2D(external.ConvertAll(ToPlan)), openings);
+            Geometry.Planar.Face2D strip = Geometry.Planar.Create.Face2D(new Geometry.Planar.Polygon2D(new List<Geometry.Planar.Point2D>
+            {
+                new Geometry.Planar.Point2D(uMin, line - reach), new Geometry.Planar.Point2D(uMax, line - reach),
+                new Geometry.Planar.Point2D(uMax, line + reach), new Geometry.Planar.Point2D(uMin, line + reach),
+            }), null);
+
+            if (plan == null || strip == null)
+            {
+                return result;
+            }
+
+            foreach (Geometry.Planar.Face2D piece in Geometry.Planar.Query.Intersection(plan, strip, toleranceDistance) ?? new List<Geometry.Planar.Face2D>())
+            {
+                List<Geometry.Planar.Point2D> point2Ds = (piece?.ExternalEdge2D as Geometry.Planar.ISegmentable2D)?.GetPoints();
+                if (point2Ds != null && point2Ds.Count != 0 && piece.GetArea() > toleranceDistance)
+                {
+                    result.Add((point2Ds.Min(x => x.X), point2Ds.Max(x => x.X)));
+                }
+            }
+
+            return result;
         }
 
         /// <summary>E3 observability for a vertical cap extend (<see cref="SnappedPanel.ExtendTopTo"/> /
@@ -2616,11 +2787,19 @@ namespace SAM.Geometry.OCCT.Solver
         /// is beyond the wall extreme in the grow direction (<paramref name="up"/> = above the wall top; false
         /// = below the base), or -1 if none. Whole-wall plan overlap (the pre-E2 rule), so a slightly-inset cap
         /// is still found; the surface is read from the cap PLANE at the point (sloped roofs evaluate correctly,
-        /// not by bounding-box Z).</summary>
-        private static int NearestCoveringCap(BoundingBox3D wallBox, double x, double y, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double toleranceDistance, bool up, double wallExtreme)
+        /// not by bounding-box Z).
+        /// <para><paramref name="passed"/> is true when the cap surface nearest the extreme is one the wall already
+        /// passes by at most <paramref name="reached"/> (the state this extend itself leaves a wall in): the wall
+        /// already meets its cap and must not be grown on to the next cap beyond it, a storey away. A cap passed
+        /// below the wall's mid-height (the floor a short wall stands on, seen from its top) is never such a cap, and
+        /// neither is one with another cap within <paramref name="reach"/> on the grow side (a split-level step).
+        /// With <paramref name="reached"/> 0 the selection is the previous rule.</para></summary>
+        private static int NearestCoveringCap(BoundingBox3D wallBox, double x, double y, List<BoundingBox3D> capBoxes, List<Plane> capPlanes, double toleranceDistance, bool up, double wallExtreme, out bool passed, double reached = 0, double reach = 0)
         {
             int best = -1;
             double bestZ = up ? double.MaxValue : double.MinValue;
+            double passedDistance = double.MaxValue;
+            double middle = 0.5 * (wallBox.Min.Z + wallBox.Max.Z);
             for (int i = 0; i < capBoxes.Count; i++)
             {
                 if (!OverlapsInPlan(capBoxes[i], wallBox, toleranceDistance))
@@ -2631,7 +2810,15 @@ namespace SAM.Geometry.OCCT.Solver
                 double capZ = CapZAtPlan(capPlanes[i], x, y, up ? capBoxes[i].Max.Z : capBoxes[i].Min.Z);
                 if (up ? capZ < wallExtreme - toleranceDistance : capZ > wallExtreme + toleranceDistance)
                 {
-                    continue; // the cap surface here is beyond the wall extreme on the WRONG side - not a cap
+                    // The cap surface here is beyond the wall extreme on the WRONG side - not a cap to grow to, but
+                    // possibly the one the wall already passes.
+                    double distance = System.Math.Abs(capZ - wallExtreme);
+                    if (reached > 0 && distance <= reached + toleranceDistance && (up ? capZ > middle : capZ < middle))
+                    {
+                        passedDistance = System.Math.Min(passedDistance, distance);
+                    }
+
+                    continue;
                 }
 
                 if (up ? capZ < bestZ : capZ > bestZ)
@@ -2641,6 +2828,9 @@ namespace SAM.Geometry.OCCT.Solver
                 }
             }
 
+            // The passed cap is the one the wall meets only when the cap beyond is a storey away (beyond the wall's reach); a
+            // cap within reach on the grow side makes the passed one a split-level step beside the wall.
+            passed = passedDistance < double.MaxValue && (best < 0 || System.Math.Abs(bestZ - wallExtreme) > System.Math.Max(reach, passedDistance));
             return best;
         }
 

@@ -35,12 +35,14 @@ namespace SAM.Geometry.OCCT.Solver
         internal static int FastPathExtendCount;
         internal static int PlaneOpsExtendCount;
         internal static int HoleDroppedCount;
+        internal static int LevelClipCount;
 
         internal static void ResetExtendCensus()
         {
             FastPathExtendCount = 0;
             PlaneOpsExtendCount = 0;
             HoleDroppedCount = 0;
+            LevelClipCount = 0;
         }
 
         /// <summary>Indices of the source panels represented by this snapped panel.</summary>
@@ -1931,6 +1933,182 @@ namespace SAM.Geometry.OCCT.Solver
             Adopt(extended);
             PlaneOpsExtendCount++;
             return true;
+        }
+
+        /// <summary>
+        /// Removes from a vertical extension the area that lies beyond an intermediate level (a floor or ceiling
+        /// between the wall's opposite extreme and its extend target) in the columns where the
+        /// <paramref name="original"/> wall itself does not continue past that level. A wall extends to its own
+        /// cap; it does not grow through another storey's floor to reach a cap a storey away.
+        /// <para>The extend constructions (<see cref="Spatial.Query.Extend(Face3D, Plane, double, double)"/> and
+        /// the column-wise sloped-cap polygon) fill every notch between the outline and the target line. Within
+        /// one storey that is intended (an M-top or gable lifted to the roof, a door notch closed to the floor),
+        /// but a wall merged across storeys (Clean3D) whose lower storey is narrower would otherwise gain a wall
+        /// where the lower storey has none.</para>
+        /// </summary>
+        /// <param name="original">The face before the extension; never reduced.</param>
+        /// <param name="levels">Elevation and plan extent along the wall (u from, u to; u = p . uAxis, the plan
+        /// axis of the wall) of each intermediate level.</param>
+        /// <param name="up">The direction of the extension.</param>
+        /// <param name="band">Material of <paramref name="original"/> within this distance beyond a level does not
+        /// count as continuing past it (the wall resting on, or overshooting, the level).</param>
+        /// <param name="tolerance">Distance tolerance.</param>
+        /// <returns>True when area was removed.</returns>
+        internal bool ClipBeyondLevels(Face3D original, IList<(double Z, double UFrom, double UTo)> levels, bool up, double band, double tolerance)
+        {
+            if (original == null || face3D == null || plane == null || levels == null || levels.Count == 0 || ReferenceEquals(original, face3D))
+            {
+                return false;
+            }
+
+            Vector3D wallNormal = plane.Normal?.Unit;
+            Vector3D uAxis = wallNormal == null ? null : new Vector3D(-wallNormal.Y, wallNormal.X, 0);
+            if (uAxis == null || uAxis.Length <= 1e-9)
+            {
+                return false;
+            }
+
+            uAxis = uAxis.Unit;
+            Vector3D wAxis = wallNormal.CrossProduct(uAxis).Unit;
+            if (System.Math.Abs(wAxis.Z) <= 1e-9)
+            {
+                return false;
+            }
+
+            Geometry.Planar.Face2D original2D = plane.Convert(original);
+            Geometry.Planar.Face2D extended2D = plane.Convert(face3D);
+            BoundingBox3D boundingBox3D = face3D.GetBoundingBox();
+            List<Point3D> boundaryPoint3Ds = BoundaryPoints(face3D);
+            if (original2D == null || extended2D == null || boundingBox3D == null || boundaryPoint3Ds == null || boundaryPoint3Ds.Count < 3)
+            {
+                return false;
+            }
+
+            double uMin = boundaryPoint3Ds.Min(x => U(x, uAxis)) - 1, uMax = boundaryPoint3Ds.Max(x => U(x, uAxis)) + 1;
+            double zMin = boundingBox3D.Min.Z - 1, zMax = boundingBox3D.Max.Z + 1;
+
+            List<Geometry.Planar.Face2D> shadows = new List<Geometry.Planar.Face2D>();
+            foreach ((double z, double uFrom, double uTo) in levels)
+            {
+                // Beyond the level: below it for a downward extension, above it for an upward one.
+                double from = up ? z + band + tolerance : zMin;
+                double to = up ? zMax : z - band - tolerance;
+                if (to - from <= tolerance)
+                {
+                    continue;
+                }
+
+                // Columns where the original wall continues past the level keep their extension.
+                List<(double From, double To)> continuing = new List<(double, double)>();
+                Geometry.Planar.Face2D beyond = Column(uAxis, wAxis, uMin, uMax, from, to);
+                foreach (Geometry.Planar.Face2D face2D in beyond == null ? new List<Geometry.Planar.Face2D>() : Geometry.Planar.Query.Intersection(original2D, beyond, tolerance) ?? new List<Geometry.Planar.Face2D>())
+                {
+                    List<double> us = (face2D?.ExternalEdge2D as Geometry.Planar.ISegmentable2D)?.GetPoints()?.ConvertAll(x => U(plane.Convert(x), uAxis));
+                    if (us != null && us.Count != 0 && face2D.GetArea() > tolerance)
+                    {
+                        continuing.Add((us.Min(), us.Max()));
+                    }
+                }
+
+                List<(double From, double To)> free = new List<(double, double)>();
+                double start = System.Math.Max(uFrom, uMin);
+                foreach ((double continuingFrom, double continuingTo) in continuing.OrderBy(x => x.From))
+                {
+                    free.Add((start, System.Math.Min(continuingFrom, uTo)));
+                    start = System.Math.Max(start, continuingTo);
+                }
+
+                free.Add((start, System.Math.Min(uTo, uMax)));
+
+                // A free stretch of the wall narrower than its lateral reach is a junction gap (the wall stopping short
+                // of a crossing wall), which the lateral extend exists to close: it keeps its fill.
+                foreach ((double freeFrom, double freeTo) in free)
+                {
+                    double width = System.Math.Min(freeTo, uMax - 1) - System.Math.Max(freeFrom, uMin + 1);
+                    if (width >= System.Math.Max(MaxExtension, tolerance))
+                    {
+                        AddColumn(shadows, uAxis, wAxis, freeFrom, freeTo, from, to, tolerance);
+                    }
+                }
+            }
+
+            if (shadows.Count == 0)
+            {
+                return false;
+            }
+
+            // Only the extension is clipped: the original face is united back whole, so no clip ever removes material the
+            // wall had before the extend, whatever the shadows overlap.
+            List<Geometry.Planar.Face2D> additions = (Geometry.Planar.Query.Difference(extended2D, original2D, tolerance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null && x.GetArea() > tolerance);
+            List<Geometry.Planar.Face2D> keptAdditions = additions.SelectMany(x => Geometry.Planar.Query.Difference(x, shadows, tolerance) ?? new List<Geometry.Planar.Face2D>()).Where(x => x != null && x.GetArea() > tolerance).ToList();
+            if (keptAdditions.Sum(x => x.GetArea()) >= additions.Sum(x => x.GetArea()) - tolerance)
+            {
+                return false;
+            }
+
+            List<Geometry.Planar.Face2D> united = Geometry.Planar.Query.Union(new List<Geometry.Planar.Face2D> { original2D }.Concat(keptAdditions).ToList(), tolerance);
+            Geometry.Planar.Face2D kept = united?.FindAll(x => x != null).OrderByDescending(x => x.GetArea()).FirstOrDefault();
+            double lost = kept == null ? double.MaxValue : (Geometry.Planar.Query.Difference(original2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>()).Where(x => x != null).Sum(x => x.GetArea());
+            if (kept == null || lost > tolerance)
+            {
+                return false;
+            }
+
+            Face3D clipped = plane.Convert(kept);
+            if (clipped == null || !clipped.IsValid())
+            {
+                return false;
+            }
+
+            List<Point3D> removedPoints = (Geometry.Planar.Query.Difference(extended2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>())
+                .FindAll(x => x != null)
+                .SelectMany(x => (x.ExternalEdge2D as Geometry.Planar.ISegmentable2D)?.GetPoints() ?? new List<Geometry.Planar.Point2D>())
+                .Select(x => plane.Convert(x))
+                .ToList();
+            BoundingBox3D removedBox = removedPoints.Count == 0 ? null : new BoundingBox3D(removedPoints);
+            double removedArea = extended2D.GetArea() - kept.GetArea();
+
+            RecordHoleDrop(original.GetInternalEdge3Ds()?.Count ?? 0, clipped, "clip beyond level");
+            Adopt(clipped);
+            LevelClipCount++;
+            extendDiagnostics.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "SAM_OCCT_EXTEND3D_LEVEL_CLIP: panel (#{0}) {1} extension kept from growing past the level(s) at z = {2} where the wall does not continue: {3:0.###} m2 removed{4}.",
+                SourceIndices?.FirstOrDefault() ?? -1, up ? "top" : "bottom",
+                string.Join(", ", levels.Select(x => x.Z.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Distinct()), removedArea,
+                removedBox == null ? string.Empty : string.Format(System.Globalization.CultureInfo.InvariantCulture, " within ({0:0.###}, {1:0.###}, {2:0.###})-({3:0.###}, {4:0.###}, {5:0.###})", removedBox.Min.X, removedBox.Min.Y, removedBox.Min.Z, removedBox.Max.X, removedBox.Max.Y, removedBox.Max.Z)));
+            return true;
+        }
+
+        private static double U(Point3D point3D, Vector3D uAxis)
+        {
+            return point3D.X * uAxis.X + point3D.Y * uAxis.Y;
+        }
+
+        /// <summary>The rectangle of this panel's plane spanning plan parameters [<paramref name="uFrom"/>,
+        /// <paramref name="uTo"/>] and elevations [<paramref name="zFrom"/>, <paramref name="zTo"/>].</summary>
+        private Geometry.Planar.Face2D Column(Vector3D uAxis, Vector3D wAxis, double uFrom, double uTo, double zFrom, double zTo)
+        {
+            List<Geometry.Planar.Point2D> point2Ds = new List<Point3D>
+            {
+                InPlanePoint(uAxis, wAxis, uFrom, zFrom), InPlanePoint(uAxis, wAxis, uTo, zFrom),
+                InPlanePoint(uAxis, wAxis, uTo, zTo), InPlanePoint(uAxis, wAxis, uFrom, zTo)
+            }.ConvertAll(x => plane.Convert(x));
+
+            return point2Ds.Any(x => x == null) ? null : Geometry.Planar.Create.Face2D(new Geometry.Planar.Polygon2D(point2Ds), null);
+        }
+
+        private void AddColumn(List<Geometry.Planar.Face2D> face2Ds, Vector3D uAxis, Vector3D wAxis, double uFrom, double uTo, double zFrom, double zTo, double tolerance)
+        {
+            if (uTo - uFrom <= tolerance)
+            {
+                return;
+            }
+
+            Geometry.Planar.Face2D face2D = Column(uAxis, wAxis, uFrom, uTo, zFrom, zTo);
+            if (face2D != null)
+            {
+                face2Ds.Add(face2D);
+            }
         }
 
         /// <summary>A point in this panel's plane with plan-parameter <paramref name="u"/> (its projection on
