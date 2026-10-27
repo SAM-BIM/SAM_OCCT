@@ -128,6 +128,13 @@ namespace SAM.Geometry.OCCT.Solver
         /// per-panel range) would merge them. Never silent: the diagnostic names both centroids and the
         /// required value so the user can see a near-merge without guessing. Appended at the end so
         /// existing members keep their ordinal values (public-enum binary contract).</summary>
-        ConsolidationNearMiss
+        ConsolidationNearMiss,
+
+        /// <summary>The Stage A coplanar merge lost post-snap panel faces (SAM's union dropped a merged face it had turned
+        /// invalid, e.g. a sliver hole reconverted as a 2-point loop) and <see cref="SnapStage.Clean"/> recovered them: the
+        /// group re-unioned with its degenerate inner loops removed, or kept unmerged when that is rejected. Warning, one per
+        /// recovered coplanar group, never silent. Appended at the end so existing members keep their ordinal values
+        /// (public-enum binary contract).</summary>
+        CoplanarMergeRecovered
     }
 }
