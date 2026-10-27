@@ -25,6 +25,11 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>Directional cap growth was requested but this panel fell back to the legacy uniform
         /// (measured or fixed-margin) grow.</summary>
-        LegacyUniformCapGrow
+        LegacyUniformCapGrow,
+
+        /// <summary>The vertical extension grows past an intermediate level where the wall does not continue, and the
+        /// clip that should have removed it there could not be made (<c>SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED</c>): the
+        /// extension is kept whole and may stand where the input has no wall.</summary>
+        LevelClipFailed
     }
 }

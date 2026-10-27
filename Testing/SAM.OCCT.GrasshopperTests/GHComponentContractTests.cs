@@ -80,6 +80,14 @@ namespace SAM.OCCT.GrasshopperTests
         }
 
         [Fact]
+        public void AutoTune3D_Discover_Version_Is050()
+        {
+            // 0.4.0 -> 0.5.0: the Clean3D coplanar-merge coverage guard and the managed extend/clip its trials run (Extend3D
+            // no-invented-walls) change the computed panels; one bump covers both (GH-F2/H2). GUID and parameters unchanged.
+            Assert.Equal("0.5.0", new SAMOCCTAutoTune3DDiscover().LatestComponentVersion);
+        }
+
+        [Fact]
         public void AutoTune3D_LegacyAndDiscover_HaveDistinctGuids()
         {
             AssertAutoTune3D_DistinctGuids();
@@ -152,7 +160,8 @@ namespace SAM.OCCT.GrasshopperTests
         private static void AssertAutoTune3DLegacy_Version()
         {
             var comp = new SAMOCCTAutoTune3DLegacy();
-            // 0.1.0 -> 0.2.0: the Clean3D coplanar-merge coverage guard changes the panels its solve computes (GH-F2/H2).
+            // 0.1.0 -> 0.2.0: the Clean3D coplanar-merge coverage guard and the managed extend/clip (Extend3D
+            // no-invented-walls) change the panels its solve computes; one bump covers both unreleased changes (GH-F2/H2).
             Assert.Equal("0.2.0", comp.LatestComponentVersion);
         }
 

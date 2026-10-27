@@ -112,6 +112,15 @@ namespace SAM.Analytical.OCCT.Solver
         /// </summary>
         public IReadOnlyList<DiagnosticRecord> DiagnosticRecords { get; internal set; }
 
+        /// <summary>
+        /// <see cref="ExtendPanelDiagnostics"/> as structured records (same lines, same order), each with the severity the
+        /// conditioned panel recorded where the line was produced: a level clip that could not be made is an Error, a
+        /// completed clip that dropped a kept extension piece a Warning, the rest Info. Set by every managed pass that
+        /// conditions (Solve3D, Extend3D, Clean3D), so a component without <see cref="DiagnosticRecords"/> can still raise
+        /// these as runtime messages. Empty when nothing was recorded.
+        /// </summary>
+        public IReadOnlyList<DiagnosticRecord> ExtendPanelDiagnosticRecords { get; internal set; }
+
         public Solve3DReport(
             bool rawAdopted,
             ClosureSignature3D signature,
@@ -150,6 +159,7 @@ namespace SAM.Analytical.OCCT.Solver
             CleanRecords = cleanRecords ?? new List<CleanRecord>();
             CleanReportLines = cleanReportLines ?? new List<string>();
             DiagnosticRecords = new List<DiagnosticRecord>();
+            ExtendPanelDiagnosticRecords = new List<DiagnosticRecord>();
             NativeResolved = nativeResolved;
             ResolvedCellCount = resolvedCellCount;
             Rounds = rounds;

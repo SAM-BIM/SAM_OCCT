@@ -292,6 +292,11 @@ namespace SAM.Analytical.Grasshopper.OCCT
                 dataAccess.SetDataList(index, openEndPoint3Ds?.Where(x => x != null).Select(x => new global::Rhino.Geometry.Point3d(x.X, x.Y, x.Z)));
             }
 
+            // The per-panel extend lines carry the severity recorded where each is produced (a level clip that could not
+            // be made is an Error, a dropped kept extension piece a Warning): those become runtime messages, Info stays
+            // log only. Text is never parsed. The Diagnostics output keeps the full legacy list unchanged.
+            global::SAM.Core.Grasshopper.OCCT.OcctDiagnosticReporter.Report(this, report?.ExtendPanelDiagnosticRecords, DiagnosticDetail.Summary);
+
             index = Params.IndexOfOutputParam("Diagnostics");
             if (index != -1)
             {

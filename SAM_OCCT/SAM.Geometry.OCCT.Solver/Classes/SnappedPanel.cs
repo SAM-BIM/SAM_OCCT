@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Copyright (c) 2020-2026 Michal Dengusiak & Jakub Ziolkowski and contributors
 
+using SAM.Core.OCCT;
 using SAM.Geometry.Spatial;
 using System.Collections.Generic;
 using System.Linq;
@@ -25,6 +26,7 @@ namespace SAM.Geometry.OCCT.Solver
         private Face3D face3D;
         private Plane plane;
         private readonly List<string> extendDiagnostics = new List<string>();
+        private readonly List<OcctDiagnosticSeverity> extendDiagnosticSeverities = new List<OcctDiagnosticSeverity>();
 
         // E1 extend-path census (docs/EXTEND3D_ROBUST_HANDOVER.md). Counts, since the last
         // ResetExtendCensus(), how many extend/footprint operations took the byte-identical legacy
@@ -35,12 +37,14 @@ namespace SAM.Geometry.OCCT.Solver
         internal static int FastPathExtendCount;
         internal static int PlaneOpsExtendCount;
         internal static int HoleDroppedCount;
+        internal static int LevelClipCount;
 
         internal static void ResetExtendCensus()
         {
             FastPathExtendCount = 0;
             PlaneOpsExtendCount = 0;
             HoleDroppedCount = 0;
+            LevelClipCount = 0;
         }
 
         /// <summary>Indices of the source panels represented by this snapped panel.</summary>
@@ -88,12 +92,22 @@ namespace SAM.Geometry.OCCT.Solver
         public Plane Plane => plane;
 
         /// <summary>
-        /// Coded diagnostics accumulated by the profile-preserving extend/trim path - currently
-        /// only <c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c>, emitted when a footprint trim clips or drops
-        /// an internal opening (a window/door) rather than dropping it silently (E1 / R6). Empty on
-        /// the byte-identical rectangular fast path, which never touches openings.
+        /// Coded diagnostics accumulated by the profile-preserving extend/trim path:
+        /// <c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c>, emitted when a footprint trim clips or drops an internal
+        /// opening (a window/door) rather than dropping it silently (E1 / R6), and the level-clip lines of
+        /// <see cref="ClipBeyondLevels"/>. Empty on the byte-identical rectangular fast path, which never
+        /// touches openings. Each line's severity is in <see cref="ExtendDiagnosticSeverities"/>.
         /// </summary>
         public IReadOnlyList<string> ExtendDiagnostics => extendDiagnostics;
+
+        /// <summary>
+        /// The severity of each line of <see cref="ExtendDiagnostics"/> (same index), set where the line is
+        /// produced: Info for what was done (<c>SAM_OCCT_EXTEND3D_HOLE_DROPPED</c>,
+        /// <c>SAM_OCCT_EXTEND3D_LEVEL_CLIP</c>), Warning for a completed clip that dropped a kept extension piece
+        /// (<c>SAM_OCCT_EXTEND3D_LEVEL_CLIP_PIECE_DROPPED</c>), Error for a required clip that could not be made
+        /// (<c>SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED</c>). Never read back from the text.
+        /// </summary>
+        public IReadOnlyList<OcctDiagnosticSeverity> ExtendDiagnosticSeverities => extendDiagnosticSeverities;
 
         /// <summary>
         /// Coplanar test: the two supporting planes are parallel within
@@ -1933,6 +1947,297 @@ namespace SAM.Geometry.OCCT.Solver
             return true;
         }
 
+        /// <summary>
+        /// Removes from a vertical extension the area that lies beyond an intermediate level (a floor or ceiling
+        /// between the wall's opposite extreme and its extend target) in the columns where the
+        /// <paramref name="original"/> wall itself does not continue past that level. A wall extends to its own
+        /// cap; it does not grow through another storey's floor to reach a cap a storey away.
+        /// <para>The extend constructions (<see cref="Spatial.Query.Extend(Face3D, Plane, double, double)"/> and
+        /// the column-wise sloped-cap polygon) fill every notch between the outline and the target line. Within
+        /// one storey that is intended (an M-top or gable lifted to the roof, a door notch closed to the floor),
+        /// but a wall merged across storeys (Clean3D) whose lower storey is narrower would otherwise gain a wall
+        /// where the lower storey has none.</para>
+        /// </summary>
+        /// <param name="original">The face before the extension; never reduced.</param>
+        /// <param name="levels">Elevation of each intermediate level and the stretches of the wall (u from, u to; u =
+        /// p . uAxis, the plan axis of the wall) where it stops the extension, and the walls crossing this one in the
+        /// storey beyond it: the u of each and the elevations over which it has material at the junction (where that
+        /// material runs to the crossing wall's own base or top, as far as that wall's own extend is verified to take it).</param>
+        /// <param name="up">The direction of the extension.</param>
+        /// <param name="band">Material of <paramref name="original"/> within this distance beyond a level does not
+        /// count as continuing past it (the wall resting on, or overshooting, the level).</param>
+        /// <param name="tolerance">Distance tolerance.</param>
+        /// <returns>True when area was removed.</returns>
+        internal bool ClipBeyondLevels(Face3D original, IList<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> levels, bool up, double band, double tolerance)
+        {
+            return ClipBeyondLevels(original, levels, up, band, tolerance, out _);
+        }
+
+        /// <summary>As the overload above; <paramref name="failed"/> is true when a clip was required and could not be made
+        /// (<c>SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED</c>): the face is then left as extended.</summary>
+        internal bool ClipBeyondLevels(Face3D original, IList<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> levels, bool up, double band, double tolerance, out bool failed)
+        {
+            failed = false;
+            if (original == null || face3D == null || plane == null || levels == null || levels.Count == 0 || ReferenceEquals(original, face3D))
+            {
+                return false;
+            }
+
+            Vector3D wallNormal = plane.Normal?.Unit;
+            Vector3D uAxis = wallNormal == null ? null : new Vector3D(-wallNormal.Y, wallNormal.X, 0);
+            if (uAxis == null || uAxis.Length <= 1e-9)
+            {
+                return false;
+            }
+
+            uAxis = uAxis.Unit;
+            Vector3D wAxis = wallNormal.CrossProduct(uAxis).Unit;
+            if (System.Math.Abs(wAxis.Z) <= 1e-9)
+            {
+                return false;
+            }
+
+            Geometry.Planar.Face2D original2D = plane.Convert(original);
+            Geometry.Planar.Face2D extended2D = plane.Convert(face3D);
+            BoundingBox3D boundingBox3D = face3D.GetBoundingBox();
+            List<Point3D> boundaryPoint3Ds = BoundaryPoints(face3D);
+            if (original2D == null || extended2D == null || boundingBox3D == null || boundaryPoint3Ds == null || boundaryPoint3Ds.Count < 3)
+            {
+                return false;
+            }
+
+            double uMin = boundaryPoint3Ds.Min(x => U(x, uAxis)) - 1, uMax = boundaryPoint3Ds.Max(x => U(x, uAxis)) + 1;
+            double zMin = boundingBox3D.Min.Z - 1, zMax = boundingBox3D.Max.Z + 1;
+
+            List<Geometry.Planar.Face2D> shadows = new List<Geometry.Planar.Face2D>();
+            foreach ((double z, IList<(double From, double To)> columns, IList<(double U, double ZMin, double ZMax)> crossings) in levels)
+            {
+                // Beyond the level: below it for a downward extension, above it for an upward one.
+                double from = up ? z + band + tolerance : zMin;
+                double to = up ? zMax : z - band - tolerance;
+                if (to - from <= tolerance)
+                {
+                    continue;
+                }
+
+                // Columns where the original wall continues past the level keep their extension.
+                List<(double From, double To)> continuing = new List<(double, double)>();
+                Geometry.Planar.Face2D beyond = Column(uAxis, wAxis, uMin, uMax, from, to);
+                foreach (Geometry.Planar.Face2D face2D in beyond == null ? new List<Geometry.Planar.Face2D>() : Geometry.Planar.Query.Intersection(original2D, beyond, tolerance) ?? new List<Geometry.Planar.Face2D>())
+                {
+                    List<double> us = (face2D?.ExternalEdge2D as Geometry.Planar.ISegmentable2D)?.GetPoints()?.ConvertAll(x => U(plane.Convert(x), uAxis));
+                    if (us != null && us.Count != 0 && face2D.GetArea() > tolerance)
+                    {
+                        continuing.Add((us.Min(), us.Max()));
+                    }
+                }
+
+                continuing = PlanIntervals.Normalise(continuing, tolerance);
+                List<(double From, double To)> free = PlanIntervals.Difference(columns, continuing, tolerance);
+
+                // A junction keeps its extension too: the stretch from where the original continues up to the line of a
+                // wall crossing this one in the storey beyond the level (the wall stopping short of it there), up to the
+                // wall's lateral reach, over the elevations at which the crossing wall has material at the junction. A
+                // stretch without a crossing wall is an intentional set-back or void, however narrow, and is clipped; so
+                // are the elevations at which the crossing wall does not meet this wall's line (an opening there).
+                List<(double From, double To, double ZFrom, double ZTo)> junctions = new List<(double, double, double, double)>();
+                foreach ((double freeFrom, double freeTo) in free)
+                {
+                    bool fromContinuing = continuing.Any(x => System.Math.Abs(x.To - freeFrom) <= tolerance);
+                    bool toContinuing = continuing.Any(x => System.Math.Abs(x.From - freeTo) <= tolerance);
+                    foreach ((double crossing, double crossingZMin, double crossingZMax) in crossings ?? new List<(double, double, double)>())
+                    {
+                        double zFrom = System.Math.Max(from, crossingZMin), zTo = System.Math.Min(to, crossingZMax);
+                        if (zTo - zFrom <= tolerance)
+                        {
+                            continue;
+                        }
+
+                        if (fromContinuing && crossing > freeFrom + tolerance && crossing <= freeTo + tolerance && crossing - freeFrom <= MaxExtension + tolerance)
+                        {
+                            junctions.Add((freeFrom, System.Math.Min(freeTo, crossing), zFrom, zTo));
+                        }
+
+                        if (toContinuing && crossing < freeTo - tolerance && crossing >= freeFrom - tolerance && freeTo - crossing <= MaxExtension + tolerance)
+                        {
+                            junctions.Add((System.Math.Max(freeFrom, crossing), freeTo, zFrom, zTo));
+                        }
+                    }
+                }
+
+                foreach ((double freeFrom, double freeTo) in PlanIntervals.Difference(free, junctions.Select(x => (x.From, x.To)), tolerance))
+                {
+                    AddColumn(shadows, uAxis, wAxis, freeFrom, freeTo, from, to, tolerance);
+                }
+
+                // Within the junction stretches, the elevations no crossing wall's material covers (intervals of elevation).
+                List<double> breaks = junctions.SelectMany(x => new[] { x.From, x.To }).Distinct().OrderBy(x => x).ToList();
+                for (int i = 0; i + 1 < breaks.Count; i++)
+                {
+                    double uFrom = breaks[i], uTo = breaks[i + 1], u = 0.5 * (uFrom + uTo);
+                    List<(double From, double To)> material = junctions.Where(x => x.From <= u && x.To >= u).Select(x => (x.ZFrom, x.ZTo)).ToList();
+                    if (uTo - uFrom <= tolerance || material.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    foreach ((double zFrom, double zTo) in PlanIntervals.Difference(new[] { (from, to) }, material, tolerance))
+                    {
+                        AddColumn(shadows, uAxis, wAxis, uFrom, uTo, zFrom, zTo, tolerance);
+                    }
+                }
+            }
+
+            if (shadows.Count == 0)
+            {
+                return false;
+            }
+
+            // Only the extension is clipped: what is removed is the extension's part in the shadows, never material the wall
+            // had before the extend, whatever the shadows overlap. (SAM's planar Difference returns null for an empty result
+            // as well as on failure, so null reads as empty here.)
+            // Every residual piece - an addition, a removed part of one, original material missing from the result, a piece
+            // left apart from the wall - is judged by its own width (IsSliver): noise of the planar operations is a
+            // sliver along an edge, however long the wall.
+            List<Geometry.Planar.Face2D> additions = (Geometry.Planar.Query.Difference(extended2D, original2D, tolerance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null && !IsSliver(x, tolerance));
+
+            // Nothing but slivers removed (a shadow grazing the extension's edge): no clip. Softhouse wall #17: a graze removed
+            // 1e-5 m2 along the wall; compared as an area with the 1e-6 m distance tolerance it read as a clip.
+            List<Geometry.Planar.Face2D> removed = additions.SelectMany(x => shadows.SelectMany(y => Geometry.Planar.Query.Intersection(x, y, tolerance) ?? new List<Geometry.Planar.Face2D>())).Where(x => x != null && !IsSliver(x, tolerance)).ToList();
+            if (removed.Count == 0)
+            {
+                return false;
+            }
+
+            // The clipped face is the extended face cut by the removed pieces - a local cut where the extension is removed.
+            // It is not re-assembled from the original and the kept extension pieces: such a union can leave a crack of the
+            // tolerance's width between pieces whose shared edge is offset by it (AdjacencyCluster-home #20 on the Clean3D ->
+            // Extend3D path: a 1 um slit down the wall from its top, through which the native build lost every room along
+            // it). The wall is one face, the piece holding the original; a kept extension piece not connected to it is
+            // reported, never dropped silently. A clip that cannot keep the whole original (beyond slivers) or gives an
+            // invalid face is not made.
+            List<Geometry.Planar.Face2D> united = (Geometry.Planar.Query.Difference(extended2D, removed, tolerance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null && !IsSliver(x, tolerance));
+            Geometry.Planar.Face2D kept = united.OrderByDescending(x => x.GetArea()).FirstOrDefault();
+            List<Geometry.Planar.Face2D> lost = kept == null ? null : (Geometry.Planar.Query.Difference(original2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>()).FindAll(x => x != null && !IsSliver(x, tolerance));
+            Face3D clipped = null;
+            string failure = null;
+            if (lost == null || lost.Count != 0)
+            {
+                failure = string.Format(System.Globalization.CultureInfo.InvariantCulture, "the clipped face would not hold the whole original wall: {0:0.######} m2 of it left out", lost == null ? original2D.GetArea() : lost.Sum(x => x.GetArea()));
+            }
+            else
+            {
+                clipped = plane.Convert(kept);
+                if (clipped == null || !clipped.IsValid())
+                {
+                    failure = "the clipped face is not valid";
+                }
+            }
+
+            if (failure != null)
+            {
+                failed = true;
+                return ClipFailed(levels, up, failure);
+            }
+
+            List<Geometry.Planar.Face2D> discarded = united.OrderByDescending(x => x.GetArea()).Skip(1).ToList();
+
+            List<Point3D> removedPoints = (Geometry.Planar.Query.Difference(extended2D, kept, tolerance) ?? new List<Geometry.Planar.Face2D>())
+                .FindAll(x => x != null)
+                .SelectMany(x => (x.ExternalEdge2D as Geometry.Planar.ISegmentable2D)?.GetPoints() ?? new List<Geometry.Planar.Point2D>())
+                .Select(x => plane.Convert(x))
+                .ToList();
+            BoundingBox3D removedBox = removedPoints.Count == 0 ? null : new BoundingBox3D(removedPoints);
+            double removedArea = extended2D.GetArea() - kept.GetArea();
+
+            RecordHoleDrop(original.GetInternalEdge3Ds()?.Count ?? 0, clipped, "clip beyond level");
+            Adopt(clipped);
+            LevelClipCount++;
+            AddExtendDiagnostic(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "SAM_OCCT_EXTEND3D_LEVEL_CLIP: panel (#{0}) {1} extension kept from growing past the level(s) at z = {2} where the wall does not continue: {3:0.###} m2 removed{4}.",
+                SourceIndices?.FirstOrDefault() ?? -1, up ? "top" : "bottom",
+                string.Join(", ", levels.Select(x => x.Z.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Distinct()), removedArea,
+                removedBox == null ? string.Empty : string.Format(System.Globalization.CultureInfo.InvariantCulture, " within ({0:0.###}, {1:0.###}, {2:0.###})-({3:0.###}, {4:0.###}, {5:0.###})", removedBox.Min.X, removedBox.Min.Y, removedBox.Min.Z, removedBox.Max.X, removedBox.Max.Y, removedBox.Max.Z)), OcctDiagnosticSeverity.Info);
+            if (discarded.Count != 0)
+            {
+                // The clip is made and removes only extension: the result is usable, but a permitted extension piece (a
+                // junction or continuation fill) is missing, so the wall may leave an opening there - a Warning.
+                BoundingBox3D discardedBox = new BoundingBox3D(discarded.SelectMany(x => (x.ExternalEdge2D as Geometry.Planar.ISegmentable2D)?.GetPoints() ?? new List<Geometry.Planar.Point2D>()).Select(x => plane.Convert(x)).ToList());
+                AddExtendDiagnostic(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "SAM_OCCT_EXTEND3D_LEVEL_CLIP_PIECE_DROPPED: panel (#{0}) {1} extension: {2:0.###} m2 kept beside the level(s) at z = {3} is not connected to the wall and was dropped, within ({4:0.###}, {5:0.###}, {6:0.###})-({7:0.###}, {8:0.###}, {9:0.###}); the wall may leave an opening there.",
+                    SourceIndices?.FirstOrDefault() ?? -1, up ? "top" : "bottom", discarded.Sum(x => x.GetArea()),
+                    string.Join(", ", levels.Select(x => x.Z.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Distinct()),
+                    discardedBox.Min.X, discardedBox.Min.Y, discardedBox.Min.Z, discardedBox.Max.X, discardedBox.Max.Y, discardedBox.Max.Z), OcctDiagnosticSeverity.Warning);
+            }
+
+            return true;
+        }
+
+        /// <summary>Reports a required clip that could not be made (<c>SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED</c>, an Error):
+        /// the extension is kept whole, including where it grows past the level(s), so the wall may stand where the input
+        /// has none. The caller marks the extend record of that extension (<see cref="ExtendRiskFlag.LevelClipFailed"/>).</summary>
+        private bool ClipFailed(IList<(double Z, IList<(double From, double To)> Columns, IList<(double U, double ZMin, double ZMax)> Crossings)> levels, bool up, string reason)
+        {
+            AddExtendDiagnostic(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "SAM_OCCT_EXTEND3D_LEVEL_CLIP_FAILED: panel (#{0}) {1} extension past the level(s) at z = {2} could not be clipped ({3}); the extension is kept whole and may stand where the input has no wall.",
+                SourceIndices?.FirstOrDefault() ?? -1, up ? "top" : "bottom",
+                string.Join(", ", levels.Select(x => x.Z.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).Distinct()), reason), OcctDiagnosticSeverity.Error);
+            return false;
+        }
+
+        /// <summary>True when <paramref name="face2D"/> is a sliver: its mean width - twice its area over the length of its
+        /// boundary (outer and inner loops) - is within the distance <paramref name="tolerance"/>, the measure Clean3D's
+        /// collapse test uses (<c>SnapStage.MeanWidth</c>). A strip w wide has mean width about w however long it is, so the
+        /// judgement depends on the piece's own geometry, never on the size of the wall it came from. An empty piece is a
+        /// sliver; a loop with no measurable length is not.</summary>
+        private static bool IsSliver(Geometry.Planar.Face2D face2D, double tolerance)
+        {
+            if (face2D?.ExternalEdge2D == null)
+            {
+                return true;
+            }
+
+            double perimeter = Geometry.Planar.Query.Perimeter(face2D.ExternalEdge2D) + (face2D.InternalEdge2Ds ?? new List<Geometry.Planar.IClosed2D>()).Sum(x => Geometry.Planar.Query.Perimeter(x));
+            if (double.IsNaN(perimeter))
+            {
+                return false;
+            }
+
+            return perimeter <= 0 || 2 * face2D.GetArea() / perimeter <= tolerance;
+        }
+
+        private static double U(Point3D point3D, Vector3D uAxis)
+        {
+            return point3D.X * uAxis.X + point3D.Y * uAxis.Y;
+        }
+
+        /// <summary>The rectangle of this panel's plane spanning plan parameters [<paramref name="uFrom"/>,
+        /// <paramref name="uTo"/>] and elevations [<paramref name="zFrom"/>, <paramref name="zTo"/>].</summary>
+        private Geometry.Planar.Face2D Column(Vector3D uAxis, Vector3D wAxis, double uFrom, double uTo, double zFrom, double zTo)
+        {
+            List<Geometry.Planar.Point2D> point2Ds = new List<Point3D>
+            {
+                InPlanePoint(uAxis, wAxis, uFrom, zFrom), InPlanePoint(uAxis, wAxis, uTo, zFrom),
+                InPlanePoint(uAxis, wAxis, uTo, zTo), InPlanePoint(uAxis, wAxis, uFrom, zTo)
+            }.ConvertAll(x => plane.Convert(x));
+
+            return point2Ds.Any(x => x == null) ? null : Geometry.Planar.Create.Face2D(new Geometry.Planar.Polygon2D(point2Ds), null);
+        }
+
+        private void AddColumn(List<Geometry.Planar.Face2D> face2Ds, Vector3D uAxis, Vector3D wAxis, double uFrom, double uTo, double zFrom, double zTo, double tolerance)
+        {
+            if (uTo - uFrom <= tolerance)
+            {
+                return;
+            }
+
+            Geometry.Planar.Face2D face2D = Column(uAxis, wAxis, uFrom, uTo, zFrom, zTo);
+            if (face2D != null)
+            {
+                face2Ds.Add(face2D);
+            }
+        }
+
         /// <summary>A point in this panel's plane with plan-parameter <paramref name="u"/> (its projection on
         /// <paramref name="uAxis"/>) and world elevation <paramref name="z"/> - the column-wise coordinates
         /// <see cref="ExtendToCapPlane"/> builds its extension polygon from. <paramref name="wAxis"/> is the
@@ -2105,9 +2410,16 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             HoleDroppedCount += holesBefore - holesAfter;
-            extendDiagnostics.Add(string.Format(
+            AddExtendDiagnostic(string.Format(
                 "SAM_OCCT_EXTEND3D_HOLE_DROPPED: {0} of {1} internal opening(s) dropped or clipped to the boundary during {2}.",
-                holesBefore - holesAfter, holesBefore, operation));
+                holesBefore - holesAfter, holesBefore, operation), OcctDiagnosticSeverity.Info);
+        }
+
+        /// <summary>Records one <see cref="ExtendDiagnostics"/> line with the severity its producer states.</summary>
+        private void AddExtendDiagnostic(string text, OcctDiagnosticSeverity severity)
+        {
+            extendDiagnostics.Add(text);
+            extendDiagnosticSeverities.Add(severity);
         }
 
         private static IClosedPlanar3D ProjectLoop(IClosedPlanar3D loop, Plane backerPlane)
