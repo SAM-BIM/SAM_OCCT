@@ -241,6 +241,12 @@ namespace SAM.Geometry.OCCT.Solver
 
             List<Face3D> cleanFace3Ds = merged.Where(x => x != null && x.IsValid()).ToList();
 
+            // 3a. Coverage guard: SAM's union skips a merged face it turned invalid (a sliver hole reconverted as a 2-point
+            //     loop), so a whole coplanar group can vanish while the other planes merge. Panels whose internal point no
+            //     clean face covers are recovered and appended here, so the attribution below applies to them unchanged.
+            //     When nothing was lost this adds nothing: same faces, same order, no diagnostic.
+            cleanFace3Ds.AddRange(RecoverLostPanels(postSnap, cleanFace3Ds, tol.Distance, diagnostics));
+
             // Attribution: for each clean face, find the post-snap panels it covers (same plane, centroid inside),
             // carry MaxExtend = max over those sources, and record source -> face in the SourceMap. A face with no
             // geometric match (numerical edge) falls back to the nearest panel so every output keeps >= 1 source.
@@ -300,6 +306,192 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// The faces to add to <paramref name="cleanFace3Ds"/> for the post-snap panels the coplanar merge lost (empty when
+        /// none was lost). A panel is lost when its internal point lies on no clean face of its own union plane, judged with
+        /// the union's own plane identity (<see cref="SamePlane"/>: SAM <c>Plane.Coplanar</c> and an offset within
+        /// <paramref name="tolerance"/>) and inside/on within <paramref name="tolerance"/> - never with the broader
+        /// attribution thresholds of <see cref="Contributors"/>, under which a nearby parallel face would hide the loss.
+        /// Lost panels are grouped seed-first as <c>Geometry.Spatial.Query.Union</c> groups them and each group is
+        /// re-unioned in its seed plane. The only loops removed are inner loops with fewer than 3 points: zero area by
+        /// construction, so no opening is filled (a genuine opening, however small, keeps its loop). The re-merge is kept
+        /// when every face is valid and covers the group's internal points again; otherwise, and for a single lost face,
+        /// the group's faces are kept unmerged. One <see cref="DiagnosticCode.CoplanarMergeRecovered"/> Warning per group.
+        /// </summary>
+        /// <param name="union">The planar union; null uses <c>Geometry.Planar.Query.Union</c> (a test seam only).</param>
+        internal static List<Face3D> RecoverLostPanels(
+            List<SnappedPanel> postSnap,
+            List<Face3D> cleanFace3Ds,
+            double tolerance,
+            SolverDiagnostics diagnostics,
+            System.Func<List<Geometry.Planar.Face2D>, double, List<Geometry.Planar.Face2D>> union = null)
+        {
+            List<Face3D> result = new List<Face3D>();
+            if (postSnap == null || postSnap.Count == 0)
+            {
+                return result;
+            }
+
+            List<CoverageFace> coverageFaces = CoverageFaces(cleanFace3Ds);
+            List<SnappedPanel> lost = postSnap.Where(x => !Covered(x.Face3D, coverageFaces, tolerance)).ToList();
+            if (lost.Count == 0)
+            {
+                return result;
+            }
+
+            union = union ?? ((face2Ds, unionTolerance) => Geometry.Planar.Query.Union(face2Ds, unionTolerance));
+
+            while (lost.Count != 0)
+            {
+                SnappedPanel seed = lost[0];
+                Plane plane = seed.Face3D.GetPlane();
+                List<SnappedPanel> group = lost.Where(x => ReferenceEquals(x, seed) || OnSeedPlane(plane, x.Face3D, tolerance)).ToList();
+                lost.RemoveAll(x => group.Contains(x));
+
+                List<Face3D> repaired = null;
+                int removedLoops = 0;
+                if (group.Count > 1)
+                {
+                    repaired = Repair(group, plane, tolerance, union, out removedLoops);
+                }
+
+                result.AddRange(repaired ?? group.Select(x => x.Face3D));
+
+                Vector3D normal = plane.Normal.Unit;
+                diagnostics?.Add(SolverStage.Snap, DiagnosticCode.CoplanarMergeRecovered, OcctDiagnosticSeverity.Warning,
+                    string.Format("Coplanar merge lost {0} panel face(s) ({1:0.###} m2) on the plane with normal ({2:0.###}, {3:0.###}, {4:0.###}) at elevation {5:0.###} m; recovered: {6}.",
+                        group.Count,
+                        group.Sum(x => x.Face3D.GetArea()),
+                        normal.X, normal.Y, normal.Z,
+                        group.Min(x => x.Face3D.GetBoundingBox().Min.Z),
+                        repaired != null ? string.Format("{0} degenerate loop(s) removed", removedLoops) : "kept unmerged"));
+            }
+
+            return result;
+        }
+
+        /// <summary>A clean face prepared once for the coverage test.</summary>
+        private class CoverageFace
+        {
+            public Plane Plane;
+            public Geometry.Planar.Face2D Face2D;
+        }
+
+        private static List<CoverageFace> CoverageFaces(IEnumerable<Face3D> face3Ds)
+        {
+            List<CoverageFace> result = new List<CoverageFace>();
+            foreach (Face3D face3D in face3Ds ?? Enumerable.Empty<Face3D>())
+            {
+                Plane plane = face3D?.GetPlane();
+                Geometry.Planar.Face2D face2D = plane?.Convert(face3D);
+                if (face2D != null)
+                {
+                    result.Add(new CoverageFace { Plane = plane, Face2D = face2D });
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>True when the face's internal point lies inside or on (within <paramref name="tolerance"/>) one of
+        /// <paramref name="coverageFaces"/> on the same union plane (<see cref="SamePlane"/>), or when the face has no internal
+        /// point (it cannot be tested, so it is never reported lost).</summary>
+        private static bool Covered(Face3D face3D, List<CoverageFace> coverageFaces, double tolerance)
+        {
+            Point3D internalPoint = face3D.InternalPoint3D(tolerance);
+            if (internalPoint == null || !internalPoint.IsValid())
+            {
+                return true;
+            }
+
+            Plane plane = face3D.GetPlane();
+            foreach (CoverageFace coverageFace in coverageFaces)
+            {
+                if (!SamePlane(coverageFace.Plane, plane, internalPoint, tolerance))
+                {
+                    continue;
+                }
+
+                Geometry.Planar.Point2D point2D = coverageFace.Plane.Convert(internalPoint);
+                if (point2D != null && (Geometry.Planar.Query.Inside(coverageFace.Face2D, point2D, tolerance) || coverageFace.Face2D.On(point2D, tolerance)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>The plane identity of <c>Geometry.Spatial.Query.Union</c>: <paramref name="plane"/> is parallel to
+        /// <paramref name="other"/> (SAM <c>Plane.Coplanar</c>, which compares normals only) and <paramref name="point3D"/>, a
+        /// point of the face on <paramref name="other"/>, lies within <paramref name="tolerance"/> of it.</summary>
+        private static bool SamePlane(Plane plane, Plane other, Point3D point3D, double tolerance)
+        {
+            return plane.Coplanar(other, tolerance) && System.Math.Abs(plane.Distance(point3D)) <= tolerance;
+        }
+
+        /// <summary>The grouping test of <c>Geometry.Spatial.Query.Union</c>: on the seed plane by <see cref="SamePlane"/>
+        /// at the face's internal point.</summary>
+        private static bool OnSeedPlane(Plane plane, Face3D face3D, double tolerance)
+        {
+            Point3D internalPoint = face3D.InternalPoint3D(tolerance);
+            return internalPoint != null && internalPoint.IsValid() && SamePlane(plane, face3D.GetPlane(), internalPoint, tolerance);
+        }
+
+        /// <summary>The group re-unioned in <paramref name="plane"/> with its degenerate inner loops (fewer than 3 points) removed,
+        /// or null when the repair is not proven safe: no face, an invalid face, or a group member's internal point left
+        /// uncovered.</summary>
+        private static List<Face3D> Repair(
+            List<SnappedPanel> group,
+            Plane plane,
+            double tolerance,
+            System.Func<List<Geometry.Planar.Face2D>, double, List<Geometry.Planar.Face2D>> union,
+            out int removedLoops)
+        {
+            removedLoops = 0;
+            List<Geometry.Planar.Face2D> face2Ds = union(group.ConvertAll(x => plane.Convert(x.Face3D)), tolerance);
+            if (face2Ds == null || face2Ds.Count == 0)
+            {
+                return null;
+            }
+
+            List<Face3D> result = new List<Face3D>();
+            foreach (Geometry.Planar.Face2D face2D in face2Ds)
+            {
+                if (face2D?.ExternalEdge2D == null)
+                {
+                    return null;
+                }
+
+                List<Geometry.Planar.IClosed2D> internalEdge2Ds = face2D.InternalEdge2Ds ?? new List<Geometry.Planar.IClosed2D>();
+                List<Geometry.Planar.IClosed2D> kept = internalEdge2Ds.Where(x => !DegenerateLoop(x)).ToList();
+                removedLoops += internalEdge2Ds.Count - kept.Count;
+
+                Geometry.Planar.Face2D rebuilt = kept.Count == internalEdge2Ds.Count ? face2D : Geometry.Planar.Create.Face2D(face2D.ExternalEdge2D, kept);
+                Face3D face3D = rebuilt != null && Geometry.Planar.Query.IsValid(rebuilt) ? plane.Convert(rebuilt) : null;
+                if (face3D == null || !face3D.IsValid())
+                {
+                    return null;
+                }
+
+                result.Add(face3D);
+            }
+
+            List<CoverageFace> coverageFaces = CoverageFaces(result);
+            return group.All(x => Covered(x.Face3D, coverageFaces, tolerance)) ? result : null;
+        }
+
+        /// <summary>
+        /// An inner loop that bounds no area: null, or a polyline loop with fewer than 3 points (what SAM's conversion leaves of
+        /// a sliver hole whose points fall within the distance tolerance of one another, and what makes the merged face
+        /// invalid). Removing it fills nothing. Any loop with 3 or more points is a genuine opening and is kept, whatever its
+        /// size: no area is compared with a length.
+        /// </summary>
+        private static bool DegenerateLoop(Geometry.Planar.IClosed2D closed2D)
+        {
+            return closed2D == null || (closed2D is Geometry.Planar.ISegmentable2D segmentable2D && (segmentable2D.GetPoints()?.Count ?? 0) < 3);
         }
 
         /// <summary>

@@ -6,7 +6,8 @@ found by the Softhouse run, see "Softhouse"), `33ea9bb`, `5600f90`, `2ab5316` (r
 `0f060ff`, `b837165` (revision 3b, see "Revision 3b"), `695e814` (revision 3c, see "Revision 3c"). **Tested content:
 `695e814`** (unit 1133/1133, GrasshopperTests 38/38, native integration 24 failed / 472 / 2 skipped - the `b837165`
 failures less WorkflowParity Revit-home, now passing; every output change classified in "Revision 3c" item 5).
-Not pushed, no PR. **Draft PR: ready to open on owner approval. Merge: NO-GO** (open items in "Handover"). Step 1 of the Softhouse "Dining 1"
+**Draft PR SAM-BIM/SAM_OCCT#84** (opened 2026-10-26). `sow/2026-Q4` merged in on 2026-10-27 (SAM_OCCT#85, see "Merge of
+sow/2026-Q4"); native not re-run on the merge. **Merge: NO-GO** (open items in "Handover"). Step 1 of the Softhouse "Dining 1"
 stage investigation (owner, 2026-10-26: SAM_OCCT Extend3D first, the SAM extraction fix as a separate PR). Revision 2
 answers the independent review of 2026-10-26 (`SAM-BIM/.review-extend3d-revision2-20261026/REVIEW.md`, machine-local:
 REVISE - cap splitting moved the clip level; MaxExtension used as evidence of a junction and of a split level; room
@@ -386,7 +387,9 @@ non-local beyond that tolerance.
 `SAMOCCT.Extend3D` 0.10.0 -> **0.11.0**, `SAMOCCT.Solve3D` 0.7.1 -> **0.8.0**, `SAMOCCT.AutoTune3D` (Discover) 0.4.0 ->
 **0.5.0**, `SAMOCCT.AutoTune3D` (legacy) 0.1.0 -> **0.2.0** (both AutoTune solvers run the managed extend/clip in their
 trials). GUIDs, names, parameters, order, access and defaults unchanged (`GHComponentContractTests`,
-`Extend3DLevelClipDiagnosticsTests`). Manifest: SAM_OCCT has no approved `design/grasshopper-icons/param_contract.json`
+`Extend3DLevelClipDiagnosticsTests`). **Superseded at the 2026-10-27 merge of `sow/2026-Q4`** (see "Merge of sow/2026-Q4"):
+SAM_OCCT#85 had already taken these four numbers for its Clean3D merge guard, so this change now bumps one minor further -
+Extend3D **0.12.0**, Solve3D **0.9.0**, AutoTune3D Discover **0.6.0**, AutoTune3D legacy **0.3.0**. Manifest: SAM_OCCT has no approved `design/grasshopper-icons/param_contract.json`
 (the standard's validation applies only where one exists), so there is no manifest to regenerate; the icon manifests
 (`manifest.csv|json`) carry no version. `param_contract.py` was not run (no Python on this machine).
 
@@ -431,6 +434,30 @@ parity now passes, AdjacencyCluster-home relation parity clean, towers baseline 
 solver's dependence on face presentation (item 1), shown directly on AdjacencyCluster-home, Revit-home and towers and
 inferred for the others. They are not caused by geometry this branch changes, and they are not repaired here. Failing
 tests among the changed outputs: 5 (all failing before as well). No golden re-pin.
+
+## Merge of sow/2026-Q4 (2026-10-27)
+
+GitHub reported PR #84 conflicting with `sow/2026-Q4` at `1e39868`. That head adds SAM_OCCT#85, the Clean3D coplanar-merge
+coverage guard (`SnapStage.Clean` step 3a), on top of `22e4fd0`. Merged `1e39868` into the branch; no rebase.
+
+- **Conflicts:** two, both version-assertion comments (`DiagnosticsContractTests`, `GHComponentContractTests`). #85 had
+  bumped the same components to the same numbers: Extend3D 0.11.0, Solve3D 0.8.0, AutoTune3D Discover 0.5.0, legacy 0.2.0.
+- **Versions:** each version shown must mark one computed result, and the update offer must appear after either change
+  (GH-H3). So this change bumps one minor further: Extend3D **0.12.0**, Solve3D **0.9.0**, Discover **0.6.0**, legacy
+  **0.3.0**. Clean3D stays at #85's 0.7.0, because the extend/clip does not run there.
+- **Test updates:** the version tests now assert the new numbers, with both steps commented. The expected versions in
+  #85's `CoplanarMergeGuardVersionTests` move to the current ones. The bump is the owner's to review (GH-H2: "chosen by
+  the impact, and the reviewing owner").
+- **Code overlap:** the two changes touch different code (#85: `SnapStage.cs`, `DiagnosticCode.cs`; this branch: the
+  extend/clip in `Panel3DSnapSolver.cs` / `SnappedPanel.cs`). They meet only in computed results: Extend3D (unless
+  `inputAlreadyClean`), Solve3D and AutoTune3D run both stages.
+- **Local results on the merged tree:** unit 1147 / 1147 (1133 + #85's 14) and GrasshopperTests 43 / 43 (38 + #85's 5),
+  both built through `safebuild.sh --no-incremental`.
+- **Not re-run:**
+  - **The native integration suite.** The 24 / 472 / 2 result and the 16 changed-output classifications belong to
+    `695e814` without #85. #85's guard changes the conditioned panels, so the native counts on the merged head are
+    unmeasured.
+  - The Softhouse chain, as before.
 
 ## Review findings (status at `695e814`)
 
@@ -490,6 +517,8 @@ Revision-3 review (opus plan), status as committed at `2ab5316`, updated where r
   GrasshopperTests: version assertions 0.11.0 / 0.8.0, `AutoTune3D_Legacy_Version_Is010` renamed `..._Is020`, new
   `AutoTune3D_Discover_Version_Is050`; the diagnostics contract comments updated. Unit suite 1133 / 1133,
   GrasshopperTests 38 / 38.
+- Merge of `sow/2026-Q4` (2026-10-27): version assertions 0.12.0 / 0.9.0 / 0.6.0 / 0.3.0 (`..._Is030`, `..._Is060`, #85's
+  `CoplanarMergeGuardVersionTests` expected versions moved to the current ones, Clean3D 0.7.0 unchanged).
 
 ## Validation (local, machine `michal`; identical conditions; base = `SAM_OCCT-wt-extend3d-base` at `22e4fd0` + new tests)
 
@@ -893,7 +922,8 @@ sh $H/tools-2026-10-26-r3b/scripts/msgs.sh $F/runs/integ-695e814.log $F/runs/int
 
 ## Handover (2026-10-26, revision 3c; machine `michal`)
 
-**State.** Everything is local; nothing is pushed, no PR exists, nothing is merged.
+**State (updated 2026-10-27).** Pushed; draft PR SAM-BIM/SAM_OCCT#84 into `sow/2026-Q4`; `sow/2026-Q4` (`1e39868`, #85)
+merged in (see "Merge of sow/2026-Q4"). The table below is the 2026-10-26 local state.
 
 | repository / worktree | branch | commit | working tree |
 | --- | --- | --- | --- |
@@ -944,7 +974,8 @@ presentation dependence without a trace of their own.
    walls taller than long; AutoTune3D surfaces no per-panel extend lines; Extend3D drops the Clean3D slab openings
    without `HOLE_DROPPED`; SAM multi-face `Difference` null ambiguity (SAM side); L3 native stage of the saved Softhouse
    run untied.
-4. Before merge: hosted CI green at the final PR head, every review finding resolved or accepted, owner/code-owner
+4. Before merge: the native integration suite re-run on the merged head (with #85) and its changes against `695e814`
+   classified; hosted CI green at the final PR head, every review finding resolved or accepted, owner/code-owner
    approval, codex-bot comment check. The GH manifest check of the standard does not apply (no approved
    `param_contract.json` in SAM_OCCT); a reviewer reads the four version bumps in the diff.
 
