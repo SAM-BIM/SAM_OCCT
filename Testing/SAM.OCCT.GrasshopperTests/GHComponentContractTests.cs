@@ -36,7 +36,7 @@ namespace SAM.OCCT.GrasshopperTests
         }
 
         [Fact]
-        public void AutoTune3D_Legacy_Version_Is030()
+        public void AutoTune3D_Legacy_Version_Is020()
         {
             AssertAutoTune3DLegacy_Version();
         }
@@ -80,11 +80,11 @@ namespace SAM.OCCT.GrasshopperTests
         }
 
         [Fact]
-        public void AutoTune3D_Discover_Version_Is060()
+        public void AutoTune3D_Discover_Version_Is050()
         {
-            // 0.4.0 -> 0.5.0: the Clean3D coplanar-merge coverage guard; 0.5.0 -> 0.6.0: the managed extend/clip its trials
-            // run computes different panels (Extend3D no-invented-walls). Both GH-F2/H2; GUID and parameters unchanged.
-            Assert.Equal("0.6.0", new SAMOCCTAutoTune3DDiscover().LatestComponentVersion);
+            // 0.4.0 -> 0.5.0: the Clean3D coplanar-merge coverage guard and the managed extend/clip its trials run (Extend3D
+            // no-invented-walls) change the computed panels; one bump covers both (GH-F2/H2). GUID and parameters unchanged.
+            Assert.Equal("0.5.0", new SAMOCCTAutoTune3DDiscover().LatestComponentVersion);
         }
 
         [Fact]
@@ -160,9 +160,9 @@ namespace SAM.OCCT.GrasshopperTests
         private static void AssertAutoTune3DLegacy_Version()
         {
             var comp = new SAMOCCTAutoTune3DLegacy();
-            // 0.1.0 -> 0.2.0: the Clean3D coplanar-merge coverage guard changes the panels its solve computes (GH-F2/H2).
-            // 0.2.0 -> 0.3.0: the managed extend/clip it runs computes different panels (Extend3D no-invented-walls; GH-F2/H2).
-            Assert.Equal("0.3.0", comp.LatestComponentVersion);
+            // 0.1.0 -> 0.2.0: the Clean3D coplanar-merge coverage guard and the managed extend/clip (Extend3D
+            // no-invented-walls) change the panels its solve computes; one bump covers both unreleased changes (GH-F2/H2).
+            Assert.Equal("0.2.0", comp.LatestComponentVersion);
         }
 
         private static void AssertAutoTune3DLegacy_DisplayName()

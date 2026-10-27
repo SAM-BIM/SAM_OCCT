@@ -53,7 +53,7 @@ namespace SAM.OCCT.GrasshopperTests
 
             // Assert: GUID, outputs and inputs kept; the version is a minor bump for the changed computed result.
             Assert.Equal(new Guid("a7e4c92f-1b53-4d8a-9f26-3c70e1b8d4a5"), component.ComponentGuid);
-            Assert.Equal("0.12.0", component.LatestComponentVersion); // minor: computed panels changed (GH-F2/H2)
+            Assert.Equal("0.11.0", component.LatestComponentVersion); // minor: computed panels changed (GH-F2/H2)
             Assert.True(index >= 0);
             Assert.Equal(GH_ParamAccess.list, component.Params.Output[index].Access);
             Assert.Equal(-1, component.Params.IndexOfInputParam(OcctDiagnosticReporter.DetailInputName));

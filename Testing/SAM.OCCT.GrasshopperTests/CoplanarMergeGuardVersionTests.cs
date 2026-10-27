@@ -11,8 +11,6 @@ namespace SAM.OCCT.GrasshopperTests
     /// The Clean3D coplanar-merge coverage guard (SnapStage.Clean step 3a) changes the computed panels of every component
     /// that runs the managed clean stage: Clean3D, Extend3D (unless inputAlreadyClean), Solve3D and both AutoTune3D variants.
     /// Behavioural change, so each takes a minor bump (GH_COMPONENT_STANDARDS GH-F2/H2); GUIDs and parameters are unchanged.
-    /// The Extend3D no-invented-walls change bumped Extend3D, Solve3D and both AutoTune3D variants one minor further; the
-    /// expected versions are the current ones.
     /// Components are named by string: a Grasshopper type in a test attribute would load Grasshopper during xUnit discovery,
     /// before the test assembly's resolver is installed.
     /// </summary>
@@ -44,10 +42,10 @@ namespace SAM.OCCT.GrasshopperTests
 
         [Theory]
         [InlineData("Clean3D", "8f2c1a47-6b39-4d2e-9a51-7c0e4b8d3f12", "0.7.0")]
-        [InlineData("Extend3D", "a7e4c92f-1b53-4d8a-9f26-3c70e1b8d4a5", "0.12.0")]
-        [InlineData("Solve3D", "3d6b9e02-4a17-4c8d-b5e3-1f9a2c7d4e8b", "0.9.0")]
-        [InlineData("AutoTune3DDiscover", "dce4ce6d-581a-4225-b792-3ad04f239460", "0.6.0")]
-        [InlineData("AutoTune3DLegacy", "9de8b4c0-14f6-4828-b966-aa57cf58143b", "0.3.0")]
+        [InlineData("Extend3D", "a7e4c92f-1b53-4d8a-9f26-3c70e1b8d4a5", "0.11.0")]
+        [InlineData("Solve3D", "3d6b9e02-4a17-4c8d-b5e3-1f9a2c7d4e8b", "0.8.0")]
+        [InlineData("AutoTune3DDiscover", "dce4ce6d-581a-4225-b792-3ad04f239460", "0.5.0")]
+        [InlineData("AutoTune3DLegacy", "9de8b4c0-14f6-4828-b966-aa57cf58143b", "0.2.0")]
         public void LatestComponentVersion_ComponentsRunningTheCleanStage_AreMinorBumpedWithGuidUnchanged(string component, string guid, string version)
         {
             // Arrange / Act

@@ -48,9 +48,9 @@ namespace SAM.OCCT.GrasshopperTests
         [Fact]
         public void LatestComponentVersions_AreBumpedForTheChange()
         {
-            // 0.7.1 -> 0.8.0: the Clean3D coplanar-merge coverage guard changes the computed panels (GH-F2/H2).
-            // 0.8.0 -> 0.9.0: the managed extend/clip computes different panels (Extend3D no-invented-walls; GH-F2/H2).
-            Assert.Equal("0.9.0", new SAMOCCTSolve3D().LatestComponentVersion);
+            // 0.7.1 -> 0.8.0: the Clean3D coplanar-merge coverage guard and the managed extend/clip (Extend3D
+            // no-invented-walls) change the computed panels; one bump covers both unreleased changes (GH-F2/H2).
+            Assert.Equal("0.8.0", new SAMOCCTSolve3D().LatestComponentVersion);
             Assert.Equal("0.2.1", new SAMOCCTCreateAdjacencyCluster().LatestComponentVersion);
             // 0.3.1 -> 0.4.0: the sew guard changes the computed result of a sewing build (GH_COMPONENT_STANDARDS GH-F2/H2).
             Assert.Equal("0.4.0", new SAMOCCTCreateShells().LatestComponentVersion);
