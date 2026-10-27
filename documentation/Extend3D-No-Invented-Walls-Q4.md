@@ -8,7 +8,10 @@ found by the Softhouse run, see "Softhouse"), `33ea9bb`, `5600f90`, `2ab5316` (r
 failures less WorkflowParity Revit-home, now passing; every output change classified in "Revision 3c" item 5).
 **Draft PR SAM-BIM/SAM_OCCT#84** (opened 2026-10-26). On 2026-10-27, `sow/2026-Q4` was merged in at `c67b9f9`
 (SAM_OCCT#85; see "Merge of sow/2026-Q4"). On the merged content: unit 1147 / 1147, GrasshopperTests 43 / 43, native
-24 / 472 / 2 - per-test identical to `695e814`. **Merge: NO-GO** (open items in "Handover"). Step 1 of the Softhouse "Dining 1"
+24 / 472 / 2 - per-test identical to `695e814`. `sow/2026-Q4` was merged in again at `39144ec` (SAM_OCCT#86, the #85
+tests made independent of SAM's hole-loop defect, needed now that SAM#227 is on SAM `sow/2026-Q4`; see "Merge of
+sow/2026-Q4 (SAM_OCCT#86)"): unit 1150 / 1150 and GrasshopperTests 43 / 43 on both SAM versions, native per-test
+identical to `c67b9f9` on the corrected SAM. **Merge: NO-GO** (open items in "Handover"). Step 1 of the Softhouse "Dining 1"
 stage investigation (owner, 2026-10-26: SAM_OCCT Extend3D first, the SAM extraction fix as a separate PR). Revision 2
 answers the independent review of 2026-10-26 (`SAM-BIM/.review-extend3d-revision2-20261026/REVIEW.md`, machine-local:
 REVISE - cap splitting moved the clip level; MaxExtension used as evidence of a junction and of a split level; room
@@ -473,6 +476,31 @@ coverage guard (`SnapStage.Clean` step 3a), on top of `22e4fd0`. Merged `1e39868
   - `unit-merge.trx` and `gh-merge.trx`, with their logs and the build logs.
 
   The comparison is against `evidence/2026-10-26-r3c/runs/integ-695e814.*`.
+
+## Merge of sow/2026-Q4 (SAM_OCCT#86, 2026-10-27)
+
+On owner request, after SAM_OCCT#86 (`0bb82469`, closeout `f007824`) and SAM#227 (SAM `7b1ce8a3`) merged. SAM#227
+corrects SAM's 2-point hole loop, so the three #85 tests that reached their Warning only through that defect would fail
+in this PR's CI (it builds against the newest SAM `sow/*`). #86 replaces them with SAM-independent tests and adds an
+internal `SnapStage.Clean` overload taking the step-3 union (test seam only).
+
+- **Merge `39144ec`:** `origin/sow/2026-Q4` at `f007824` into `26ddbaf`, no conflicts. This branch does not touch
+  `SnapStage.cs` or `SnapStageTests.cs`; both now equal `sow/2026-Q4`. Merge diff: the two files, #86's record and
+  `PROJECT_PROGRESS.md` (base content).
+- **Local results** (machine `michal`; isolated Release build of `39144ec`, managed only, APPDATA redirected; "current"
+  = frozen SAM `91f25290`, "corrected" = the same with only SAM.Geometry.dll from SAM#227's tested source, `188DA1F6`):
+  - unit **1150 / 1150** on both (1147 + #86's net 3);
+  - GrasshopperTests **43 / 43** on both;
+  - **native integration on the corrected SAM: 24 failed / 472 passed / 2 skipped; all 498 tests have the same outcome
+    and message as `integ-c67b9f9`** (this branch's baseline on the current SAM). Native here is this branch's own frozen
+    set (`SAM.Occt.Native.dll` `049ea44a`, 335 native files hash-equal to `hashes-c67b9f9.txt`), not the Q4 / #83 native
+    `438089F8` used for #86's own validation (same native source, different binary).
+- **Classification:** no native outcome changes with the SAM correction on this branch.
+- **Not re-run:** Softhouse. The SAM#227 record has #84 `26ddbaf` (no kink) F/R on both SAM versions: F identical;
+  R 59 / 45 / 44 of 48 on both, no recovery Warning needed with the corrected SAM; R model differences are panel order
+  only (order-restored replay equal to the baseline).
+- **Evidence (machine-local):** `SAM_daily/2026-10-25-Softthouse/handover/evidence/2026-10-27-sam-root-face2d-loop/occt/`
+  (`84m-*`, `84mfix-*`; builds `%TEMP%\sroot\occt\SAM_OCCT_84m[fix]`, script `scripts/build-occt.sh 84m`).
 
 ## Review findings (status at `695e814`)
 
