@@ -362,21 +362,9 @@ namespace SAM.OCCT.UnitTests
             });
         }
 
-        [Theory]
-        [InlineData(0.0)]
-        [InlineData(0.21)]
-        public void Clean_CoplanarMergeLeavesDegenerateHoleLoop_KeepsMergedSlabAndWarns(double bucketBetweenLevels)
+        /// <summary>The slab, the detached piece, every input piece covered, and source attribution both ways.</summary>
+        private static void AssertSlabKeptWithSources(SnapStage.Result result, List<Face3D> inputs, SourceMap sourceMap)
         {
-            // Arrange
-            List<SnappedPanel> panels = Seed400Panels(reverseDominant: false);
-            List<Face3D> inputs = Seed400Faces(reverseDominant: false);
-            SolverDiagnostics diagnostics = new SolverDiagnostics();
-            SourceMap sourceMap = new SourceMap();
-
-            // Act
-            SnapStage.Result result = SnapStage.Clean(panels, DefaultTolerances, 0.3, 0.3, diagnostics, sourceMap, bucketBetweenLevels, new List<CleanRecord>());
-
-            // Assert: the 126 m2 slab survives as one face beside the detached 4 m2 piece, and no piece is lost.
             List<double> areas = result.CleanFace3Ds.Select(x => x.GetArea()).OrderBy(x => x).ToList();
             Assert.Equal(2, areas.Count);
             Assert.Equal(4.0, areas[0], 3);
@@ -387,10 +375,59 @@ namespace SAM.OCCT.UnitTests
                 Assert.True(sourceMap.HasSource(new FaceKey(i)), $"Clean face {i} was left source-orphaned");
             }
 
+            for (int i = 0; i < inputs.Count; i++)
+            {
+                Assert.NotEmpty(sourceMap.FacesOf(i));
+            }
+        }
+
+        [Theory]
+        [InlineData(0.0)]
+        [InlineData(0.21)]
+        public void Clean_Seed400DominantPieceFirst_KeepsMergedSlabWithSources(double bucketBetweenLevels)
+        {
+            // Arrange: the orientation whose merged slab SAM's Face2D conversion used to invalidate (a 2-point hole loop).
+            // Whether the union keeps the slab or the coverage guard recovers it depends on the SAM version, so only the
+            // outcome is pinned here; the guard's recovery and Warning are pinned by the injected-loss tests below.
+            List<SnappedPanel> panels = Seed400Panels(reverseDominant: false);
+            List<Face3D> inputs = Seed400Faces(reverseDominant: false);
+            SourceMap sourceMap = new SourceMap();
+
+            // Act
+            SnapStage.Result result = SnapStage.Clean(panels, DefaultTolerances, 0.3, 0.3, new SolverDiagnostics(), sourceMap, bucketBetweenLevels, new List<CleanRecord>());
+
+            // Assert: the 126 m2 slab as one face beside the detached 4 m2 piece; no piece lost or orphaned.
+            AssertSlabKeptWithSources(result, inputs, sourceMap);
+        }
+
+        /// <summary>The real step-3 union with the merged slab (every face larger than the detached piece) removed: a
+        /// deterministic merge loss that does not depend on how SAM converts the union.</summary>
+        private static List<Face3D> UnionLosingTheSlab(List<Face3D> face3Ds, double tolerance)
+        {
+            return SAM.Geometry.Spatial.Query.Union(face3Ds, tolerance).Where(x => x.GetArea() < 5).ToList();
+        }
+
+        [Theory]
+        [InlineData(0.0)]
+        [InlineData(0.21)]
+        public void Clean_CoplanarMergeLosesAGroup_RecoversItWithSourcesAndWarns(double bucketBetweenLevels)
+        {
+            // Arrange: the seed-400 slab with s0 reversed (an orientation SAM merges cleanly) through a union that loses it.
+            List<SnappedPanel> panels = Seed400Panels(reverseDominant: true);
+            List<Face3D> inputs = Seed400Faces(reverseDominant: true);
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+            SourceMap sourceMap = new SourceMap();
+
+            // Act
+            SnapStage.Result result = SnapStage.Clean(panels, DefaultTolerances, 0.3, 0.3, diagnostics, sourceMap, bucketBetweenLevels, new List<CleanRecord>(), 0.0, UnionLosingTheSlab);
+
+            // Assert: the guard re-merges the six lost pieces into the slab (no loop to remove) and reports it once.
+            AssertSlabKeptWithSources(result, inputs, sourceMap);
             SolverDiagnostic warning = Assert.Single(diagnostics.OfCode(DiagnosticCode.CoplanarMergeRecovered));
             Assert.Equal(OcctDiagnosticSeverity.Warning, warning.Severity);
             Assert.Equal(SolverStage.Snap, warning.Stage);
-            Assert.Contains("degenerate loop(s) removed", warning.Message);
+            Assert.Contains("6 panel face(s)", warning.Message);
+            Assert.Contains("0 degenerate loop(s) removed", warning.Message);
         }
 
         [Theory]
@@ -565,22 +602,39 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
-        public void Clean3D_CoplanarMergeRecovered_WarningSurvivesEveryDetailLevel()
+        public void Clean3D_Seed400DominantPieceFirst_KeepsMergedSlab()
         {
-            // Arrange: the failing seed-400 orientation as floor panels through the public Clean3D path.
+            // Arrange: the same orientation as floor panels through the public Clean3D path (outcome only, as above).
             SAM.Analytical.Construction construction = new SAM.Analytical.Construction("slab");
             List<SAM.Analytical.Panel> panels = Seed400Faces(reverseDominant: false)
                 .Select(x => SAM.Analytical.Create.Panel(construction, SAM.Analytical.PanelType.Floor, x))
                 .ToList();
-            SAM.Core.DiagnosticDetail[] levels = { SAM.Core.DiagnosticDetail.Summary, SAM.Core.DiagnosticDetail.Standard, SAM.Core.DiagnosticDetail.Detailed };
 
             // Act
-            List<SAM.Analytical.Panel> clean = SAM.Analytical.OCCT.Solver.Modify.Clean3D(panels, out List<string> lines, out SAM.Analytical.OCCT.Solver.Solve3DReport report, bucketBetweenLevels: 0.21);
-            List<DiagnosticRecord> records = SAM.Analytical.OCCT.Solver.SolverReportFormat.FormatDiagnosticRecords(report.Diagnostics, "SAM_OCCT_CLEAN3D");
-            Dictionary<SAM.Core.DiagnosticDetail, List<DiagnosticRecord>> filtered = levels.ToDictionary(x => x, x => records.FilterDiagnosticRecords(x));
+            List<SAM.Analytical.Panel> clean = SAM.Analytical.OCCT.Solver.Modify.Clean3D(panels, out List<string> _, out SAM.Analytical.OCCT.Solver.Solve3DReport report, bucketBetweenLevels: 0.21);
             List<SAM.Analytical.Panel> again = SAM.Analytical.OCCT.Solver.Modify.Clean3D(panels, out List<string> _, bucketBetweenLevels: 0.21);
 
-            // Assert: one Warning line, kept at every level, and the panels do not depend on the filtering.
+            // Assert: the slab and the detached piece, the same on a second run.
+            Assert.NotNull(report);
+            Assert.Equal(2, clean.Count);
+            Assert.Equal(126.0, clean.Max(x => x.GetArea()), 2);
+            Assert.Equal(clean.Select(x => x.GetArea()), again.Select(x => x.GetArea()));
+        }
+
+        [Fact]
+        public void Clean_CoplanarMergeRecoveredWarning_SurvivesEveryClean3DDetailLevel()
+        {
+            // Arrange: the Warning as Clean emits it for a deterministic merge loss (the injected union loses the slab).
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+            SnapStage.Clean(Seed400Panels(reverseDominant: true), DefaultTolerances, 0.3, 0.3, diagnostics, null, 0.21, new List<CleanRecord>(), 0.0, UnionLosingTheSlab);
+            SAM.Core.DiagnosticDetail[] levels = { SAM.Core.DiagnosticDetail.Summary, SAM.Core.DiagnosticDetail.Standard, SAM.Core.DiagnosticDetail.Detailed };
+
+            // Act: Clean3D's own formatting of the solver diagnostics into its lines and records, then each level's filter.
+            List<string> lines = SAM.Analytical.OCCT.Solver.SolverReportFormat.FormatDiagnostics(diagnostics, "SAM_OCCT_CLEAN3D");
+            List<DiagnosticRecord> records = SAM.Analytical.OCCT.Solver.SolverReportFormat.FormatDiagnosticRecords(diagnostics, "SAM_OCCT_CLEAN3D");
+            Dictionary<SAM.Core.DiagnosticDetail, List<DiagnosticRecord>> filtered = levels.ToDictionary(x => x, x => records.FilterDiagnosticRecords(x));
+
+            // Assert: one Warning line, kept with the same text at every level.
             const string prefix = "SAM_OCCT_CLEAN3D_DIAGNOSTIC: [Snap/CoplanarMergeRecovered/Warning] ";
             string line = Assert.Single(lines, x => x.StartsWith(prefix, System.StringComparison.Ordinal));
             foreach (SAM.Core.DiagnosticDetail level in levels)
@@ -589,10 +643,6 @@ namespace SAM.OCCT.UnitTests
                 Assert.Equal(line, record.Text);
                 Assert.Equal(SAM.Core.DiagnosticSeverity.Warning, record.Diagnostic.Severity);
             }
-
-            Assert.Equal(2, clean.Count);
-            Assert.Equal(126.0, clean.Max(x => x.GetArea()), 2);
-            Assert.Equal(clean.Select(x => x.GetArea()), again.Select(x => x.GetArea()));
         }
     }
 }

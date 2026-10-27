@@ -129,6 +129,24 @@ namespace SAM.Geometry.OCCT.Solver
             List<CleanRecord> cleanRecords = null,
             double doubleWallGap = 0.0)
         {
+            return Clean(panels, tolerances, alignColinearOffset, normalizeCapOffset, diagnostics, sourceMap, bucketBetweenLevels, cleanRecords, doubleWallGap, null);
+        }
+
+        /// <summary>As the public <c>Clean</c>, with the step-3 coplanar union supplied.</summary>
+        /// <param name="coplanarUnion">The step-3 coplanar union; null uses <c>Geometry.Spatial.Query.Union</c> (a test seam
+        /// only, so a deterministic merge loss can exercise the coverage guard).</param>
+        internal static Result Clean(
+            List<SnappedPanel> panels,
+            ToleranceBudget tolerances,
+            double alignColinearOffset,
+            double normalizeCapOffset,
+            SolverDiagnostics diagnostics,
+            SourceMap sourceMap,
+            double bucketBetweenLevels,
+            List<CleanRecord> cleanRecords,
+            double doubleWallGap,
+            System.Func<List<Face3D>, double, List<Face3D>> coplanarUnion)
+        {
             Result result = new Result();
             if (panels == null || panels.Count == 0)
             {
@@ -136,6 +154,7 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             ToleranceBudget tol = tolerances ?? new ToleranceBudget();
+            coplanarUnion = coplanarUnion ?? ((face3Ds_Union, unionTolerance) => Geometry.Spatial.Query.Union(face3Ds_Union, unionTolerance));
 
             // 1. External shape only - drop window/door openings.
             foreach (SnappedPanel panel in panels)
@@ -233,7 +252,7 @@ namespace SAM.Geometry.OCCT.Solver
             // 3. Coplanar merge - identical call (and fallback) to the legacy CleanBucket, so the geometry is
             //    unchanged; the mapping is recovered afterward by attribution rather than by re-implementing the
             //    union per group (same source->output result, exact same union geometry, lower risk).
-            List<Face3D> merged = Geometry.Spatial.Query.Union(face3Ds, tol.Distance);
+            List<Face3D> merged = coplanarUnion(face3Ds, tol.Distance);
             if (merged == null || merged.Count == 0)
             {
                 merged = face3Ds;
