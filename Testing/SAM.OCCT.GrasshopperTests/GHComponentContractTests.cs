@@ -36,7 +36,7 @@ namespace SAM.OCCT.GrasshopperTests
         }
 
         [Fact]
-        public void AutoTune3D_Legacy_Version_Is010()
+        public void AutoTune3D_Legacy_Version_Is020()
         {
             AssertAutoTune3DLegacy_Version();
         }
@@ -152,7 +152,8 @@ namespace SAM.OCCT.GrasshopperTests
         private static void AssertAutoTune3DLegacy_Version()
         {
             var comp = new SAMOCCTAutoTune3DLegacy();
-            Assert.Equal("0.1.0", comp.LatestComponentVersion);
+            // 0.1.0 -> 0.2.0: the Clean3D coplanar-merge coverage guard changes the panels its solve computes (GH-F2/H2).
+            Assert.Equal("0.2.0", comp.LatestComponentVersion);
         }
 
         private static void AssertAutoTune3DLegacy_DisplayName()

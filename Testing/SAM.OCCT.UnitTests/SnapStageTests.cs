@@ -448,6 +448,122 @@ namespace SAM.OCCT.UnitTests
             Assert.Empty(diagnostics.All);
         }
 
+        private static SAM.Geometry.Planar.Polygon2D Rectangle2D(double x0, double y0, double x1, double y1)
+        {
+            return new SAM.Geometry.Planar.Polygon2D(new List<SAM.Geometry.Planar.Point2D>
+            {
+                new SAM.Geometry.Planar.Point2D(x0, y0), new SAM.Geometry.Planar.Point2D(x1, y0), new SAM.Geometry.Planar.Point2D(x1, y1), new SAM.Geometry.Planar.Point2D(x0, y1),
+            });
+        }
+
+        /// <summary>A horizontal face at <paramref name="z"/> (normal +Z) with the given outline and openings.</summary>
+        private static Face3D HorizontalFace(double z, SAM.Geometry.Planar.Polygon2D outline, params SAM.Geometry.Planar.Polygon2D[] openings)
+        {
+            Plane plane = new Plane(new Point3D(0, 0, z), Vector3D.WorldZ);
+            SAM.Geometry.Planar.Face2D face2D = openings.Length == 0
+                ? new SAM.Geometry.Planar.Face2D(outline)
+                : SAM.Geometry.Planar.Create.Face2D(outline, openings.Cast<SAM.Geometry.Planar.IClosed2D>().ToList());
+            return new Face3D(plane, face2D);
+        }
+
+        [Theory]
+        [InlineData(0.03)]
+        [InlineData(2e-6)]
+        public void RecoverLostPanels_CleanFaceOnCloseParallelPlane_DoesNotHideTheLoss(double offset)
+        {
+            // Arrange: the merge returned only a face of the same footprint on a parallel plane `offset` above (50 mm would
+            // have satisfied the attribution thresholds); the 2 x 2 m face at z = 3 is missing from its own plane.
+            Face3D missing = HorizontalFace(3, Rectangle2D(0, 0, 2, 2));
+            List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(0, missing, weight: 1, bucketSize: 0.4, maxExtension: 0.4) };
+            List<Face3D> clean = new List<Face3D> { HorizontalFace(3 + offset, Rectangle2D(0, 0, 2, 2)) };
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+
+            // Act
+            List<Face3D> recovered = SnapStage.RecoverLostPanels(panels, clean, DefaultTolerances.Distance, diagnostics);
+
+            // Assert
+            Assert.Same(missing, Assert.Single(recovered));
+            SolverDiagnostic warning = Assert.Single(diagnostics.OfCode(DiagnosticCode.CoplanarMergeRecovered));
+            Assert.Equal(OcctDiagnosticSeverity.Warning, warning.Severity);
+            Assert.Contains("1 panel face(s)", warning.Message);
+            Assert.Contains("kept unmerged", warning.Message);
+        }
+
+        [Theory]
+        [InlineData(0.0)]
+        [InlineData(5e-7)]
+        public void RecoverLostPanels_CleanFaceWithinThePlaneTolerance_CoversTheFace(double offset)
+        {
+            // Arrange: the merged face lies on the same union plane (offset within the 1e-6 m distance tolerance).
+            List<SnappedPanel> panels = new List<SnappedPanel> { new SnappedPanel(0, HorizontalFace(3, Rectangle2D(0, 0, 2, 2)), weight: 1, bucketSize: 0.4, maxExtension: 0.4) };
+            List<Face3D> clean = new List<Face3D> { HorizontalFace(3 + offset, Rectangle2D(-1, -1, 4, 4)) };
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+
+            // Act
+            List<Face3D> recovered = SnapStage.RecoverLostPanels(panels, clean, DefaultTolerances.Distance, diagnostics);
+
+            // Assert
+            Assert.Empty(recovered);
+            Assert.Empty(diagnostics.All);
+        }
+
+        public static IEnumerable<object[]> GenuineSmallOpenings()
+        {
+            // A face carrying a valid 1 x 1 mm opening beside an abutting face.
+            yield return new object[] { new List<Face3D> { HorizontalFace(3, Rectangle2D(-1, -1, 1, 1), Rectangle2D(0, 0, 0.001, 0.001)), HorizontalFace(3, Rectangle2D(1, -1, 3, 1)) }, 8.0 - 1e-6 };
+
+            // Four pieces framing a 1 x 1 mm opening that only the union forms.
+            yield return new object[]
+            {
+                new List<Face3D>
+                {
+                    HorizontalFace(3, Rectangle2D(-1, -1, 1, 0)), HorizontalFace(3, Rectangle2D(-1, 0.001, 1, 1)),
+                    HorizontalFace(3, Rectangle2D(-1, 0, 0, 0.001)), HorizontalFace(3, Rectangle2D(0.001, 0, 1, 0.001)),
+                },
+                4.0 - 1e-6,
+            };
+        }
+
+        [Theory]
+        [MemberData(nameof(GenuineSmallOpenings))]
+        public void RecoverLostPanels_GroupWithGenuineSmallOpening_KeepsTheOpening(List<Face3D> faces, double expectedArea)
+        {
+            // Arrange: every piece lost; the re-merge through SAM's own union must keep the 1 mm2 opening (its area is the
+            // default distance tolerance read as a number, which is no reason to fill it).
+            List<SnappedPanel> panels = faces.Select((x, i) => new SnappedPanel(i, x, weight: 1, bucketSize: 0.4, maxExtension: 0.4)).ToList();
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+
+            // Act
+            List<Face3D> recovered = SnapStage.RecoverLostPanels(panels, new List<Face3D>(), DefaultTolerances.Distance, diagnostics);
+
+            // Assert
+            Face3D merged = Assert.Single(recovered);
+            Assert.Single(merged.GetInternalEdge3Ds());
+            Assert.Equal(expectedArea, merged.GetArea(), 9);
+            SolverDiagnostic warning = Assert.Single(diagnostics.OfCode(DiagnosticCode.CoplanarMergeRecovered));
+            Assert.Contains("0 degenerate loop(s) removed", warning.Message);
+        }
+
+        [Fact]
+        public void RecoverLostPanels_ReMergeLeavesAMemberUncovered_KeepsGroupUnmerged()
+        {
+            // Arrange: the injected re-union returns only the first piece, so the second is not covered: the repair is not
+            // proven and both pieces come back as they were.
+            List<SnappedPanel> panels = new List<SnappedPanel>
+            {
+                new SnappedPanel(0, HorizontalFace(3, Rectangle2D(0, 0, 2, 2)), weight: 1, bucketSize: 0.4, maxExtension: 0.4),
+                new SnappedPanel(1, HorizontalFace(3, Rectangle2D(2, 0, 4, 2)), weight: 1, bucketSize: 0.4, maxExtension: 0.4),
+            };
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+
+            // Act
+            List<Face3D> recovered = SnapStage.RecoverLostPanels(panels, new List<Face3D>(), DefaultTolerances.Distance, diagnostics, (face2Ds, tolerance) => new List<SAM.Geometry.Planar.Face2D> { face2Ds[0] });
+
+            // Assert
+            Assert.Equal(panels.Select(x => x.Face3D), recovered);
+            Assert.Contains("kept unmerged", Assert.Single(diagnostics.OfCode(DiagnosticCode.CoplanarMergeRecovered)).Message);
+        }
+
         [Fact]
         public void Clean3D_CoplanarMergeRecovered_WarningSurvivesEveryDetailLevel()
         {

@@ -25,7 +25,7 @@ namespace SAM.Analytical.Grasshopper.OCCT
     {
         public override Guid ComponentGuid => new Guid("9de8b4c0-14f6-4828-b966-aa57cf58143b");
 
-        public override string LatestComponentVersion => "0.1.0";
+        public override string LatestComponentVersion => "0.2.0";
 
         protected override System.Drawing.Bitmap Icon => SAMOCCTIcon.SAM_GH_AlgorithmRun;
 
