@@ -445,7 +445,7 @@ namespace SAM.OCCT.IntegrationTests
             // gap is pre-existing (E2 plane-targeting change) and NOT a PR #61 regression.
             // The 19-vs-20 mismatch this row used to require is not asserted any more: the sewing rebuild's space count
             // is presentation dependent (the same solved geometry gives 11 to 20 spaces by face order and loop start;
-            // documentation/Wall-Run-Face-Order-Q4.md, "Face3D-home trace"), and at the #84 baseline it was 15, not 19.
+            // documentation/Wall-Run-Face-Order-Abut-Q4.md, "Face3D-home parity"), and at the sow/2026-Q4 base it was 15, not 19.
             // The native solver's closure (20 cells, 0 naked) is asserted in SolverInvariants; the count is diagnostic.
             [("Face3D-home.sam", "A-solver-matched")] = new Expectation
             {
