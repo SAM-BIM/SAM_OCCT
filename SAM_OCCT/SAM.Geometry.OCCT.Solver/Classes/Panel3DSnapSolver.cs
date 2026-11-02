@@ -47,10 +47,10 @@ namespace SAM.Geometry.OCCT.Solver
         public const double EXTENSION_LIMIT_LENGTH_RATIO = 0.49;
 
         /// <summary>Angle in radians (5 degrees) below which a grown wall end that meets only walls crossing it this
-        /// shallowly stops on the junction instead of overshooting (<see cref="ExtendWalls"/>). At the default
-        /// 0.05 m overshoot the tip is then at most 4.4 mm clear of the target wall; the failure it prevents was
-        /// seen at 1.9 mm (2.15 degrees). Walls crossing at 15 degrees or more (13 mm clear at 0.05 m) are
-        /// unchanged: every other grown end in the Softhouse runs.</summary>
+        /// shallowly stops on the junction instead of overshooting (<see cref="ExtendWalls"/>). Provisional: the failure
+        /// it prevents was seen at 2.15 degrees, and every other grown end in the Softhouse runs crosses at 86 degrees
+        /// or more, so the limit is a margin, not a measured threshold. Tip clearance does not set it: at 2.15 degrees
+        /// the failure persists from 1 mm to 18.8 mm clear of the target wall.</summary>
         public const double SHALLOW_JUNCTION_MAX_ANGLE = 5.0 * (System.Math.PI / 180.0);
 
         /// <summary>Under-split gate: a dropped wall-like face counts as a room-dividing partition
@@ -2105,8 +2105,8 @@ namespace SAM.Geometry.OCCT.Solver
         /// True when a grown plan end, already solved onto its junction, meets only walls that cross its line at less
         /// than <see cref="SHALLOW_JUNCTION_MAX_ANGLE"/> (and at least one). The extend overshoot gives the native
         /// build a clean crossing, but past a shallow joint the tip lies <c>overshoot x sin(angle)</c> clear of the
-        /// target wall (1.9 mm at 2.15 degrees and 0.05 m): a sliver that is neither a crossing nor a touch, and
-        /// the build then joins the cells on either side of the wall (Softhouse R, houses A and B). Such an end stops
+        /// target wall (1.9 mm at 2.15 degrees and 0.05 m): neither a crossing nor a touch, and the build
+        /// then joined the cells on either side of the wall (Softhouse R, houses A and B). Such an end stops
         /// on the junction the 2D solver found. An end that also meets a steeper wall keeps its overshoot.
         /// The walls are those whose line (resolved or original) passes through the end within the distance
         /// tolerance; plan only, like the rest of <see cref="ExtendWalls"/>.

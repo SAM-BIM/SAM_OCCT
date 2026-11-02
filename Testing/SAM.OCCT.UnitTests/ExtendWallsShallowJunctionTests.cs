@@ -43,6 +43,7 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Theory]
+        [InlineData(5.0)]
         [InlineData(5.1)]
         [InlineData(6.0)]
         [InlineData(10.0)]
@@ -59,16 +60,106 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(Overshoot, DistanceFromJunction(approaching), 5);
         }
 
-        [Fact]
-        public void ExtendWalls_SmallestAngleTheSolverJoins_StopsOnTheJunction()
+        [Theory]
+        [InlineData(0.1)]
+        [InlineData(0.35)]
+        public void ExtendWalls_VeryShallowJunction_StopsOnTheJunction(double degrees)
         {
-            // The 2D solver treats walls within 0.3 degrees as parallel and does not join them (SnapSolver.ArcToleranceAngleRad);
-            // 0.35 degrees is the shallowest joint it still makes, and is below the limit.
-            (SnappedPanel approaching, SnappedPanel target) = ShallowTJunction(0.35);
+            // The 2D ExtensionSolver has no angle limit of its own: only parallel lines fail to meet.
+            (SnappedPanel approaching, SnappedPanel target) = ShallowTJunction(degrees);
 
             Panel3DSnapSolver.ExtendWalls(new List<SnappedPanel> { approaching, target }, VerticalAngle, Overshoot, Tolerance);
 
             Assert.True(DistanceFromJunction(approaching) <= OnJunction);
+        }
+
+        [Fact]
+        public void ExtendWalls_ShallowKinkTargetEndingAtTheJoint_StopsOnTheJoint()
+        {
+            // The Softhouse shape: the target wall starts at the joint, it does not run past it.
+            (SnappedPanel approaching, SnappedPanel target) = Kink(2.15, 0.0019, 0);
+
+            Panel3DSnapSolver.ExtendWalls(new List<SnappedPanel> { approaching, target }, VerticalAngle, Overshoot, Tolerance);
+
+            Assert.True(DistanceFromJunction(approaching) <= OnJunction);
+        }
+
+        [Fact]
+        public void ExtendWalls_SteepKinkTargetEndingAtTheJoint_KeepsTheOvershoot()
+        {
+            (SnappedPanel approaching, SnappedPanel target) = Kink(10, 0.1, 0);
+
+            Panel3DSnapSolver.ExtendWalls(new List<SnappedPanel> { approaching, target }, VerticalAngle, Overshoot, Tolerance);
+
+            Assert.Equal(Overshoot, DistanceFromJunction(approaching), 5);
+        }
+
+        [Fact]
+        public void ExtendWalls_ShallowKinkBothWallsShort_BothStopOnTheSameJoint()
+        {
+            (SnappedPanel approaching, _) = Kink(2.15, 0.1, 0);
+            SnappedPanel target = Wall(1, new Point3D(0, 0.1, 0), new Point3D(0, 7, 0));
+
+            Panel3DSnapSolver.ExtendWalls(new List<SnappedPanel> { approaching, target }, VerticalAngle, Overshoot, Tolerance);
+
+            Assert.True(DistanceFromJunction(approaching) <= OnJunction);
+            Assert.True(DistanceFromJunction(target) <= OnJunction);
+        }
+
+        [Theory]
+        [InlineData(0.0001)]
+        [InlineData(-0.0001)]
+        public void ExtendWalls_ShallowKinkLineMissingTheJoint_StopsWhereTheLinesMeet(double lineMiss)
+        {
+            // At a shallow angle a small sideways miss moves the junction far along the wall: 0.1 mm here is 2.66 mm.
+            const double degrees = 2.15;
+            (SnappedPanel approaching, SnappedPanel target) = Kink(degrees, 0.0019, lineMiss);
+            List<ExtendRecord> records = new List<ExtendRecord>();
+
+            Panel3DSnapSolver.ExtendWalls(new List<SnappedPanel> { approaching, target }, VerticalAngle, Overshoot, Tolerance, records);
+
+            double expected = System.Math.Abs(lineMiss) / System.Math.Tan(degrees * (System.Math.PI / 180));
+            Assert.Equal(expected, DistanceFromJunction(approaching), 5);
+            Assert.Equal(0.0, records.Single(x => x.PanelIndex == 0 && x.Outcome == ExtendOutcome.Applied).Overshoot);
+        }
+
+        [Fact]
+        public void ExtendWalls_EndAlsoOnAColinearWall_KeepsTheOvershoot()
+        {
+            // A colinear wall counts as 0 degrees; the crossing wall the end grew to still decides.
+            SnappedPanel approaching = Wall(0, new Point3D(-8, 0, 0), new Point3D(-ShortOfTarget, 0, 0));
+            SnappedPanel colinear = Wall(1, new Point3D(0, 0, 0), new Point3D(8, 0, 0));
+            SnappedPanel crossing = Wall(2, new Point3D(0, -5, 0), new Point3D(0, 6, 0));
+
+            Panel3DSnapSolver.ExtendWalls(new List<SnappedPanel> { approaching, colinear, crossing }, VerticalAngle, Overshoot, Tolerance);
+
+            Assert.Equal(Overshoot, DistanceFromJunction(approaching), 5);
+        }
+
+        [Fact]
+        public void ExtendWalls_SteepJunctionWithAShallowWallOnAnotherStorey_KeepsTheOvershoot()
+        {
+            // Walls are matched in plan: another storey's shallow wall at the same point cannot remove the overshoot.
+            SnappedPanel approaching = Wall(0, new Point3D(-8, 0, 0), new Point3D(-ShortOfTarget, 0, 0));
+            SnappedPanel target = Wall(1, new Point3D(0, -10, 0), new Point3D(0, 7, 0));
+            double theta = 2.15 * (System.Math.PI / 180);
+            SnappedPanel upstairs = Wall(2, new Point3D(-8 * System.Math.Cos(theta), -8 * System.Math.Sin(theta), 3), new Point3D(-ShortOfTarget * System.Math.Cos(theta), -ShortOfTarget * System.Math.Sin(theta), 3));
+
+            Panel3DSnapSolver.ExtendWalls(new List<SnappedPanel> { approaching, target, upstairs }, VerticalAngle, Overshoot, Tolerance);
+
+            Assert.Equal(Overshoot, DistanceFromJunction(approaching), 5);
+        }
+
+        [Fact]
+        public void ExtendWalls_ShallowJunctionWithASteepWallOnAnotherStorey_KeepsTheOvershoot()
+        {
+            // The conservative side of the plan match: the rule does not fire, so the end behaves as it did before it.
+            (SnappedPanel approaching, SnappedPanel target) = ShallowTJunction(2.15);
+            SnappedPanel upstairs = Wall(2, new Point3D(-5, 0, 3), new Point3D(6, 0, 3));
+
+            Panel3DSnapSolver.ExtendWalls(new List<SnappedPanel> { approaching, target, upstairs }, VerticalAngle, Overshoot, Tolerance);
+
+            Assert.Equal(Overshoot, DistanceFromJunction(approaching), 5);
         }
 
         [Fact]
@@ -159,12 +250,23 @@ namespace SAM.OCCT.UnitTests
             return (approaching, target);
         }
 
+        /// <summary>A wall along Y starting at the joint (the origin) and a wall approaching it at <paramref name="degrees"/>,
+        /// ending <paramref name="shortBy"/> short of it, with its line moved <paramref name="lineMiss"/> sideways.</summary>
+        private static (SnappedPanel Approaching, SnappedPanel Target) Kink(double degrees, double shortBy, double lineMiss)
+        {
+            double theta = degrees * (System.Math.PI / 180);
+            double ux = System.Math.Sin(theta), uy = System.Math.Cos(theta);
+            SnappedPanel approaching = Wall(0, new Point3D((-8 * ux) + lineMiss, -8 * uy, 0), new Point3D((-shortBy * ux) + lineMiss, -shortBy * uy, 0));
+            SnappedPanel target = Wall(1, new Point3D(0, 0, 0), new Point3D(0, 7, 0));
+            return (approaching, target);
+        }
+
         private static SnappedPanel Wall(int index, Point3D start, Point3D end, bool reverse = false)
         {
             Point3D[] points =
             {
-                new Point3D(start.X, start.Y, 0), new Point3D(end.X, end.Y, 0),
-                new Point3D(end.X, end.Y, 3), new Point3D(start.X, start.Y, 3),
+                new Point3D(start.X, start.Y, start.Z), new Point3D(end.X, end.Y, end.Z),
+                new Point3D(end.X, end.Y, end.Z + 3), new Point3D(start.X, start.Y, start.Z + 3),
             };
             if (reverse)
             {

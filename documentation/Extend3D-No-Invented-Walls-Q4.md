@@ -529,7 +529,7 @@ Note the native differs from this branch's `049ea44a` used in the merge sections
 
 Evidence (machine-local): `handover/evidence/2026-11-02-pr84-remeasure/README.md`. `%APPDATA%\SAM` unchanged.
 
-## Shallow-junction overshoot (2026-11-02, working tree on `78a357e`, not committed)
+## Shallow-junction overshoot (2026-11-02, code `7306a9b`, revised by the following commit; local, not pushed)
 
 Answers the owner's decision of 2026-11-02 (root cause accepted, implementation in draft only, no merge) for the Softhouse
 reversed-face (R) leak at the A/B party-wall joint (10.7263, -2.5267). Diagnosis: machine-local
@@ -551,31 +551,46 @@ on every run, as before). The extend record for such an end carries overshoot 0 
 "2D plan-loop junction (shallow, no overshoot)"; `RecordPlanFootprintMoves` takes the applied overshoot per end (it printed
 `overshoot` for every grown end before). No public API, parameter, default or native change.
 
-**The 5 degree limit: what is and is not shown.**
+**The 5 degree limit: status PROVISIONAL.**
 - Shown: at 2.15 degrees and 0.05 m the overshoot fails (r-leak `sweep.txt`: any tip more than 1 mm clear of the wall, up to
-  500 mm past the corner, reproduces it; a tip within 1 mm of the corner closes both houses). 5 degrees at 0.05 m is 4.4 mm
-  clear, so the limit covers the failure with margin and stays within a few millimetres of it.
-- Shown: the 2D solver joins nothing below 0.3 degrees (`SnapSolver.ArcToleranceAngleRad`), so the rule's range is
-  0.3 to 5 degrees. In all four Softhouse runs (F, R, with and without the kink rule) the extended panels change at this one
-  end and nowhere else (`panel-diff.txt`); r-leak `shallow.txt` found no other grown end under 15 degrees. Any limit between
-  2.15 and 15 degrees therefore gives the same Softhouse output; 5 is the smallest round value that covers the failure with
-  margin. Towers and the 8 fixtures are covered by the unit and native suites below (outputs identical), not by a census of
-  their ends.
-- **Not shown:** a native sweep of the angle itself between 2.15 and 15 degrees. The real joint cannot be rotated without
-  breaking its far end, and no synthetic native model was built. The limit is therefore a conservative, evidence-bounded
-  choice, not a measured threshold. If a model with a grown end between 5 and 15 degrees fails the same way, raise the
-  constant with a native regression for it.
+  500 mm past the corner, reproduces it; a tip within 1 mm of the corner closes both houses). Clearance does not set the limit:
+  the failure persists to 18.8 mm clear, more than the 4.4 mm at 5 degrees or the 13 mm at 15 degrees.
+- Shown: in all four Softhouse runs the extended panels change at this one end and nowhere else (`panel-diff.txt`). r-leak
+  `shallow.txt`: the next grown end is at 86.36 degrees. Any limit from 2.15 to 86 degrees gives the same Softhouse output, so
+  Softhouse does not locate the limit. Towers and the 8 fixtures are covered by the suites below, not by a census of their ends.
+- Corrected: `ExtensionSolver` has no angle limit, so the earlier claim of a 0.3 degree floor (`SnapSolver.ArcToleranceAngleRad`,
+  a different solver) was false. It joins at 0.1 degrees and the rule applies there; only parallel lines do not meet.
+- Native synthetic sweep (below): the overshoot failed only at 2.15 degrees. It stayed clean at 4.9, 5.1, 6, 8, 10, 12, 15, 20,
+  30 and 45 degrees. That supports keeping 5, but the model reproduces the failure rarely, so it does not measure the limit.
+- If a model with a grown end above 5 degrees fails the same way, raise the constant with a native regression for it.
 
-**Tests** (`Testing/SAM.OCCT.UnitTests/ExtendWallsShallowJunctionTests.cs`, 20 cases, pure managed; a T junction with the
-target wall off-centre - exactly mid-wall the 2D solver did not join at all, pre-existing and unrelated):
-- below the limit (0.5, 1, 2.15, 4, 4.9 degrees) and at the solver's own floor (0.35): the end lies within 1e-5 m of the junction;
-- above it (5.1, 6, 10, 15, 30, 60, 89 degrees) and a 90 degree corner: the end is exactly 0.05 m past, the untouched end stays;
-- the same end also meeting a perpendicular wall at the same point keeps the overshoot;
-- the extend records (overshoot 0 and "shallow" description / overshoot 0.05 and none);
-- face vertex order reversed gives the same end (2.15 and 30 degrees);
-- the limit is 5 degrees.
-Mutation check (limit set to 0, isolated copy): 8 of the 20 fail - all five below-limit cases, the 0.35 case, the record case
-and the limit pin; the 12 above-limit and control cases pass, as they must.
+**Tests** (`Testing/SAM.OCCT.UnitTests/ExtendWallsShallowJunctionTests.cs`, 30 cases, pure managed; off-centre T junctions and
+kinks where the target starts at the joint):
+- below the limit (0.1, 0.35, 0.5, 1, 2.15, 4, 4.9 degrees): the end lies within 1e-5 m of the junction;
+- at and above it (5.0, 5.1, 6, 10, 15, 30, 60, 89 degrees) and a 90 degree corner: the end is exactly 0.05 m past, the untouched
+  end stays;
+- kinks: 2.15 degrees stops on the joint, 10 degrees keeps the overshoot, both walls short meet at the same point, and a 0.1 mm
+  line miss ends where the lines meet with no overshoot (the junction moves 2.66 mm; on one side the end is trimmed, not grown);
+- no wrongful suppression: an end also on a colinear wall, a perpendicular wall, or with a shallow wall on another storey keeps
+  the overshoot;
+- a shallow end with a steep wall on another storey keeps it too. This is the conservative side of the plan match: the rule
+  does not fire, so the old overshoot behaviour remains there;
+- the extend records, face vertex order reversed (2.15 and 30 degrees) and the limit pin.
+Mutation check (limit set to 0, isolated copy): 12 of the 30 fail; the above-limit and control cases pass, as they must.
+
+**Native regression** (`Testing/SAM.OCCT.IntegrationTests/ExtendWallsShallowJunctionIntegrationTests.cs`, 6 cases): a 12 x 10 m box
+with a kinked party wall through `Extend3D(inputAlreadyClean)` and `AdjacencyCluster`, two closed rooms of the computed volumes
+at 2.15, 6 and 10 degrees and at 2.15 degrees with line misses of +0.01, +0.1 and -0.1 mm. With the rule on: 6 / 6. With the limit
+set to 0: 5 / 6; only +0.01 mm fails (two open rooms, volume NaN), so that one case guards the rule. It is a partial reproduction:
+Softhouse joined the rooms, this model leaves them open, and at the exact line (no miss) it passes with the overshoot too.
+
+Sweep (`evidence/2026-11-02-extend3d-shallow/revise/`, scratch only, not in the repository): 15 angles from 0.5 to 45 degrees x 5
+line misses: rule on 75 / 75, rule off 74 / 75. Variants at 2.154, 4.9, 5.1, 6 and 10 degrees x 6 line misses (Softhouse coordinates,
+walls past the caps, 5 mm short): rule on 150 / 150 for the single-storey sets, rule off fails only at 2.154 degrees.
+
+Open, not changed: with hand-built stacked storeys (no Clean3D) the party wall never reaches the joint at any angle, rule on or
+off, and the rooms merge (two and three storey variants, 619.2 m3 each storey). Managed probe: a colinear twin on another storey stops
+`ExtensionSolver` growing the end at all, also at 30 degrees. Not caused by this change; effect on Clean3D output not assessed.
 
 **Validation** (machine `michal`; Release, isolated trees `%TEMP%\r84\SAM_OCCT_fix` = `78a357e` + this change and
 `SAM_OCCT_fixk` = the same + the uncommitted Clean3D kink rule, `SAM_OCCT-wt-kink-joint` `product.diff` only, no kink tests;
@@ -584,7 +599,7 @@ SAM `7c4591cd`, frozen native `438089F8`, APPDATA redirected; `%APPDATA%\SAM` un
 
 | measure | baseline | with the correction |
 | --- | --- | --- |
-| unit | 1150 / 1150 | **1170 / 1170** (+20), also on fixk |
+| unit | 1150 / 1150 | **1170 / 1170** (+20), also on fixk; 1180 / 1180 after the revision |
 | GrasshopperTests | 43 / 43 | 43 / 43 (fix and fixk) |
 | native integration (failed / passed / skipped) | 24 / 472 / 2 | **24 / 472 / 2; all 498 tests the same outcome and the same failure message** (incl. towers and golden pins, none re-pinned) |
 | R, no kink: spaces, panels, good, frozen 48 kept | 59, 347, 45, 44 | 59, 347, 45, 44; `good.tsv` identical; extended and clean panels identical |
@@ -607,6 +622,9 @@ lost on R, and the six rooms still fail `shared(3)` and the leak figure, a separ
 that this change does not address. So the correction removes the topological failure (joined open cell) and not a count of good
 rooms; it should not be read as a room-count improvement.
 
+The revision changed solver comments only (no code line), so the suites and chains above stand for it; it reran the 30 unit
+and 6 native cases, and the full unit suite. The native suite was run on `fix` only, never with the kink rule.
+
 Not done here: Softhouse 3D visual / gbXML comparison, hosted CI, a Grasshopper canvas run (`%APPDATA%\SAM` not redeployed),
 a towers chain beyond the pins above, `PROJECT_PROGRESS.md` (post-merge only, AGENTS.md). One test run is worth noting: the first
 `fix` Grasshopper run exceeded its 180 s limit (test host crash; the same stall as in the re-measure run notes) and passed
@@ -614,9 +632,9 @@ a towers chain beyond the pins above, `PROJECT_PROGRESS.md` (post-merge only, AG
 
 **Verdicts.**
 - *Correction:* **ACCEPT** as a bounded change. Unit, GH and native outcomes identical to baseline apart from the 20 new tests;
-  one panel changes in the only run where it matters, to the corner, with both houses closing independently. Caveat: the limit
-  is conservative, not measured across angles (above), and without the kink rule it changes nothing measurable. An independent
-  acceptance review (new session, Plan mode, Claude Opus high) is recommended before merge.
+  one panel changes in the only run where it matters, to the corner, with both houses closing independently. Independent review
+  2026-11-02: REVISE, applied here, then ACCEPT. Caveats: the limit is provisional (above), and without the kink rule the
+  change alters nothing measurable.
 - *PR merge readiness:* **NOT READY (REVISE/TEST)**. Unchanged blockers from "Handover": goldens disposition, review findings,
   hosted CI at the final head, owner approval, codex check; plus this change is only exercised in product together with the kink
   rule, which is not in this PR (`fix/clean3d-kink-joint-q4`, uncommitted) - decide the order of the two PRs first.
