@@ -12,8 +12,10 @@ failures less WorkflowParity Revit-home, now passing; every output change classi
 tests made independent of SAM's hole-loop defect, needed now that SAM#227 is on SAM `sow/2026-Q4`; see "Merge of
 sow/2026-Q4 (SAM_OCCT#86)"): unit 1150 / 1150 and GrasshopperTests 43 / 43 on both SAM versions, native per-test
 identical to `c67b9f9` on the corrected SAM. Re-measured on current `sow/2026-Q4` on 2026-11-02 (see "Re-measure on current
-sow/2026-Q4"). On 2026-11-02 a bounded shallow-junction overshoot correction was added in the working tree, not yet
-committed (see "Shallow-junction overshoot"). **Merge: NO-GO** (open items in "Handover"). Step 1 of the Softhouse "Dining 1"
+sow/2026-Q4"). On 2026-11-02 a bounded shallow-junction overshoot correction was added, committed locally as `7306a9b` and
+`d27e440`, not pushed (see "Shallow-junction overshoot"). Dining 4 A107 is closed (see "Dining 4 A107 closure") and the
+Softhouse acceptance gates are proposed, not adopted (see "Proposed Softhouse acceptance gates"). **Merge: NO-GO** (open items
+in "Handover" and "Outstanding defects and blockers"; current next step in "Next step"). Step 1 of the Softhouse "Dining 1"
 stage investigation (owner, 2026-10-26: SAM_OCCT Extend3D first, the SAM extraction fix as a separate PR). Revision 2
 answers the independent review of 2026-10-26 (`SAM-BIM/.review-extend3d-revision2-20261026/REVIEW.md`, machine-local:
 REVISE - cap splitting moved the clip level; MaxExtension used as evidence of a junction and of a split level; room
@@ -522,7 +524,9 @@ Note the native differs from this branch's `049ea44a` used in the merge sections
   Revit-home goes failed to passed, and the two tests new on this branch pass. Outcomes only: expected and actual values
   per test were not compared in this run.
 - **Softhouse frozen rooms lost on #84:** F: Dining 4 A107. R: Dining 4 A107, Carpark 2 C109, Bed 4 1OG C203, Bed 7 2OG
-  D303. Cause not traced.
+  D303. *Corrected 2026-11-02:* Dining 4 A107 is traced: the Q4 GOOD was a false positive (see "Dining 4 A107 closure").
+  Carpark 2 and Bed 4 on R trace to the drop of slab `#85` in SAM SnapToJunctions (see "R-only losses"). Bed 7 on R is not
+  traced.
 - **Softhouse room tables** are byte-identical to the `26ddbaf` runs on corrected SAM.Geometry (SAM#227 record).
 - **Superseded:** the 54 spaces in "Softhouse" is a revision 2 measurement; current figures are the table above.
 - The 13 to 15 fewer spaces are not all classified: the frozen 48 cover only the reference rooms.
@@ -657,6 +661,205 @@ Minimal correction, its own PR, tests first, not combined with the above:
 4. Expected effect to plan for: on its own the correction returns this joint to the no-rule state (houses separate, 7 open
    cells, `K both` in r-leak `swaps.txt`) and touches about half the walls, so it ships with or after the kink rule and the
    change above, and every Softhouse room table and the towers pins are compared room by room, not by count.
+
+*Revised 2026-11-02:* item 1 no longer threads the solver `Up`, and the test list grows. "Next bounded implementation" below
+replaces items 1 to 3. Item 4 stands.
+
+## Dining 4 A107 closure (2026-11-02)
+
+Decision: root cause accepted by the owner, 2026-11-02. No code changed. Machine-local trace:
+`SAM_daily/2026-10-25-Softthouse/handover/evidence/2026-11-02-a107-trace/README.md` and the "Dining 4 A107 trace" section of
+`2026-11-02-pr84-remeasure/README.md`. The figures that matter are repeated here because those files are not in Git.
+
+**Verdict.** Q4's GOOD for A107 is a false positive that rests on a wall invented through the ground floor. No geometry repair
+can restore it, and the wall must not return.
+
+**Reference** (`SAM_daily/2026-10-24-OCCT-models/000000/softhouse3.xml`, SHA256 `E77E7CA4...1B651`). House A's open-plan ground
+floor has Air boundaries, with no wall on either:
+
+| surface | type | spaces | position |
+| --- | --- | --- | --- |
+| `ID_surface1052` | Air | Dining 4 A107 / Kitchen 4 A105-6 | y -2.527, x 10.726..16.51, z 0..3.5 |
+| `ID_surface1049` | Air | Circulation 4 A103 / Kitchen 4 A105-6 | y 2.675, x 13.963..15.263, z 0..3.5 |
+
+**The wall at y -2.887, x 10.7..16.5, by stage** (`chains/<run>/panels_*.json`):
+
+| stage | run | z range | reading |
+| --- | --- | --- | --- |
+| extraction | all | `#373` 3.55..6.4, `#335` 6.55..9.4 | upper storeys only |
+| Clean3D output | all | 3.45..9.45, merged wall | no material below the first floor |
+| Extend3D output | Q4 | **-0.025..9.5** | grown through the ground floor: invented |
+| Extend3D output | #84, fixk | **3.45..9.5** | stops at the level: the #84 clip is correct |
+
+**Effect on Q4.** The invented wall stands 0.36 m inside A107 (room y -6.393..-2.527). Cell 66 (75.519 m3, closed) holds 90 % of
+the room's samples and Cell 49 holds 10 %, so the 80 % share reads `clear` and the room scores GOOD. Kitchen 4 and Circulation 4,
+its Air partners, sit in Cell 49, which is open(22).
+
+**Without the invented wall.** House A ground floor by run ("fixk" = #84 + the shallow rule + the uncommitted kink rule):
+
+| run | A107 cell | state |
+| --- | --- | --- |
+| #84 F | Cell 10 | open(42), shared(9): three houses in one cell |
+| #84 R | Cell 1 | open(10), shared(3) |
+| fixk-F | Cell 43 | closed, 207.295 m3, shared(3) with its Air partners |
+| fixk-R | Cell 1 | closed, 206.186 m3, shared(3) with its Air partners |
+
+So the #84 clip is correct, and the closed house needs the kink rule as well. *Corrected:* the a107-trace README item 4 cites
+fixk-F under "#84"; that closed cell is not a #84-only result. The remeasure README says the wall exists from z 3.45 in
+`panels_extracted`; extraction starts at 3.55, and 3.45 is the Clean3D value.
+
+**Reproduce (read-only).** The original scratch harness (`a107`, `A.cs`) was not kept. A recheck on 2026-11-02 reproduced the
+wall table from the saved panels. Corners are `Plane.Origin + u * AxisX + v * AxisY`, with `AxisX = AxisY x Normal` and (u, v)
+from `PlanarBoundary3D.Edge2DLoop.BoundaryEdge2Ds[].Curve2D.Origin`; rooms and Air surfaces come from the gbXML. Runs:
+`2026-11-02-pr84-remeasure/chains/{q4-F,pr84-F,pr84-R}`, `2026-11-02-extend3d-shallow/chains/{fixk-F,fixk-R}`.
+
+## Proposed Softhouse acceptance gates (2026-11-02)
+
+**Status: PROPOSED, nothing applied.** Every figure in this section is manually derived from saved `good.tsv`, `v2_rooms.tsv` and
+`v2_spaces.tsv`, and is not independently validated. It comes from no new scorer. No code, scoring (`Rooms2.cs`, `Cmp.cs`), frozen
+data (`frozen/good48.tsv`, SHA256 `2ac315fd...ea215`), gbXML or `PROJECT_PROGRESS.md` changed.
+
+**Principles.**
+- The frozen 48 identities and the gbXML stay as they are. No reference Air boundary is deleted, replaced by a solid, or
+  reinterpreted.
+- Air-linked is derived mechanically: the room has a surface of type Air with two adjacent spaces. The gbXML has 20 such surfaces
+  and 12 further Air surfaces with no adjacent space, which link nothing.
+- Sharing one physical cell does not make one thermal zone. The 18 Air-linked rooms use 15 gbXML zones: each Dining, Circulation,
+  Bed 5 and Kitchen 2 has its own zone, and only Kitchens 1, 3 and 4 share a zone across their two storeys. Spaces stay separate
+  identities. No zone merge or virtual boundary is claimed.
+- No invented wall may satisfy a reference count. Gains elsewhere do not compensate for a loss. Both face orders must pass.
+
+**Scored rooms: 70 of 132, verified.** `Rooms()` (`Rooms2.cs:180`, same code at `Leak.cs:71`) skips names starting `Pv` (31) or
+`PTFE` (31). All 132 spaces have shell geometry, so 132 - 62 = 70, matching the 70 rows of `good.tsv`.
+
+### Populations and denominators
+
+The 70 scored rooms divide exactly once:
+
+| group | rooms | members |
+| --- | --- | --- |
+| A: frozen, not Air-linked | 47 | the frozen 48 less A107 |
+| B: frozen, Air-linked | 1 | Dining 4 A107 |
+| C: not frozen, Air-linked | 17 | Dining 1-3, Dining 5, Kitchen 1 and 3 and 4 (two rows each), Kitchen 2, Circulation 1-4, Circulation 9, Bed 5 |
+| D: not frozen, not Air-linked | 5 | Bath 7, Bed 11, Bed 13, Bed 3, Circulation 10 |
+
+| gate | population | denominator | test |
+| --- | --- | --- | --- |
+| G1 physical cells | A | 47 rooms | the existing `good` rule, unchanged |
+| G2 analytical identities | A + B | 48 identities | correspondence test below |
+| G3a Air-linked rooms | B + C | 18 rooms, 4 components | correspondence test below |
+| G3b Air links | reference surfaces | 20 two-sided Air surfaces (9 ground walls, 8 first-floor walls, 3 floors) | no model panel on the surface |
+| G4 envelope leakage | rays of all 70 rooms | not yet defined | **UNVERIFIED** |
+| G5 no invented material | all walls and slabs | whole model, pass or fail | no material where extraction and the reference have none |
+
+G1 and G3a each overlap G2, and only A107 is in both G2 and G3a. **The denominators are never added or netted.** Group D is
+reported and not gated. The Air components are one per house: D, B and A have 5 rooms each, and C has 3.
+
+### Correspondence test (G2, G3a)
+
+The 80 % share selects the candidate cell. It does not prove correspondence: Q4's A107 is 90 / 10 and reads `clear`. A room
+passes only if all four hold:
+
+- **a. Match:** status `clear`: share >= 80 %, no sample in several cells (existing).
+- **b. Partition integrity (new):** every sample that lies in a cell lies in that one cell, and `outsideAll` = 0. A second cell
+  means a physical boundary runs through the room.
+- **c. Cell:** closed, finite positive volume (existing).
+- **d. Sharing:** alone, or shared only with rooms of its own Air component.
+
+Rule b does not ask how a surface arose, so it stands independently of G5. An Air link does not excuse a split: Q4's A107 fails
+although the 10 % sits with its Air partner. It is achievable (#84 F and fixk-F have 0 splits in 70 rooms). A sliver narrower
+than the 0.4 m sample grid can escape it. It has zero tolerance, so Bed 2 on R fails G2 while passing G1; the owner should
+approve that consequence explicitly.
+
+### Results (proposed, manually derived)
+
+| gate | Q4 F | fixk-F | fixk-R |
+| --- | --- | --- | --- |
+| G1, of 47 | 47 | 47 | 44: C109, C203, D303 |
+| G2, of 48 | 46: A107 and Bed 4 C203 split | 48 | 44: C109 and C203 shared, D303 open, Bed 2 D203 split |
+| G3a, of 18 | 4 | 18 | 15: Kitchen 1 z3.5 and Circulation 9 no space, Circulation 4 split |
+| G3b, of 20 | not derived | 17; the 3 floors covered | 15; the 3 floors covered; 2 not evaluable |
+| G4 | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| G5 | **FAIL**: invented wall; slab holes 8 -> 0 | **FAIL**: slab voids | **FAIL**: slab voids |
+
+G3b is inferred from both rooms sharing a host cell. It is not a panel-on-surface test. "Not evaluable" = Kitchen 1 z3.5 and
+Circulation 9 have no cell on R.
+
+**47/48 versus 47/47: yes for G1, proposed.** A107 is not a physical single-room target, and it is the only frozen room that is
+Air-linked. `47/47` is reported only together with G2's `48 identities (47 + 1 Air-linked)`: A107 moves gate and never leaves the
+count. Passing G1 alone says nothing about A107.
+
+**G4 is UNVERIFIED in every run, and no pass is inferred.** Only each room's top-3 leak points have been read. They are consistent
+with Air boundaries (A107, Kitchen 4, Circulation 4) and with physical interior surfaces (Bed 3's wall at y -0.687, the floor
+between Carpark 2 and Bed 4). That is not ray-level evidence. Genuine envelope leakage needs every leaking ray classed as
+crossing Air, a physical interior surface, or the exterior: a new additive report, with `Rooms2.cs` frozen unless approved.
+`Rooms2.cs:43` excludes model panels of type Air from the leak mesh, and the report must state that. The existing `leakV2 = 0`
+stays inside G1.
+
+**G5: lost slab openings are a failure and a proposed merge blocker.** Clean3D's first-floor slab has 8 holes on F and 6 on R;
+Extend3D's output has 0. The reference has Air floors at z 3.5 in houses A (x 10.726..14.064), B (x 4.916..8.236) and D
+(x -6.64..-3.381). Plan points in the three voids are uncovered at Clean3D on F (in holes), and on R for A and B (in holes) and D
+(outside every cap). All three are covered after Extend3D on both runs, and the cells stop at z 3.475 there. This is material where
+the reference has Air. The three Air floors must stay open in the model and must stay in the reference. Pre-existing (Q4 has
+0 holes too); `SAM_OCCT_EXTEND3D_HOLE_DROPPED` is not raised. Also listed under G5: the invented stub at x 4.916, y -2.887..-2.527,
+1.24 m2 (`2026-11-02-r-leak/README.md`).
+
+**Controls: the gates do not launder failures.** #84 F without the kink rule fails A107 on G2 (open, shared across three houses).
+Q4's A107 fails G2 on rule b and fails G5, while passing the old metric. Bed 3 C205 and Circulation 10 C206 share one closed cell (F Cell 9, R Cell 5) across a
+reference `InteriorWall` (`ID_surface747`, `ID_surface748`), so no Air link excuses them. Of fixk-F's 20 rooms not good, 18 are the
+Air-linked rooms and those two are the rest.
+
+### R-only losses
+
+Manually traced from saved stages, one lookup each. These are not caused by the face-order fault unless stated.
+
+| rooms | state on fixk-R | first stage | status |
+| --- | --- | --- | --- |
+| Carpark 2 C109, Bed 4 C203 | one closed Cell 35, 109.45 m3, z 0.025..6.475, across reference `InteriorFloor` `ID_surface777` | SAM SnapToJunctions: `Panel '#85': Dropped`, 11.82 m2 (`chains/fixk-R/panels.log.txt:469`). In `panels_extracted`, absent from `panels`, so no OCCT stage sees it | traced; **upstream of SAM_OCCT** |
+| Bed 7 D303 | Cell 55 open, 3 naked edges, 0.103 m | not located. R lacks `#370` from extraction (hypothesis only) | not traced |
+| Bed 2 D203 | frozen; `good` passes; split 91 / 9 with Cell 51 / 50 | not located | not traced; new from the split census |
+| Circulation 4 A103 | split 95 / 5 with Cell 1 / 10 | not located | not traced; new from the split census |
+| Kitchen 1 z3.5, Circulation 9 D206 | no space; samples outside every cell. On F they share closed Cell 2, 79.389 m3 | not located | not traced; outside the frozen 48 |
+
+Extraction differs by `#362 #370 #5 #87` (F only); the snapped set by `#370 #5 #85 #87` (F only). Why `#85` closes up on R was not
+traced.
+
+### Next bounded implementation (scope only; no code yet)
+
+**Face-order correction, kept separate from the `#85` defect.** Success is order invariance of the two predicates. It is not
+measured by C109 or C203 recovering, because `#85` never reaches OCCT.
+
+1. `Panel3DSnapSolver.cs`: make `WallPlanFrame` `internal`; extract `internal static Vector3D RunAxis(Vector3D normal)`, used by
+   `Create` too, output unchanged.
+2. `SnappedPanel.cs`: private `RunHeightBounds`: run from this panel's `RunAxis`, height = world Z, as `IsVertical(double)` at
+   the same call site. A degenerate axis (a cap) falls back to `FootprintBounds`, so behaviour there is unchanged.
+3. `AbutsColinearWithin` reads through it, and `MeetsAtKink` and `EndLiesOn` once the kink rule is committed. Thresholds and
+   `OverlapsInPlane` unchanged.
+
+Tests first (`WallRunFrameTests.cs`, SPDX header, `Method_State_Expected`), each pair across **loop start rotation, face winding
+reversal and normal reversal** on both faces: identical answers in every combination; a pair where the old frame swaps run and
+height, failing before; the stored `#294 / #287 / #329` geometry; a towers-style 0.23 m jog still aligning; the cap fallback; and
+pins for `plane.Distance(other.plane.Origin)` and the `MeetsAtKink` end tie, both assumed invariant so far. Mutation: restoring
+`FootprintBounds` must fail.
+
+Validation: an isolated tree of `d27e440` + kink `product.diff` + the fix, frozen native `438089F8`, APPDATA redirected; unit, GH
+with towers pins, native per test against 24 / 472 / 2; Softhouse F and R room by room.
+
+Separate tasks, not part of this correction: the SAM SnapToJunctions `#85` drop (SAM repository, own PR); the Extend3D lost slab
+openings; one bounded swap each for the other R-only rows above.
+
+### Outstanding defects and blockers
+
+1. Owner decisions: approve G1 to G5, including rule b's zero tolerance; confirm the slab-opening merge blocker; commit the kink
+   rule (uncommitted, `SAM_OCCT-wt-kink-joint`) and set the PR order.
+2. G4 unverified: no per-ray classification exists.
+3. Lost slab openings (G5).
+4. SAM: `#85` dropped on R; `#87 #5 #370 #362` absent from R extraction. OCCT work does not fix either.
+5. Face-order correction not implemented. Alone it returns the joint to 7 open cells and touches about half the walls.
+6. R-only rows not traced (table above).
+7. Unchanged #84 blockers: goldens disposition, free-edge measure review, the 24 native failures, review findings, final-head CI,
+   codex check, owner approval.
+8. Panel-order dependence remains: the correction covers vertex order only.
 
 ## Review findings (status at `695e814`)
 
@@ -907,6 +1110,8 @@ Dining 4 A107 become not good (Dining 2/3 already leaked in base). Revision 1 ->
 without a reference room in revision 2: two 0.01 m3 slivers (base: five slivers of 0.007-0.024 m3 and the 2.84, 19.37,
 19.53 and 23.0 m3 pieces). All new losses trace to the defects the invented walls had masked (Clean3D kink jog, extraction junction
 blocks, house D corner slot and facade hole) - owned by the separate Clean3D and SAM extraction tasks.
+*Corrected 2026-11-02:* Dining 4 A107 was not a room that #84 lost. Its GOOD on base rested on the invented wall, so the
+classification above reports the removal of a false positive (see "Dining 4 A107 closure").
 
 Evidence: `evidence/2026-10-26-r2/softhouse-v2/<build>/` (`v2_rooms.tsv`, `v2_spaces.tsv`, `notgood.txt`, `run.log`),
 `softhouse-v2/internal-openings.txt`; inputs `softhouse/<build>/{model,panels_extended,panels_clean}.json` (unchanged);
@@ -1183,7 +1388,18 @@ stub is invented material). No golden re-baseline. No push, PR or merge without 
 native probes, the demonstrated correction, minor component bumps and one final managed/GH/native check authorised by
 the owner's task (`REVISION3B-NEXT.md`); no Softhouse chain.
 
-## Next step (recommended; not started)
+## Next step (2026-11-02)
+
+**Status.** Local branch `fix/extend3d-no-invented-walls-q4`, ahead of its remote by the shallow commits and this record. Tested
+code content: `d27e440` (see "Shallow-junction overshoot"); this update is documentation only, with no build or test run. Draft
+PR SAM-BIM/SAM_OCCT#84; merge NO-GO.
+
+1. **Owner:** decide the items in "Outstanding defects and blockers" item 1.
+2. **Then the face-order correction** in "Next bounded implementation". Recommended: new session, Plan then Build mode, Claude
+   Opus 5.5, high effort, own branch from `d27e440`, because it changes wall alignment on about half the walls and needs a
+   room-by-room comparison. A recommendation only; no setting was changed.
+
+## Earlier next step (2026-10-26, superseded by the section above)
 
 1. **Owner: approve opening the draft PR** into `sow/2026-Q4` (push this branch, PR body from this record, marked "not
    ready: merge blockers listed"), then hosted CI. Recommended: this or a new session, Build mode, Claude Opus high
