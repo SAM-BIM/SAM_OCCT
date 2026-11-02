@@ -239,6 +239,55 @@ namespace SAM.Geometry.OCCT.Solver
             return maxU >= minU && maxV >= minV;
         }
 
+        /// <summary>The horizontal unit direction along a wall of the given plane normal, (-Ny, Nx, 0) of the unit
+        /// normal; null when the normal has no horizontal part (a cap). It depends on the normal alone, not on the
+        /// face's vertex order, and flips sign with the normal: read extents through it only as differences.</summary>
+        private static Vector3D RunAxis(Vector3D normal)
+        {
+            Vector3D unit = normal?.Unit;
+            Vector3D u = unit == null ? null : new Vector3D(-unit.Y, unit.X, 0);
+            return u == null || u.Length <= 1e-9 ? null : u.Unit;
+        }
+
+        /// <summary>
+        /// The 2D bounding extents of <paramref name="face"/>'s external boundary in this panel's wall frame: the run
+        /// (U) along <see cref="RunAxis"/> of this plane's normal, measured from the plane
+        /// origin, and the height (V) as world Z - the vertical-wall reading <see cref="IsVertical(double)"/> already
+        /// assumes. Unlike <see cref="FootprintBounds"/> it does not depend on which way the plane's own axes point, which
+        /// follows the face's vertex order. The run axis flips with the normal, so only differences of U are meaningful.
+        /// A plane with no horizontal run (a cap) reads through <see cref="FootprintBounds"/> as before.
+        /// </summary>
+        private bool RunHeightBounds(Face3D face, out double minU, out double maxU, out double minV, out double maxV)
+        {
+            Vector3D run = RunAxis(plane.Normal);
+            if (run == null)
+            {
+                return FootprintBounds(plane, face, out minU, out maxU, out minV, out maxV);
+            }
+
+            minU = minV = double.MaxValue;
+            maxU = maxV = double.MinValue;
+
+            List<Point3D> point3Ds = BoundaryPoints(face);
+            if (point3Ds == null || point3Ds.Count == 0)
+            {
+                return false;
+            }
+
+            Point3D origin = plane.Origin;
+            foreach (Point3D point3D in point3Ds)
+            {
+                double u = (point3D.X - origin.X) * run.X + (point3D.Y - origin.Y) * run.Y;
+                double v = point3D.Z;
+                if (u < minU) { minU = u; }
+                if (u > maxU) { maxU = u; }
+                if (v < minV) { minV = v; }
+                if (v > maxV) { maxV = v; }
+            }
+
+            return maxU >= minU && maxV >= minV;
+        }
+
         /// <summary>
         /// True when <paramref name="other"/> is a near-colinear continuation of this panel offset by no
         /// more than <paramref name="maxOffset"/> perpendicular: parallel (the caller checks that), their
@@ -247,7 +296,9 @@ namespace SAM.Geometry.OCCT.Solver
         /// small perpendicular jog at a step, which should align onto one plane - from genuinely separate
         /// parallel walls (a larger offset, or segments far apart along the run, which stay put). Where
         /// <see cref="OverlapsInPlane"/> collapses a true overlapping double-wall, this closes the end-to-end
-        /// jog the overlap test deliberately leaves alone. Measured in this panel's own plane frame.
+        /// jog the overlap test deliberately leaves alone. Measured in this panel's wall frame (<see cref="RunHeightBounds"/>):
+        /// the run along the horizontal axis of its normal and the height along world Z, so the answer does not depend on
+        /// the order the face's vertices were written in.
         /// </summary>
         public bool AbutsColinearWithin(SnappedPanel other, double maxOffset, double tolerance)
         {
@@ -261,12 +312,12 @@ namespace SAM.Geometry.OCCT.Solver
                 return false; // offset too large to be the same wall
             }
 
-            if (!FootprintBounds(plane, face3D, out double aMinU, out double aMaxU, out double aMinV, out double aMaxV))
+            if (!RunHeightBounds(face3D, out double aMinU, out double aMaxU, out double aMinV, out double aMaxV))
             {
                 return false;
             }
 
-            if (!FootprintBounds(plane, other.face3D, out double bMinU, out double bMaxU, out double bMinV, out double bMaxV))
+            if (!RunHeightBounds(other.face3D, out double bMinU, out double bMaxU, out double bMinV, out double bMaxV))
             {
                 return false;
             }
