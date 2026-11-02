@@ -11,7 +11,8 @@ failures less WorkflowParity Revit-home, now passing; every output change classi
 24 / 472 / 2 - per-test identical to `695e814`. `sow/2026-Q4` was merged in again at `39144ec` (SAM_OCCT#86, the #85
 tests made independent of SAM's hole-loop defect, needed now that SAM#227 is on SAM `sow/2026-Q4`; see "Merge of
 sow/2026-Q4 (SAM_OCCT#86)"): unit 1150 / 1150 and GrasshopperTests 43 / 43 on both SAM versions, native per-test
-identical to `c67b9f9` on the corrected SAM. **Merge: NO-GO** (open items in "Handover"). Step 1 of the Softhouse "Dining 1"
+identical to `c67b9f9` on the corrected SAM. Re-measured on current `sow/2026-Q4` on 2026-11-02 (see "Re-measure on current
+sow/2026-Q4"). **Merge: NO-GO** (open items in "Handover"). Step 1 of the Softhouse "Dining 1"
 stage investigation (owner, 2026-10-26: SAM_OCCT Extend3D first, the SAM extraction fix as a separate PR). Revision 2
 answers the independent review of 2026-10-26 (`SAM-BIM/.review-extend3d-revision2-20261026/REVIEW.md`, machine-local:
 REVISE - cap splitting moved the clip level; MaxExtension used as evidence of a junction and of a split level; room
@@ -501,6 +502,31 @@ internal `SnapStage.Clean` overload taking the step-3 union (test seam only).
   only (order-restored replay equal to the baseline).
 - **Evidence (machine-local):** `SAM_daily/2026-10-25-Softthouse/handover/evidence/2026-10-27-sam-root-face2d-loop/occt/`
   (`84m-*`, `84mfix-*`; builds `%TEMP%\sroot\occt\SAM_OCCT_84m[fix]`, script `scripts/build-occt.sh 84m`).
+
+## Re-measure on current sow/2026-Q4 (2026-11-02)
+
+Record only; no source or test changed. Head `3d3dc1f` (tested content `39144ec`) and control `sow/2026-Q4` `f007824`, both
+built against SAM `7c4591cd` (SAM#229 included) and SAM_Solver `fd63b46`, managed only, frozen native `438089F8`, no kink.
+Note the native differs from this branch's `049ea44a` used in the merge sections above; the #84 native totals are equal.
+
+| measure | `sow/2026-Q4` | #84 |
+| --- | --- | --- |
+| unit | 1055 / 1055 | passed, 0 failed |
+| GrasshopperTests | passed | 43 / 43 |
+| native integration (failed / passed / skipped) | 25 / 469 / 2 | 24 / 472 / 2 |
+| Softhouse F: spaces, panels, frozen 48 kept | 71, 394, 48 | 58, 351, 47 |
+| Softhouse R: spaces, panels, frozen 48 kept | 74, 396, 39 | 59, 347, 44 |
+
+- **Native, by test name:** no test goes passed to failed; all 24 #84 failures also fail on `sow/2026-Q4`. WorkflowParity
+  Revit-home goes failed to passed, and the two tests new on this branch pass. Outcomes only: expected and actual values
+  per test were not compared in this run.
+- **Softhouse frozen rooms lost on #84:** F: Dining 4 A107. R: Dining 4 A107, Carpark 2 C109, Bed 4 1OG C203, Bed 7 2OG
+  D303. Cause not traced.
+- **Softhouse room tables** are byte-identical to the `26ddbaf` runs on corrected SAM.Geometry (SAM#227 record).
+- **Superseded:** the 54 spaces in "Softhouse" is a revision 2 measurement; current figures are the table above.
+- The 13 to 15 fewer spaces are not all classified: the frozen 48 cover only the reference rooms.
+
+Evidence (machine-local): `handover/evidence/2026-11-02-pr84-remeasure/README.md`. `%APPDATA%\SAM` unchanged.
 
 ## Review findings (status at `695e814`)
 
