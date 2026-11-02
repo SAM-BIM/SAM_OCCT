@@ -46,6 +46,13 @@ namespace SAM.Geometry.OCCT.Solver
         /// stub cannot extend unrealistically far. Mirrors the 2D <c>SnappedWall.ExtensionLimitLengthRatio</c>.</summary>
         public const double EXTENSION_LIMIT_LENGTH_RATIO = 0.49;
 
+        /// <summary>Angle in radians (5 degrees) below which a grown wall end that meets only walls crossing it this
+        /// shallowly stops on the junction instead of overshooting (<see cref="ExtendWalls"/>). At the default
+        /// 0.05 m overshoot the tip is then at most 4.4 mm clear of the target wall; the failure it prevents was
+        /// seen at 1.9 mm (2.15 degrees). Walls crossing at 15 degrees or more (13 mm clear at 0.05 m) are
+        /// unchanged: every other grown end in the Softhouse runs.</summary>
+        public const double SHALLOW_JUNCTION_MAX_ANGLE = 5.0 * (System.Math.PI / 180.0);
+
         /// <summary>Under-split gate: a dropped wall-like face counts as a room-dividing partition
         /// only when its vertical extent spans at least this fraction of the cell it sits inside AND its plan
         /// width (perpendicular to its own normal) spans at least <see cref="UNDER_SPLIT_MIN_PLAN_RATIO"/> of the
@@ -2054,16 +2061,34 @@ namespace SAM.Geometry.OCCT.Solver
                 double endParam = (rEnd.X - oStart.X) * ux + (rEnd.Y - oStart.Y) * uy;       // >length => end end extended
 
                 double nsX = rStart.X, nsY = rStart.Y, neX = rEnd.X, neY = rEnd.Y;
+                double startOvershoot = 0, endOvershoot = 0;
+                bool startShallow = false, endShallow = false;
                 if (overshoot > toleranceDistance && startParam < -toleranceDistance)
                 {
-                    nsX -= ux * overshoot;
-                    nsY -= uy * overshoot;
+                    if (MeetsOnlyShallowWalls(rStart, i, ux, uy, lines, resolved, toleranceDistance))
+                    {
+                        startShallow = true; // ends on the junction: see MeetsOnlyShallowWalls
+                    }
+                    else
+                    {
+                        startOvershoot = overshoot;
+                        nsX -= ux * overshoot;
+                        nsY -= uy * overshoot;
+                    }
                 }
 
                 if (overshoot > toleranceDistance && endParam > length + toleranceDistance)
                 {
-                    neX += ux * overshoot;
-                    neY += uy * overshoot;
+                    if (MeetsOnlyShallowWalls(rEnd, i, ux, uy, lines, resolved, toleranceDistance))
+                    {
+                        endShallow = true;
+                    }
+                    else
+                    {
+                        endOvershoot = overshoot;
+                        neX += ux * overshoot;
+                        neY += uy * overshoot;
+                    }
                 }
 
                 bool changed = walls[i].SetVerticalFootprint(new Geometry.Planar.Point2D(nsX, nsY), new Geometry.Planar.Point2D(neX, neY), toleranceDistance);
@@ -2071,9 +2096,67 @@ namespace SAM.Geometry.OCCT.Solver
                 if (records != null && changed)
                 {
                     RecordPlanFootprintMoves(records, walls[i], wallPanelIndices[i], oStart, oEnd, ux, uy, length,
-                        nsX, nsY, neX, neY, startParam, endParam, feet[i].GetStart().Z, overshoot, toleranceDistance);
+                        nsX, nsY, neX, neY, startParam, endParam, feet[i].GetStart().Z, startOvershoot, endOvershoot, startShallow, endShallow, toleranceDistance);
                 }
             }
+        }
+
+        /// <summary>
+        /// True when a grown plan end, already solved onto its junction, meets only walls that cross its line at less
+        /// than <see cref="SHALLOW_JUNCTION_MAX_ANGLE"/> (and at least one). The extend overshoot gives the native
+        /// build a clean crossing, but past a shallow joint the tip lies <c>overshoot x sin(angle)</c> clear of the
+        /// target wall (1.9 mm at 2.15 degrees and 0.05 m): a sliver that is neither a crossing nor a touch, and
+        /// the build then joins the cells on either side of the wall (Softhouse R, houses A and B). Such an end stops
+        /// on the junction the 2D solver found. An end that also meets a steeper wall keeps its overshoot.
+        /// The walls are those whose line (resolved or original) passes through the end within the distance
+        /// tolerance; plan only, like the rest of <see cref="ExtendWalls"/>.
+        /// </summary>
+        private static bool MeetsOnlyShallowWalls(
+            Geometry.Planar.Point2D end, int self, double ux, double uy,
+            List<Geometry.Planar.Segment2D> lines, List<Geometry.Planar.Segment2D> resolved, double toleranceDistance)
+        {
+            bool any = false;
+            for (int k = 0; k < lines.Count; k++)
+            {
+                if (k == self)
+                {
+                    continue;
+                }
+
+                Geometry.Planar.Segment2D line = lines[k];
+                Geometry.Planar.Segment2D grown = resolved[k] ?? line;
+                if (!PlanLineThrough(end, line, toleranceDistance) && !PlanLineThrough(end, grown, toleranceDistance))
+                {
+                    continue;
+                }
+
+                Geometry.Planar.Point2D a = line.GetStart();
+                Geometry.Planar.Point2D b = line.GetEnd();
+                double length = line.GetLength();
+                if (length <= toleranceDistance)
+                {
+                    continue;
+                }
+
+                // Acute angle between the two lines, from the sine (stable at small angles, unlike acos).
+                double cross = System.Math.Abs((ux * (b.Y - a.Y)) - (uy * (b.X - a.X))) / length;
+                double dot = System.Math.Abs((ux * (b.X - a.X)) + (uy * (b.Y - a.Y))) / length;
+                if (System.Math.Atan2(cross, dot) >= SHALLOW_JUNCTION_MAX_ANGLE)
+                {
+                    return false;
+                }
+
+                any = true;
+            }
+
+            return any;
+        }
+
+        private static bool PlanLineThrough(Geometry.Planar.Point2D point, Geometry.Planar.Segment2D segment, double toleranceDistance)
+        {
+            Geometry.Planar.Point2D a = segment.GetStart();
+            Geometry.Planar.Point2D b = segment.GetEnd();
+            return PlanDistancePointToSegment(point.X, point.Y, a.X, a.Y, b.X, b.Y) <= toleranceDistance;
         }
 
         /// <summary>Real decision point (P3 §5.4) for a plan end the 2D plan-loop solver left exactly where it
@@ -2135,7 +2218,7 @@ namespace SAM.Geometry.OCCT.Solver
             double ux, double uy, double length,
             double nsX, double nsY, double neX, double neY,
             double startParam, double endParam, double baseZ,
-            double overshoot, double toleranceDistance)
+            double startOvershoot, double endOvershoot, bool startShallow, bool endShallow, double toleranceDistance)
         {
             int sourceIndex = RepresentativeSource(wall);
             double cap = System.Math.Min(System.Math.Max(0, wall.MaxExtension), length * EXTENSION_LIMIT_LENGTH_RATIO);
@@ -2154,8 +2237,8 @@ namespace SAM.Geometry.OCCT.Solver
                     panelIndex, sourceIndex, ExtendOperationKind.PlanStart,
                     0, nsParam, "plan",
                     new Point3D(oStart.X, oStart.Y, baseZ), new Point3D(nsX, nsY, baseZ),
-                    -1, -1, "walls", "2D plan-loop junction",
-                    extended ? overshoot : 0,
+                    -1, -1, "walls", startShallow ? ShallowJunctionDescription : "2D plan-loop junction",
+                    startOvershoot,
                     capped);
                 AddLateralRiskFlags(record, wall, extended, extensionDistance, cap, length);
                 records.Add(record);
@@ -2171,13 +2254,15 @@ namespace SAM.Geometry.OCCT.Solver
                     panelIndex, sourceIndex, ExtendOperationKind.PlanEnd,
                     length, neParam, "plan",
                     new Point3D(oEnd.X, oEnd.Y, baseZ), new Point3D(neX, neY, baseZ),
-                    -1, -1, "walls", "2D plan-loop junction",
-                    extended ? overshoot : 0,
+                    -1, -1, "walls", endShallow ? ShallowJunctionDescription : "2D plan-loop junction",
+                    endOvershoot,
                     capped);
                 AddLateralRiskFlags(record, wall, extended, extensionDistance, cap, length);
                 records.Add(record);
             }
         }
+
+        private const string ShallowJunctionDescription = "2D plan-loop junction (shallow, no overshoot)";
 
         /// <summary>P3 §5.5: metadata on an applied lateral (wall-to-wall) move - near its available reach
         /// (<see cref="ExtendRiskFlag.NearReachLimit"/>, &gt;= 90% of <paramref name="cap"/>), and, when it

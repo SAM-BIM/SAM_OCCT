@@ -12,7 +12,8 @@ failures less WorkflowParity Revit-home, now passing; every output change classi
 tests made independent of SAM's hole-loop defect, needed now that SAM#227 is on SAM `sow/2026-Q4`; see "Merge of
 sow/2026-Q4 (SAM_OCCT#86)"): unit 1150 / 1150 and GrasshopperTests 43 / 43 on both SAM versions, native per-test
 identical to `c67b9f9` on the corrected SAM. Re-measured on current `sow/2026-Q4` on 2026-11-02 (see "Re-measure on current
-sow/2026-Q4"). **Merge: NO-GO** (open items in "Handover"). Step 1 of the Softhouse "Dining 1"
+sow/2026-Q4"). On 2026-11-02 a bounded shallow-junction overshoot correction was added in the working tree, not yet
+committed (see "Shallow-junction overshoot"). **Merge: NO-GO** (open items in "Handover"). Step 1 of the Softhouse "Dining 1"
 stage investigation (owner, 2026-10-26: SAM_OCCT Extend3D first, the SAM extraction fix as a separate PR). Revision 2
 answers the independent review of 2026-10-26 (`SAM-BIM/.review-extend3d-revision2-20261026/REVIEW.md`, machine-local:
 REVISE - cap splitting moved the clip level; MaxExtension used as evidence of a junction and of a split level; room
@@ -527,6 +528,117 @@ Note the native differs from this branch's `049ea44a` used in the merge sections
 - The 13 to 15 fewer spaces are not all classified: the frozen 48 cover only the reference rooms.
 
 Evidence (machine-local): `handover/evidence/2026-11-02-pr84-remeasure/README.md`. `%APPDATA%\SAM` unchanged.
+
+## Shallow-junction overshoot (2026-11-02, working tree on `78a357e`, not committed)
+
+Answers the owner's decision of 2026-11-02 (root cause accepted, implementation in draft only, no merge) for the Softhouse
+reversed-face (R) leak at the A/B party-wall joint (10.7263, -2.5267). Diagnosis: machine-local
+`SAM_daily/2026-10-25-Softthouse/handover/evidence/2026-11-02-r-leak/README.md` (not repeated here). Validation evidence:
+`.../evidence/2026-11-02-extend3d-shallow/` (`scripts/run.sh`, `run2.sh`, `run.out`, `chains/`, `suites/`, `panel-diff.txt`).
+
+**Problem in one line.** `ExtendWalls` adds a 0.05 m overshoot to every grown end. Where the grown wall meets its target at
+2.15 degrees, the tip lies 1.9 mm clear of the target wall (0.05 x sin 2.15 degrees): neither a crossing nor a touch. With the
+Clean3D kink rule on R, the native build then joins the cells on both sides of the party wall (A and B become one open cell).
+
+**Correction (`Panel3DSnapSolver.ExtendWalls`).** A grown end that meets only walls crossing it at less than
+`SHALLOW_JUNCTION_MAX_ANGLE` (5 degrees) stops on the junction the 2D `ExtensionSolver` found, with no overshoot.
+`MeetsOnlyShallowWalls` finds the walls whose line (resolved or original) passes through the end within the distance
+tolerance, takes the acute angle from `atan2(cross, dot)` (stable at small angles) and returns true only when there is at
+least one wall and every one is shallow. Everything else is unchanged: the overshoot of every end that meets a steeper wall
+(also when it meets a shallow wall at the same point), trimmed ends, the 2D solver, `SetVerticalFootprint`, the capture, the
+level clip and all tolerances. No OCCT fuzzy or sewing setting touched. Panel identity: unchanged (Extend3D issues new GUIDs
+on every run, as before). The extend record for such an end carries overshoot 0 and the target description
+"2D plan-loop junction (shallow, no overshoot)"; `RecordPlanFootprintMoves` takes the applied overshoot per end (it printed
+`overshoot` for every grown end before). No public API, parameter, default or native change.
+
+**The 5 degree limit: what is and is not shown.**
+- Shown: at 2.15 degrees and 0.05 m the overshoot fails (r-leak `sweep.txt`: any tip more than 1 mm clear of the wall, up to
+  500 mm past the corner, reproduces it; a tip within 1 mm of the corner closes both houses). 5 degrees at 0.05 m is 4.4 mm
+  clear, so the limit covers the failure with margin and stays within a few millimetres of it.
+- Shown: the 2D solver joins nothing below 0.3 degrees (`SnapSolver.ArcToleranceAngleRad`), so the rule's range is
+  0.3 to 5 degrees. In all four Softhouse runs (F, R, with and without the kink rule) the extended panels change at this one
+  end and nowhere else (`panel-diff.txt`); r-leak `shallow.txt` found no other grown end under 15 degrees. Any limit between
+  2.15 and 15 degrees therefore gives the same Softhouse output; 5 is the smallest round value that covers the failure with
+  margin. Towers and the 8 fixtures are covered by the unit and native suites below (outputs identical), not by a census of
+  their ends.
+- **Not shown:** a native sweep of the angle itself between 2.15 and 15 degrees. The real joint cannot be rotated without
+  breaking its far end, and no synthetic native model was built. The limit is therefore a conservative, evidence-bounded
+  choice, not a measured threshold. If a model with a grown end between 5 and 15 degrees fails the same way, raise the
+  constant with a native regression for it.
+
+**Tests** (`Testing/SAM.OCCT.UnitTests/ExtendWallsShallowJunctionTests.cs`, 20 cases, pure managed; a T junction with the
+target wall off-centre - exactly mid-wall the 2D solver did not join at all, pre-existing and unrelated):
+- below the limit (0.5, 1, 2.15, 4, 4.9 degrees) and at the solver's own floor (0.35): the end lies within 1e-5 m of the junction;
+- above it (5.1, 6, 10, 15, 30, 60, 89 degrees) and a 90 degree corner: the end is exactly 0.05 m past, the untouched end stays;
+- the same end also meeting a perpendicular wall at the same point keeps the overshoot;
+- the extend records (overshoot 0 and "shallow" description / overshoot 0.05 and none);
+- face vertex order reversed gives the same end (2.15 and 30 degrees);
+- the limit is 5 degrees.
+Mutation check (limit set to 0, isolated copy): 8 of the 20 fail - all five below-limit cases, the 0.35 case, the record case
+and the limit pin; the 12 above-limit and control cases pass, as they must.
+
+**Validation** (machine `michal`; Release, isolated trees `%TEMP%\r84\SAM_OCCT_fix` = `78a357e` + this change and
+`SAM_OCCT_fixk` = the same + the uncommitted Clean3D kink rule, `SAM_OCCT-wt-kink-joint` `product.diff` only, no kink tests;
+SAM `7c4591cd`, frozen native `438089F8`, APPDATA redirected; `%APPDATA%\SAM` untouched). Baselines: `2026-11-02-pr84-remeasure`
+(no kink) and `2026-11-02-kink-joint` (`pr84k`).
+
+| measure | baseline | with the correction |
+| --- | --- | --- |
+| unit | 1150 / 1150 | **1170 / 1170** (+20), also on fixk |
+| GrasshopperTests | 43 / 43 | 43 / 43 (fix and fixk) |
+| native integration (failed / passed / skipped) | 24 / 472 / 2 | **24 / 472 / 2; all 498 tests the same outcome and the same failure message** (incl. towers and golden pins, none re-pinned) |
+| R, no kink: spaces, panels, good, frozen 48 kept | 59, 347, 45, 44 | 59, 347, 45, 44; `good.tsv` identical; extended and clean panels identical |
+| F, no kink | 58, 351, 48, 47 | same; identical |
+| F + kink | 60, 358, 50, 47 | same; `good.tsv`, panels identical |
+| **R + kink** | 56, 340, 47, 44 | **57, 342, 47, 44** |
+
+**Room identities, R + kink (`panels_extended` diff, `v2_spaces.tsv`, `good.tsv`).** Exactly one extended panel differs from
+`pr84k-R` (index 57, the angled party-wall piece): its end moves from (10.7281, -2.4767) to (10.7263, -2.5267) - the corner -
+and its area 14.7104 to 14.5329 m2. Clean3D output identical in all four runs. Before: ground-floor Cell 1 = A and B in one
+cell, 39 faces, 44 naked edges (138.873 m), not closed, volume NaN, x 4.656 to 16.51, z 0.017 to 3.475; the upstairs cell
+above it 152.762 m3. After: **A = Cell 1, 21 faces, closed, 206.186 m3 (x 10.572 to 16.51); B = Cell 2, 22 faces, closed,
+207.519 m3 (x 4.656 to 10.726)**, both z 0.025 to 3.475 - the volumes of the earlier hand-built corner-ended hybrid
+(`r-leak/chains/corner-R`). Open cells in the building: 2 (Cell 1 above, Cell 53 with 3 naked edges, 0.103 m) -> 1 (Cell 55,
+the same 3 naked edges, 0.103 m, room Bed 7 2OG D303). Rooms: the six ground-floor rooms of A and B (Dining 3/4 107,
+Circulation 3/4 103, Kitchen 3/4 105-6) lose `open(44) volume NaN` and `shared(6)` and now fail on `shared(3)` and the ray leak
+only, exactly as the same rooms do on F; the other 64 rows of `good.tsv` are identical. **Remaining failures:** the good count
+is unchanged (47) and so is the frozen 48 (44 kept): Dining 4 A107, Carpark 2 C109, Bed 4 1OG C203 and Bed 7 2OG D303 are still
+lost on R, and the six rooms still fail `shared(3)` and the leak figure, a separate mechanism that also fails them on F and
+that this change does not address. So the correction removes the topological failure (joined open cell) and not a count of good
+rooms; it should not be read as a room-count improvement.
+
+Not done here: Softhouse 3D visual / gbXML comparison, hosted CI, a Grasshopper canvas run (`%APPDATA%\SAM` not redeployed),
+a towers chain beyond the pins above, `PROJECT_PROGRESS.md` (post-merge only, AGENTS.md). One test run is worth noting: the first
+`fix` Grasshopper run exceeded its 180 s limit (test host crash; the same stall as in the re-measure run notes) and passed
+43 / 43 on rerun alone (`suites/fix-gh2.log`).
+
+**Verdicts.**
+- *Correction:* **ACCEPT** as a bounded change. Unit, GH and native outcomes identical to baseline apart from the 20 new tests;
+  one panel changes in the only run where it matters, to the corner, with both houses closing independently. Caveat: the limit
+  is conservative, not measured across angles (above), and without the kink rule it changes nothing measurable. An independent
+  acceptance review (new session, Plan mode, Claude Opus high) is recommended before merge.
+- *PR merge readiness:* **NOT READY (REVISE/TEST)**. Unchanged blockers from "Handover": goldens disposition, review findings,
+  hosted CI at the final head, owner approval, codex check; plus this change is only exercised in product together with the kink
+  rule, which is not in this PR (`fix/clean3d-kink-joint-q4`, uncommitted) - decide the order of the two PRs first.
+
+### Follow-up (not in this change): wall run and height independent of face vertex order
+
+Fault (r-leak README, `frames.txt`): `SnappedPanel.AbutsColinearWithin` (here) and `MeetsAtKink` (uncommitted, in
+`SAM_OCCT-wt-kink-joint`) read the wall's run as `plane.Convert(p).X` and its height as `.Y` (`FootprintBounds`). The plane's
+axes come from the face's vertex order, so on about half the walls the run and the height are swapped (R: 114 of 236, F: 103
+of 237) and the same pair of pieces gets opposite answers on F and R. Consequences: the kink rule acts on R and not on F, and
+on R it compares heights where it means run extents.
+
+Minimal correction, its own PR, tests first, not combined with the above:
+1. One helper on `SnappedPanel`, `RunHeightBounds(Face3D, ...)`: run axis `(-Ny, Nx, 0)` of the panel normal, height axis the
+   solver `Up` (world Z when unset) - the construction `Panel3DSnapSolver.WallPlanFrame.Create` already uses; reuse it.
+2. `AbutsColinearWithin` and `MeetsAtKink` (and `EndLiesOn`'s run coordinate) read extents through it; the perpendicular offset
+   test (`plane.Distance`) is frame independent and stays; thresholds unchanged; `OverlapsInPlane` not examined.
+3. Tests: each predicate on the same pair with each face's vertex order reversed and rotated by one (all combinations equal);
+   a pair where the old frame swaps run and height; the Softhouse #294 / #287 / #329 pieces as stored geometry.
+4. Expected effect to plan for: on its own the correction returns this joint to the no-rule state (houses separate, 7 open
+   cells, `K both` in r-leak `swaps.txt`) and touches about half the walls, so it ships with or after the kink rule and the
+   change above, and every Softhouse room table and the towers pins are compared room by room, not by count.
 
 ## Review findings (status at `695e814`)
 
