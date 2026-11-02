@@ -1409,3 +1409,13 @@ PR SAM-BIM/SAM_OCCT#84; merge NO-GO.
    presentation attribution get a reader not anchored on this session. Evidence: `evidence/2026-10-26-r3b`, `-r3c`.
 3. **Owner decision** on the solver measure proposal (blocker 1) and the goldens (blocker 2). The measure work is a
    separate task (new session, Build mode, Claude Opus high effort; native/solver change with its own PR).
+
+## Face-order correction status (2026-11-02)
+
+Implemented and validated locally as its own change, not on this branch: branch `fix/wall-run-face-order-q4` (worktree
+`SAM_OCCT-wt-wall-run-order`, on `d6fb073`, not pushed), record `documentation/Wall-Run-Face-Order-Q4.md` on that branch. Result in
+one line: both predicates are order independent (real Softhouse panels: 92 / 110 abut and 11 / 15 kink answers changed before, 0
+after); F unchanged; R changes four rooms and the A/B ground cells on R are open again (R-only slab split, upstream); native
+`WorkflowParity Face3D-home.sam` goes Passed -> Failed (tracking pin of a gap that is now gone) and several already-failing pinned
+values move. Recommendation TEST; this PR (#84) is unaffected and stays draft. The "Next bounded implementation" above is done;
+"Outstanding defects" item 5 is superseded by the record.
