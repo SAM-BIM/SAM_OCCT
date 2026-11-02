@@ -14,8 +14,9 @@ namespace SAM.OCCT.UnitTests
     /// <see cref="SnappedPanel.AbutsColinearWithin"/> reads a wall's run and height. They must not depend on how the
     /// face was written down: a face's plane takes its axes from the vertex order, so the plane's AxisX is the run on
     /// some walls and the height on others (Softhouse: 114 of 236 walls on the reversed-face run, 103 of 237 on the
-    /// other). Every case here runs the same geometry through every combination of plane axes (normal direction and
-    /// run/height swap), loop start and loop winding and asks for one answer. Pure managed.
+    /// other). Every case here runs the same geometry through the full presentation matrix - the eight plane-axis
+    /// assignments (normal direction, run/height swap, axis signs) x three plane origins x both loop windings x every
+    /// loop start, 192 presentations per wall - and asks for one answer. Pure managed.
     /// </summary>
     public class WallRunFrameTests
     {
@@ -29,36 +30,83 @@ namespace SAM.OCCT.UnitTests
             return new[] { new Point3D(x0, y0, z0), new Point3D(x1, y1, z0), new Point3D(x1, y1, z1), new Point3D(x0, y0, z1) };
         }
 
-        /// <summary>One panel for every way the same wall can be presented: the four plane-axis assignments with the
-        /// run or the height first, the normal either way, and the loop started at each vertex in either winding.</summary>
+        /// <summary>The same wall leaning by <paramref name="degrees"/> from the vertical: every point is shifted along the
+        /// wall's horizontal normal by <paramref name="jog"/> plus its elevation times the slope, so two leaning walls built
+        /// this way share one plane when their jog is the same.</summary>
+        private static Point3D[] LeaningRect(double x0, double y0, double x1, double y1, double z0, double z1, double jog, double degrees)
+        {
+            double length = System.Math.Sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
+            double nx = (y1 - y0) / length;
+            double ny = -(x1 - x0) / length;
+            double slope = System.Math.Tan(degrees * System.Math.PI / 180.0);
+            Point3D At(double x, double y, double z)
+            {
+                double shift = jog + z * slope;
+                return new Point3D(x + nx * shift, y + ny * shift, z);
+            }
+
+            return new[] { At(x0, y0, z0), At(x1, y1, z0), At(x1, y1, z1), At(x0, y0, z1) };
+        }
+
+        private static Point3D[] RotatedAboutZ(Point3D[] loop, double degrees)
+        {
+            double c = System.Math.Cos(degrees * System.Math.PI / 180.0);
+            double s = System.Math.Sin(degrees * System.Math.PI / 180.0);
+            return loop.Select(p => new Point3D(p.X * c - p.Y * s, p.X * s + p.Y * c, p.Z)).ToArray();
+        }
+
+        private static Vector3D Between(Point3D to, Point3D from)
+        {
+            return new Vector3D(to.X - from.X, to.Y - from.Y, to.Z - from.Z);
+        }
+
+        /// <summary>One panel for every way the same wall can be presented: the eight plane-axis assignments (run or
+        /// height first, each axis either way - the normal follows), three plane origins (the first vertex, the centroid and
+        /// a point on the plane outside the face), both windings and the loop started at every vertex. Every combination is
+        /// enumerated; none is tied to another.</summary>
         private static List<SnappedPanel> Presentations(Point3D[] loop, int sourceIndex = 0)
         {
             Point3D first = loop[0];
-            Vector3D run = new Vector3D(loop[1].X - first.X, loop[1].Y - first.Y, 0).Unit;
-            Vector3D up = new Vector3D(0, 0, 1);
+            Vector3D edge = Between(loop[1], first);
+            Vector3D run = new Vector3D(edge.X, edge.Y, 0).Unit;
+            Vector3D normal = edge.CrossProduct(Between(loop[3], first)).Unit;
+            Vector3D up = normal.CrossProduct(run).Unit;
+            if (up.Z < 0)
+            {
+                up = up.GetNegated();
+            }
+
             List<(Vector3D X, Vector3D Y)> axes = new List<(Vector3D, Vector3D)>
             {
                 (run, up), (run.GetNegated(), up), (up, run), (up.GetNegated(), run),
                 (run, up.GetNegated()), (run.GetNegated(), up.GetNegated()), (up, run.GetNegated()), (up.GetNegated(), run.GetNegated()),
             };
 
+            Point3D centroid = new Point3D(loop.Average(p => p.X), loop.Average(p => p.Y), loop.Average(p => p.Z));
+            Point3D outside = new Point3D(first.X - run.X * 3.7 + up.X * 2.3, first.Y - run.Y * 3.7 + up.Y * 2.3, first.Z - run.Z * 3.7 + up.Z * 2.3);
+            Point3D[] origins = { first, centroid, outside };
+
             List<SnappedPanel> result = new List<SnappedPanel>();
-            int variant = 0;
             foreach ((Vector3D x, Vector3D y) in axes)
             {
-                Plane plane = new Plane(first, x, y);
-                for (int reversed = 0; reversed < 2; reversed++)
+                foreach (Point3D origin in origins)
                 {
-                    List<Point3D> points = loop.ToList();
-                    if (reversed == 1)
+                    Plane plane = new Plane(origin, x, y);
+                    for (int reversed = 0; reversed < 2; reversed++)
                     {
-                        points.Reverse();
-                    }
+                        List<Point3D> ordered = loop.ToList();
+                        if (reversed == 1)
+                        {
+                            ordered.Reverse();
+                        }
 
-                    int start = variant++ % points.Count;
-                    points = points.Skip(start).Concat(points.Take(start)).ToList();
-                    Face3D face = new Face3D(plane, new Polygon2D(points.Select(p => plane.Convert(p))));
-                    result.Add(new SnappedPanel(sourceIndex, face, 1, 0.1, 0.5));
+                        for (int start = 0; start < ordered.Count; start++)
+                        {
+                            List<Point3D> points = ordered.Skip(start).Concat(ordered.Take(start)).ToList();
+                            Face3D face = new Face3D(plane, new Polygon2D(points.Select(p => plane.Convert(p))));
+                            result.Add(new SnappedPanel(sourceIndex, face, 1, 0.1, 0.5));
+                        }
+                    }
                 }
             }
 
@@ -66,7 +114,7 @@ namespace SAM.OCCT.UnitTests
         }
 
         /// <summary>The answer for every presentation of both walls; all must agree.</summary>
-        private static HashSet<bool> AbutsAnswers(Point3D[] backer, Point3D[] candidate, double maxOffset = MaxOffset)
+        private static HashSet<bool> AbutsAnswers(Point3D[] backer, Point3D[] candidate, double maxOffset = MaxOffset, double tolerance = Tolerance)
         {
             HashSet<bool> answers = new HashSet<bool>();
             List<SnappedPanel> candidates = Presentations(candidate, 1);
@@ -74,7 +122,7 @@ namespace SAM.OCCT.UnitTests
             {
                 foreach (SnappedPanel b in candidates)
                 {
-                    answers.Add(a.AbutsColinearWithin(b, maxOffset, Tolerance));
+                    answers.Add(a.AbutsColinearWithin(b, maxOffset, tolerance));
                 }
             }
 
@@ -82,19 +130,25 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
-        public void Presentations_OneWall_AreGenuinelyDifferentFrames()
+        public void Presentations_OneWall_AreTheFullMatrixOfGenuinelyDifferentFrames()
         {
             // Arrange / Act: guards the fixtures - if all presentations shared the run on AxisX nothing below would test anything.
             List<SnappedPanel> panels = Presentations(Rect(0, 0, 5, 0, 0, 3));
             int runOnAxisX = panels.Count(p => System.Math.Abs(p.Plane.AxisX.DotProduct(new Vector3D(1, 0, 0))) > 0.99);
             int heightOnAxisX = panels.Count(p => System.Math.Abs(p.Plane.AxisX.DotProduct(new Vector3D(0, 0, 1))) > 0.99);
+            int distinctOrigins = panels.Select(p => $"{p.Plane.Origin.X:F6},{p.Plane.Origin.Y:F6},{p.Plane.Origin.Z:F6}").Distinct().Count();
+            int distinctFrames = panels.Select(p => $"{p.Plane.AxisX.X:F6},{p.Plane.AxisX.Y:F6},{p.Plane.AxisX.Z:F6}|{p.Plane.AxisY.X:F6},{p.Plane.AxisY.Y:F6},{p.Plane.AxisY.Z:F6}").Distinct().Count();
+            int distinctLoops = panels.Select(p => string.Join(";", SnappedPanel.BoundaryPoints(p.Face3D).Select(q => $"{q.X:F3},{q.Y:F3},{q.Z:F3}"))).Distinct().Count();
 
-            // Assert
-            Assert.Equal(16, panels.Count);
-            Assert.Equal(8, runOnAxisX);
-            Assert.Equal(8, heightOnAxisX);
+            // Assert: 8 axis assignments x 3 origins x 2 windings x 4 loop starts, each combination present.
+            Assert.Equal(192, panels.Count);
+            Assert.Equal(96, runOnAxisX);
+            Assert.Equal(96, heightOnAxisX);
             Assert.Contains(panels, p => p.Plane.Normal.Y > 0.99);
             Assert.Contains(panels, p => p.Plane.Normal.Y < -0.99);
+            Assert.Equal(3, distinctOrigins);
+            Assert.Equal(8, distinctFrames);
+            Assert.Equal(8, distinctLoops); // 2 windings x 4 starts, whatever the frame
         }
 
         // ---- one answer whatever the presentation ------------------------------------------------------------------
@@ -145,6 +199,98 @@ namespace SAM.OCCT.UnitTests
         {
             // The candidate is written against the backer's direction (its run points -X).
             Assert.Equal(new[] { true }, AbutsAnswers(Rect(0, 0, 5, 0, 0, 3), Rect(10, 0.1, 5, 0.1, 0, 3)));
+        }
+
+        // ---- walls at any bearing ----------------------------------------------------------------------------------
+
+        [Theory]
+        [InlineData(30)]
+        [InlineData(45)]
+        [InlineData(90)]
+        [InlineData(137)]
+        [InlineData(-61)]
+        public void AbutsColinearWithin_WallsAtAnyBearing_SameVerdictsInEveryPresentation(double degrees)
+        {
+            Point3D[] backer = RotatedAboutZ(Rect(0, 0, 5, 0, 0, 3), degrees);
+
+            Assert.Equal(new[] { true }, AbutsAnswers(backer, RotatedAboutZ(Rect(5, 0.23, 10, 0.23, 0, 3), degrees)));
+            Assert.Equal(new[] { true }, AbutsAnswers(backer, RotatedAboutZ(Rect(3, 0.1, 8, 0.1, 1, 4), degrees)));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, RotatedAboutZ(Rect(5, 0.31, 10, 0.31, 0, 3), degrees)));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, RotatedAboutZ(Rect(0, 0, 5, 0, 3.2, 6), degrees)));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, RotatedAboutZ(Rect(5.5, 0, 10, 0, 0, 3), degrees)));
+        }
+
+        // ---- near-vertical walls -----------------------------------------------------------------------------------
+
+        [Theory]
+        [InlineData(0.25)]
+        [InlineData(1.0)]
+        [InlineData(3.0)]
+        public void AbutsColinearWithin_LeaningWalls_SameVerdictsAsVerticalInEveryPresentation(double lean)
+        {
+            // The walls lean by the same angle, so they share one plane (offset by the jog). The height is world Z, the run
+            // the horizontal axis of the normal: the verdicts are those of the vertical wall, not of the plane's own axes.
+            Point3D[] backer = LeaningRect(0, 0, 5, 0, 0, 3, 0, lean);
+
+            Assert.Equal(new[] { true }, AbutsAnswers(backer, LeaningRect(5, 0, 10, 0, 0, 3, 0, lean)));
+            Assert.Equal(new[] { true }, AbutsAnswers(backer, LeaningRect(5, 0, 10, 0, 0, 3, 0.23, lean)));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, LeaningRect(5, 0, 10, 0, 0, 3, 0.31, lean)));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, LeaningRect(0, 0, 5, 0, 3.2, 6, 0, lean)));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, LeaningRect(5.5, 0, 10, 0, 0, 3, 0, lean)));
+        }
+
+        // ---- exact tolerance boundaries ----------------------------------------------------------------------------
+
+        [Theory]
+        [InlineData(0.25, true)]
+        [InlineData(0.2500001, false)]
+        public void AbutsColinearWithin_OffsetAtTheLimit_InclusiveAndTheSameInEveryPresentation(double jog, bool expected)
+        {
+            // 0.25 is exact in binary and the wall is axis aligned, so the boundary value itself is deterministic.
+            Assert.Equal(new[] { expected }, AbutsAnswers(Rect(0, 0, 5, 0, 0, 3), Rect(5, jog, 10, jog, 0, 3), 0.25, 0.125));
+        }
+
+        [Theory]
+        [InlineData(5.25, true)]
+        [InlineData(5.2500001, false)]
+        public void AbutsColinearWithin_RunGapAtTheLimit_InclusiveAndTheSameInEveryPresentation(double startX, bool expected)
+        {
+            Assert.Equal(new[] { expected }, AbutsAnswers(Rect(0, 0, 5, 0, 0, 3), Rect(startX, 0, 10, 0, 0, 3), 0.25, 0.125));
+        }
+
+        [Theory]
+        [InlineData(2.875, false)]
+        [InlineData(2.8749999, true)]
+        public void AbutsColinearWithin_HeightOverlapAtTheTolerance_ExclusiveAndTheSameInEveryPresentation(double candidateBottom, bool expected)
+        {
+            // Overlap of exactly the tolerance does not count as the same band (overlap <= tolerance is false).
+            Assert.Equal(new[] { expected }, AbutsAnswers(Rect(0, 0, 5, 0, 0, 3), Rect(0, 0, 5, 0, candidateBottom, 6), 0.25, 0.125));
+        }
+
+        [Theory]
+        [InlineData(45, 0.25 - 1e-9, true)]
+        [InlineData(45, 0.25 + 1e-9, false)]
+        [InlineData(137, 0.25 - 1e-9, true)]
+        [InlineData(137, 0.25 + 1e-9, false)]
+        public void AbutsColinearWithin_OffsetJustEitherSideOfTheLimitAtABearing_SameVerdictInEveryPresentation(double degrees, double jog, bool expected)
+        {
+            // Off the axes the boundary value itself is subject to rounding; a nanometre either side is not.
+            Assert.Equal(new[] { expected }, AbutsAnswers(RotatedAboutZ(Rect(0, 0, 5, 0, 0, 3), degrees), RotatedAboutZ(Rect(5, jog, 10, jog, 0, 3), degrees), 0.25, 0.125));
+        }
+
+        // ---- near-horizontal planes ---------------------------------------------------------------------------------
+
+        [Fact]
+        public void AbutsColinearWithin_NearHorizontalPlaneAboveTheCapThreshold_OneAnswerInEveryPresentation()
+        {
+            // A plane whose normal has a horizontal part of 1e-6 (above the 1e-9 switch to the plane-frame reading) has a run
+            // axis defined by the normal alone. Production only calls this for vertical walls; this pins that the reading is
+            // still presentation independent just past the switch.
+            double rise = 1e-6;
+            Point3D[] a = { new Point3D(0, 0, 0), new Point3D(5, 0, 0), new Point3D(5, 5, 5 * rise), new Point3D(0, 5, 5 * rise) };
+            Point3D[] b = { new Point3D(5.1, 0, 0), new Point3D(10, 0, 0), new Point3D(10, 5, 5 * rise), new Point3D(5.1, 5, 5 * rise) };
+
+            Assert.Single(AbutsAnswers(a, b));
         }
 
         // ---- recorded Softhouse walls (frames.txt, 4 decimals): backer #294, candidates #287 and #329 ------------------
@@ -246,7 +392,27 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
-        public void AbutsColinearWithin_NullOrDegenerateInput_IsFalse()
+        public void DegenerateWallLoops_NeverFormAPanel_SoNeverReachTheWallReading()
+        {
+            // A loop collapsed onto a horizontal line (zero height), a vertical line (zero run) or a point creates no face, and
+            // a panel cannot be built without one: degenerate walls are rejected before AbutsColinearWithin is reached.
+            Point3D[][] loops =
+            {
+                new[] { new Point3D(0, 0, 1.5), new Point3D(5, 0, 1.5), new Point3D(10, 0, 1.5), new Point3D(2, 0, 1.5) },
+                new[] { new Point3D(5, 0, 0), new Point3D(5, 0, 1.5), new Point3D(5, 0, 3), new Point3D(5, 0, 2) },
+                new[] { new Point3D(5, 0, 1.5), new Point3D(5, 0, 1.5), new Point3D(5, 0, 1.5), new Point3D(5, 0, 1.5) },
+            };
+
+            foreach (Point3D[] loop in loops)
+            {
+                Face3D face = TestGeometry.CreatePlanarFace(loop);
+
+                Assert.Null(face);
+                Assert.Throws<System.ArgumentNullException>(() => new SnappedPanel(0, face, 1, 0.1, 0.5));
+            }
+        }
+        [Fact]
+        public void AbutsColinearWithin_NullInput_IsFalse()
         {
             SnappedPanel wall = Presentations(Rect(0, 0, 5, 0, 0, 3))[0];
 
