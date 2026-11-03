@@ -230,10 +230,7 @@ namespace SAM.Analytical.OCCT.Solver
                 AddDiagnosticLine(diagnostics, diagnosticRecords, line, DiagnosticSeverity.Info);
             }
 
-            foreach (string line in SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels))
-            {
-                AddDiagnosticLine(diagnostics, diagnosticRecords, line, DiagnosticSeverity.Info);
-            }
+            AppendExtendPanelDiagnostics(diagnostics, diagnosticRecords, solver.SnappedPanels);
 
             AppendInputEffectDiagnostics(diagnostics, sources, inputAlreadyClean: false, "SAM_OCCT_SOLVE3D", diagnosticRecords);
 
@@ -271,7 +268,11 @@ namespace SAM.Analytical.OCCT.Solver
                 extendPanelDiagnostics: SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels),
                 levelGroups: solver.LevelGroups,
                 cleanRecords: solver.CleanRecords,
-                cleanReportLines: cleanReportLines) { DiagnosticRecords = diagnosticRecords ?? new List<DiagnosticRecord>() };
+                cleanReportLines: cleanReportLines)
+            {
+                DiagnosticRecords = diagnosticRecords ?? new List<DiagnosticRecord>(),
+                ExtendPanelDiagnosticRecords = SolverReportFormat.FormatExtendPanelDiagnosticRecords(solver.SnappedPanels),
+            };
         }
 
         /// <summary>
@@ -279,6 +280,19 @@ namespace SAM.Analytical.OCCT.Solver
         /// caller that produces the line; the code is the leading <c>CODE:</c> token and is used only to look up the
         /// Info detail level, never to decide the severity.
         /// </summary>
+        /// <summary>
+        /// Adds the per-panel extend lines of the conditioned panels (<see cref="SolverReportFormat.FormatExtendPanelDiagnostics"/>)
+        /// to the legacy list and their structured twins, each with the severity the panel recorded where the line was
+        /// produced (<see cref="SolverReportFormat.FormatExtendPanelDiagnosticRecords"/>): a level clip that could not be
+        /// made stays an Error at every detail level. Solve3D's path for these lines.
+        /// </summary>
+        internal static void AppendExtendPanelDiagnostics(List<string> diagnostics, List<DiagnosticRecord> diagnosticRecords, IReadOnlyList<SnappedPanel> snappedPanels)
+        {
+            List<DiagnosticRecord> records = SolverReportFormat.FormatExtendPanelDiagnosticRecords(snappedPanels);
+            diagnostics.AddRange(records.ConvertAll(x => x.Text));
+            diagnosticRecords?.AddRange(records);
+        }
+
         private static void AddDiagnosticLine(List<string> diagnostics, List<DiagnosticRecord> diagnosticRecords, string text, DiagnosticSeverity severity, DiagnosticDetail? detail = null)
         {
             diagnostics.Add(text);
@@ -563,7 +577,10 @@ namespace SAM.Analytical.OCCT.Solver
                 extendPanelDiagnostics: SolverReportFormat.FormatExtendPanelDiagnostics(solver.SnappedPanels),
                 levelGroups: solver.LevelGroups,
                 cleanRecords: solver.CleanRecords,
-                cleanReportLines: cleanReportLines);
+                cleanReportLines: cleanReportLines)
+            {
+                ExtendPanelDiagnosticRecords = SolverReportFormat.FormatExtendPanelDiagnosticRecords(solver.SnappedPanels),
+            };
         }
 
         /// <summary>

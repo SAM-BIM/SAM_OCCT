@@ -13,6 +13,7 @@ namespace SAM.OCCT.UnitTests
     /// Unit tests for <see cref="SnappedPanel"/> and <see cref="Panel3DSnapSolver"/>.
     /// All tests are pure-managed: no native OCCT DLL required.
     /// </summary>
+    [Collection(ExtendCensusCollection.Name)]
     public class Panel3DSnapSolverTests
     {
         // ──────────────────────────────────────────────────────────────
