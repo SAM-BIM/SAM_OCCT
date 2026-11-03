@@ -103,7 +103,7 @@ and kernel history carrying its tolerance.
 Validation (frozen native `438089F8`, checked before and after; APPDATA redirected): unit 1140 / 1140 on the second full run (the first run had one failure,
 `Panel3DSnapSolverTests.Extend_LevelCeilingVsPitchedRoof_RoutesScalarVsPlaneOps`, which reads the static `SnappedPanel.PlaneOpsExtendCount`; it passes alone, twice,
 and in the rerun, so it looks order/parallelism dependent and is unrelated); focused integration 10 / 10 (both buckets through `Solve3D`, diagnostics, controls,
-tilted Spaces, AdjacencyCluster-home refusal). The full native suite and PR checks on the final head are still to be run.
+tilted Spaces, AdjacencyCluster-home refusal). Full native integration on `efdba56` (frozen native `438089F8` before and after): 25 failed / 478 passed / 2 skipped (505), the failing set identical, test for test, to the saved 25. PR-attached checks on the final head are still to be run.
 
 ## Owner decision on Softhouse D203 (2026-11-03)
 
