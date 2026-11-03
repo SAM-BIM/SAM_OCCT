@@ -14,8 +14,10 @@ sow/2026-Q4 (SAM_OCCT#86)"): unit 1150 / 1150 and GrasshopperTests 43 / 43 on bo
 identical to `c67b9f9` on the corrected SAM. Re-measured on current `sow/2026-Q4` on 2026-11-02 (see "Re-measure on current
 sow/2026-Q4"). On 2026-11-02 a bounded shallow-junction overshoot correction was added, committed locally as `7306a9b` and
 `d27e440`, not pushed (see "Shallow-junction overshoot"). Dining 4 A107 is closed (see "Dining 4 A107 closure") and the
-Softhouse acceptance gates are proposed, not adopted (see "Proposed Softhouse acceptance gates"). **Merge: NO-GO** (open items
-in "Handover" and "Outstanding defects and blockers"; current next step in "Next step"). Step 1 of the Softhouse "Dining 1"
+Softhouse acceptance gates are proposed, not adopted (see "Proposed Softhouse acceptance gates"). On 2026-11-03 `sow/2026-Q4`
+`e654095` (#87 + #88) was merged in at `1a14dfd` (local, not pushed; **tested content `1a14dfd`**) and re-measured against plain
+Q4; kink cases deferred (see "Merge of sow/2026-Q4 (#87 + #88) and re-measure"). **Merge: NO-GO** (open items
+in "Handover" and "Outstanding defects and blockers"; current next step in "Next step (2026-11-03)"). Step 1 of the Softhouse "Dining 1"
 stage investigation (owner, 2026-10-26: SAM_OCCT Extend3D first, the SAM extraction fix as a separate PR). Revision 2
 answers the independent review of 2026-10-26 (`SAM-BIM/.review-extend3d-revision2-20261026/REVIEW.md`, machine-local:
 REVISE - cap splitting moved the clip level; MaxExtension used as evidence of a junction and of a split level; room
@@ -1388,7 +1390,7 @@ stub is invented material). No golden re-baseline. No push, PR or merge without 
 native probes, the demonstrated correction, minor component bumps and one final managed/GH/native check authorised by
 the owner's task (`REVISION3B-NEXT.md`); no Softhouse chain.
 
-## Next step (2026-11-02)
+## Next step (2026-11-02, superseded by "Next step (2026-11-03)" at the end)
 
 **Status.** Local branch `fix/extend3d-no-invented-walls-q4`, ahead of its remote by the shallow commits and this record. Tested
 code content: `d27e440` (see "Shallow-junction overshoot"); this update is documentation only, with no build or test run. Draft
@@ -1419,3 +1421,110 @@ after); F unchanged; R changes four rooms and the A/B ground cells on R are open
 `WorkflowParity Face3D-home.sam` goes Passed -> Failed (tracking pin of a gap that is now gone) and several already-failing pinned
 values move. Recommendation TEST; this PR (#84) is unaffected and stays draft. The "Next bounded implementation" above is done;
 "Outstanding defects" item 5 is superseded by the record.
+
+*Update 2026-11-03:* landed on `sow/2026-Q4` with #88 (merge `ef484f84`, closeout `e654095`) and merged into this branch; see
+the next section.
+
+## Merge of sow/2026-Q4 (#87 + #88) and re-measure (2026-11-03)
+
+**Status.** `origin/sow/2026-Q4` `e654095` (#87 wall-run face order, #88 `PostMergeGuard`) merged into this branch at
+**`1a14dfd`**: a clean automatic merge, no conflict and no product change beyond the merge. **Tested content: `1a14dfd`.**
+Local only, not pushed (the remote PR head is still `78a357e`). Draft PR SAM-BIM/SAM_OCCT#84; **merge NO-GO**. Gate results below
+are evidence for the proposed gates, not acceptance.
+
+**Kink cases: DEFERRED.** The uncommitted kink rule (`SAM_OCCT-wt-kink-joint`, working diff SHA256 `34728722...3e846`) no longer
+applies as written (#87 changed its call site to `AbutsColinearWithin(..., up)`), and its `MeetsAtKink` reads the face-order
+dependent `FootprintBounds` frame that #87 removed from `AbutsColinearWithin`. Porting it to the wall frame or keeping the old
+frame is a solver-behaviour decision for the owner (2026-11-03); neither was applied. No `+kink` run was made.
+
+**Pins.** SAM `7c4591cd`, SAM_Solver `fd63b46` (both the current `sow/2026-Q4` heads; isolated builds reused), frozen native
+`438089F8` (restored and hash-checked before every suite and chain), APPDATA redirected, `%APPDATA%\SAM` unchanged. Softhouse
+inputs, gbXML (`E77E7CA4...1B651`), frozen 48 (`2ac315fd...ea215`) and chain settings (`softhouse.sh`: CONT 0.01, MINTHK 0.04,
+MAXRATIO 0.2, SNAP 0.3, BBL 0.21, FILL 0.5; R = `REVFACES=1`) as in the earlier runs. Plain Q4 was **re-run fresh** at `e654095`:
+the only saved post-#88 control (`2026-11-03-post-merge-guard`) was built from the pre-landing branch, so it is not a pinned match.
+
+| measure | plain Q4 `e654095` | #84 merged `1a14dfd` |
+| --- | --- | --- |
+| unit | 1140 / 1140 | 1265 / 1265 |
+| GrasshopperTests | 38 / 38 | 43 / 43 |
+| native integration (failed / passed / skipped) | 25 / 478 / 2 | 24 / 487 / 2 |
+| Softhouse F: spaces, panels, good of 70, frozen 48 kept | 72, 397, 48, 48 | 58, 351, 48, 47 |
+| Softhouse R: spaces, panels, good of 70, frozen 48 kept | 72, 399, 45, 45 | 57, 349, 45, 44 |
+
+**Native, per test (name, outcome and first failure-message line).**
+- Plain Q4: the 25 failures are exactly the accepted #87 + #88 baseline set (`2026-11-03-post-merge-guard`, also 25 / 478 / 2).
+- #84 merged vs plain Q4: no test goes Passed -> Failed. WorkflowParity Revit-home goes Failed -> Passed (as on every #84 run
+  since `695e814`). One changed value in a test that fails on both: towers GoldenMaster managed pin (expects 21 cells) gets 23 on
+  Q4 and 22 on #84, the same two values as before the merge (`f007824` 23, `d27e440` 22). Eight tests exist only on #84 and pass
+  (2 intermediate-cap, 6 shallow-junction natives).
+- #84 merged vs the previous full #84 run (`78a357e` + the shallow change, 24 / 472 / 2; its six shallow natives were run
+  separately then): same 24 names fail. Every other difference comes from #87 / #88 or that gap: two-level-tilted managed
+  GoldenMaster (pin 15 cells / 32 naked) failed on "got 13 cells" and now fails on "got 0 naked" (15 cells, the accepted moved
+  measurement); the tilted refusal test is replaced by #88's `CreatesSpaces...` test; eight #88 `PostMergeGuard` natives, the
+  `AdjacencyCluster-home` refusal and the six shallow natives pass (+15). **No new unexplained native regression.**
+- Evidence: `suites/cmp-q4e-vs-pr84m.txt`, `suites/cmp-fix-vs-pr84m.txt`.
+
+**Softhouse room changes caused by the merge** (good / reasons per room, against the pre-merge runs at the same pins):
+- F: plain Q4 `e654095` equals `f007824`; #84 merged `good.tsv` is byte-identical to `3d3dc1f`. #87 / #88 change nothing on F.
+- R, both stacks: **Bed 2 1OG D203 GOOD -> open(3)** and **Bed 7 2OG D303 open(3) -> GOOD**. The open cell with 3 naked edges
+  moves down one storey in house D: before, D203 closed at 42.22 m3 with D303 open (0.103 m); now D303 closes (44.887 m3) and
+  D203 is open (0.105 m).
+- R, plain Q4 only: Bath 4 A202, Bath 8 A302, Bed 12 A303, Carpark 4 A109, Circulation 8 A301, Kitchen 5 A204 recover (open ->
+  GOOD; frozen 48 kept 39 -> 45). Kitchen 1 D105-6 z0.05 becomes open(3) (0.104 m).
+- R, #84 only: the ground floors of houses A, B and C join one open cell (shared 9), as on #84 F; before, each house was its own
+  cell (shared 3). This is the predicted effect of #87 alone (see "Follow-up ... wall run and height": it returns the A/B joint
+  to the no-rule state); the kink rule is what separated them. House D's ground floor (Dining 1, Circulation 1, Kitchen 1) becomes
+  open(3) (0.104 m).
+
+**Per-room R failures, frozen 48** (G1 population A of 47, plus A107):
+
+| room | plain Q4 R | #84 merged R |
+| --- | --- | --- |
+| Carpark 2 C109 | shared(2) with Bed 4 (upstream SAM `#85` drop) | same |
+| Bed 4 1OG C203 | shared(2) with Carpark 2 | same |
+| **Bed 2 1OG D203** | open(3), volume NaN; split 91 / 9 | same |
+| Dining 4 A107 | GOOD on G1 metric (rests on the invented wall; fails G2 rule b) | open(19), shared(9) |
+
+Bed 7 D303, previously lost on R, is kept on both stacks.
+
+**Proposed gates** (`scripts/gates.sh`, `g3b-proxy.sh`, `slabholes.ps1`; the scorer reproduces the earlier manual table exactly).
+
+| gate | Q4 F | Q4 R | #84 F | #84 R |
+| --- | --- | --- | --- | --- |
+| G1, of 47 | 47 | 44: C109, C203, D203 | 47 | 44: C109, C203, D203 |
+| G2, of 48 | 46: A107 split, C203 split | 44: A107 split, C109 shared, D203 split + open, C203 split + shared | 47: A107 open, shared(9) | 44: A107 open, shared(9); C109, C203 shared; D203 split + open |
+| G3a, of 18 | 4 | 4 | 5 | 0 |
+| G3b **proxy**, of 20 | 11 (8 fail, 1 not evaluable) | 11 (8, 1) | 17 (3 floors) | 15 (2 floors fail, 3 not evaluable) |
+| G4 | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| G5 | **FAIL**: invented wall (A107); slab holes lost | **FAIL**: same | **FAIL**: slab holes lost | **FAIL**: slab holes lost |
+
+- G3b is a proxy: both rooms of a two-sided Air surface share a host cell; not a panel-on-surface test. *Corrected:* the earlier
+  fixk-R figure "15; the 3 floors covered; 2 not evaluable" counts the Kitchen 1 floor as covered; with no cell for Kitchen 1
+  z3.5 it is not evaluable (2 floors fail, 3 not evaluable). Pass count unchanged.
+- G4: no per-ray classification exists; no pass inferred.
+- G5 slab holes (inner loops of horizontal panels, Clean3D -> Extend3D), identical on both stacks: F z 0.025 3 -> 0, z 3.475
+  8 -> 0, z 6.475 5 -> 0; R z 0.025 4 -> 0, z 3.475 6 -> 0, z 6.475 5 -> 0, z 9.45 1 -> 0. New: every level loses its holes,
+  not only the first floor. Pre-existing on Q4. The x 4.916 stub was not re-measured (the bbox probe cannot separate a notch of
+  the party-wall panel); its 2026-11-02 trace stands.
+
+**D203 disposition.** Lost on R on plain Q4 and on #84 merged, with the same cells: an open cell (12 faces, 3 naked edges,
+0.105 m, y 3.503..8.523) and a closed 3.168 m3 strip (y 3.179..3.503, z 3.475..6.475) that splits the room 91 / 9. On F the room is
+one closed 43.677 m3 cell (y 3.341..8.523) on both stacks. So #84 neither fixes nor masks it: **it is a base defect**, introduced
+on R by #87 / #88 together with D303's recovery (the open cell moves from D303 to D203), on top of an R-only strip at y 3.503 that
+existed before. The trace belongs on its own branch from `sow/2026-Q4`, not on #84; #84 does not depend on it. Not started (owner
+approval needed).
+
+**Not done.** Kink runs (deferred), hosted CI, push, Grasshopper canvas run, gbXML visual comparison, any G5 or D203 fix.
+
+Evidence (machine-local): `SAM_daily/2026-10-25-Softthouse/handover/evidence/2026-11-03-pr84-merged-remeasure/` (`README.md`,
+`run.out`, `scripts/`, `suites/`, `chains/{q4e,pr84m}-{F,R}/`, `provenance/`). Reproduce: `sh scripts/remeasure.sh` (Git Bash;
+needs `%TEMP%\r84\{SAM,SAM_Solver}`, `%TEMP%\cmg` native set and `tools-2026-10-27-combined`), then `sh scripts/gates.sh
+chains/<run> ../2026-10-27-combined/frozen/good48.tsv`.
+
+## Next step (2026-11-03)
+
+1. **Owner:** decide the kink frame (port `MeetsAtKink` / `EndLiesOn` to the wall frame, or keep the old frame), then the kink
+   runs `#84 + kink` F/R on `1a14dfd` with the same pins.
+2. **Owner:** approve pushing `1a14dfd` and this record (PR stays draft) and starting the D203 trace from `sow/2026-Q4`.
+3. Still open from "Outstanding defects and blockers": gate approval (G1-G5, rule b zero tolerance), the slab-opening blocker
+   (G5), SAM `#85`, goldens disposition, review findings, final-head CI, codex check.
