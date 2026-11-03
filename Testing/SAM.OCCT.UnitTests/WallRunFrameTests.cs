@@ -114,7 +114,7 @@ namespace SAM.OCCT.UnitTests
         }
 
         /// <summary>The answer for every presentation of both walls; all must agree.</summary>
-        private static HashSet<bool> AbutsAnswers(Point3D[] backer, Point3D[] candidate, double maxOffset = MaxOffset, double tolerance = Tolerance)
+        private static HashSet<bool> AbutsAnswers(Point3D[] backer, Point3D[] candidate, double maxOffset = MaxOffset, double tolerance = Tolerance, Vector3D up = null)
         {
             HashSet<bool> answers = new HashSet<bool>();
             List<SnappedPanel> candidates = Presentations(candidate, 1);
@@ -122,7 +122,7 @@ namespace SAM.OCCT.UnitTests
             {
                 foreach (SnappedPanel b in candidates)
                 {
-                    answers.Add(a.AbutsColinearWithin(b, maxOffset, tolerance));
+                    answers.Add(a.AbutsColinearWithin(b, maxOffset, tolerance, up));
                 }
             }
 
@@ -417,6 +417,139 @@ namespace SAM.OCCT.UnitTests
             SnappedPanel wall = Presentations(Rect(0, 0, 5, 0, 0, 3))[0];
 
             Assert.False(wall.AbutsColinearWithin(null, MaxOffset, Tolerance));
+        }
+
+        // ---- a tilted level: height along the model-up axis --------------------------------------------------------
+
+        // The TiltedLevel fixture tilts its storeys 12.84 deg about Y: level up (-0.222, 0, 0.975). Walls facing +-Y keep their
+        // plane under that rotation, so the level's walls are the upright ones turned within their own planes.
+        private const double LevelTilt = -12.84;
+
+        private static Point3D[] TiltedAboutY(Point3D[] loop, double degrees = LevelTilt)
+        {
+            double c = System.Math.Cos(degrees * System.Math.PI / 180.0);
+            double s = System.Math.Sin(degrees * System.Math.PI / 180.0);
+            return loop.Select(p => new Point3D(p.X * c + p.Z * s, p.Y, -p.X * s + p.Z * c)).ToArray();
+        }
+
+        private static Vector3D LevelUp(double degrees = LevelTilt)
+        {
+            double s = System.Math.Sin(degrees * System.Math.PI / 180.0);
+            double c = System.Math.Cos(degrees * System.Math.PI / 180.0);
+            return new Vector3D(s, 0, c);
+        }
+
+        [Fact]
+        public void AbutsColinearWithin_TiltedLevelStackedPiecesWithALevelGap_FalseInEveryPresentation()
+        {
+            // An upper-storey piece over the next bay's lower-storey piece: 0.08 m apart in level height, but the tilt makes
+            // their world-Z bands overlap by metres.
+            Point3D[] lower = TiltedAboutY(Rect(0, 0, 5, 0, 0, 3));
+            Point3D[] upper = TiltedAboutY(Rect(-5, 0, 0, 0, 3.08, 6));
+
+            Assert.Equal(new[] { false }, AbutsAnswers(lower, upper, up: LevelUp()));
+            Assert.Equal(new[] { false }, AbutsAnswers(upper, lower, up: LevelUp()));
+        }
+
+        [Fact]
+        public void AbutsColinearWithin_TiltedLevelStackedPiecesWithALevelGap_WorldZReadingAbuts()
+        {
+            // Guards the fixture above: without a model-up axis the same pair reads as overlapping, the false accept being fixed.
+            Point3D[] lower = TiltedAboutY(Rect(0, 0, 5, 0, 0, 3));
+            Point3D[] upper = TiltedAboutY(Rect(-5, 0, 0, 0, 3.08, 6));
+
+            Assert.Equal(new[] { true }, AbutsAnswers(lower, upper));
+        }
+
+        [Fact]
+        public void AbutsColinearWithin_TiltedLevelValidAbut_TrueInEveryPresentation()
+        {
+            Point3D[] backer = TiltedAboutY(Rect(0, 0, 5, 0, 0, 3));
+
+            Assert.Equal(new[] { true }, AbutsAnswers(backer, TiltedAboutY(Rect(5, 0, 10, 0, 0, 3)), up: LevelUp()));
+            Assert.Equal(new[] { true }, AbutsAnswers(backer, TiltedAboutY(Rect(5, 0.23, 10, 0.23, 0.5, 3.5)), up: LevelUp()));
+            Assert.Equal(new[] { true }, AbutsAnswers(backer, TiltedAboutY(Rect(10, 0.1, 5, 0.1, 0, 3)), up: LevelUp()));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, TiltedAboutY(Rect(5, 0.31, 10, 0.31, 0, 3)), up: LevelUp()));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, TiltedAboutY(Rect(5.5, 0, 10, 0, 0, 3)), up: LevelUp()));
+        }
+
+        [Fact]
+        public void AbutsColinearWithin_TiltedLevelOppositeUpAxis_SameVerdicts()
+        {
+            Point3D[] lower = TiltedAboutY(Rect(0, 0, 5, 0, 0, 3));
+            Vector3D down = LevelUp().GetNegated();
+
+            Assert.Equal(new[] { false }, AbutsAnswers(lower, TiltedAboutY(Rect(-5, 0, 0, 0, 3.08, 6)), up: down));
+            Assert.Equal(new[] { true }, AbutsAnswers(lower, TiltedAboutY(Rect(5, 0, 10, 0, 0, 3)), up: down));
+        }
+
+        [Theory]
+        [InlineData(5)]
+        [InlineData(20)]
+        [InlineData(-30)]
+        public void AbutsColinearWithin_TiltedLevelAtOtherTilts_SameVerdictsAsTheUprightLevel(double degrees)
+        {
+            Point3D[] backer = TiltedAboutY(Rect(0, 0, 5, 0, 0, 3), degrees);
+
+            Assert.Equal(new[] { true }, AbutsAnswers(backer, TiltedAboutY(Rect(5, 0, 10, 0, 0, 3), degrees), up: LevelUp(degrees)));
+            Assert.Equal(new[] { true }, AbutsAnswers(backer, TiltedAboutY(Rect(3, 0.1, 8, 0.1, 1, 4), degrees), up: LevelUp(degrees)));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, TiltedAboutY(Rect(-5, 0, 0, 0, 3.08, 6), degrees), up: LevelUp(degrees)));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, TiltedAboutY(Rect(0, 0, 5, 0, 3.2, 6), degrees), up: LevelUp(degrees)));
+        }
+
+        // ---- a horizontal level, and inputs that carry no direction, keep the world-Z reading ----------------------------
+
+        public static IEnumerable<object[]> WorldZEquivalentUps()
+        {
+            yield return new object[] { new Vector3D(0, 0, 1) };
+            yield return new object[] { new Vector3D(0, 0, -1) };
+            yield return new object[] { new Vector3D(0, 0, 7.5) };
+            yield return new object[] { new Vector3D(1e-14, -1e-14, 1) };
+            yield return new object[] { new Vector3D(0, 0, 0) };
+            yield return new object[] { new Vector3D(double.NaN, 0, 1) };
+            yield return new object[] { new Vector3D(0, 0, double.PositiveInfinity) };
+        }
+
+        [Theory]
+        [MemberData(nameof(WorldZEquivalentUps))]
+        public void AbutsColinearWithin_HorizontalLevelOrUnusableUp_SameVerdictsAsNoUp(Vector3D up)
+        {
+            Point3D[] backer = Rect(0, 0, 5, 0, 0, 3);
+
+            Assert.Equal(new[] { true }, AbutsAnswers(backer, Rect(5, 0, 10, 0, 0, 3), up: up));
+            Assert.Equal(new[] { true }, AbutsAnswers(backer, Rect(5, 0.23, 10, 0.23, 0, 3), up: up));
+            Assert.Equal(new[] { true }, AbutsAnswers(backer, Rect(3, 0.1, 8, 0.1, 1, 4), up: up));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, Rect(5, 0.31, 10, 0.31, 0, 3), up: up));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, Rect(0, 0, 5, 0, 3.2, 6), up: up));
+            Assert.Equal(new[] { false }, AbutsAnswers(backer, Rect(5.5, 0, 10, 0, 0, 3), up: up));
+        }
+
+        [Fact]
+        public void Snap_TiltedLevelStackedPiecesWithAJog_AlignsOnlyWhenTheLevelUpIsNotPassed()
+        {
+            // The abut rule reaches Snap through its up argument: the 0.2 m jog between a lower piece and the next bay's upper
+            // piece (0.08 m apart in level height) aligns under the world-Z reading and stays under the level's own up.
+            Point3D[] lower = TiltedAboutY(Rect(0, 0, 5, 0, 0, 3));
+            Point3D[] upper = TiltedAboutY(Rect(-5, 0.2, 0, 0.2, 3.08, 6));
+
+            List<SnappedPanel> worldZ = new List<SnappedPanel> { new SnappedPanel(0, TestGeometry.CreatePlanarFace(lower), 1, 0.1, 0.5), new SnappedPanel(1, TestGeometry.CreatePlanarFace(upper), 1, 0.1, 0.5) };
+            List<SnappedPanel> levelUp = new List<SnappedPanel> { new SnappedPanel(0, TestGeometry.CreatePlanarFace(lower), 1, 0.1, 0.5), new SnappedPanel(1, TestGeometry.CreatePlanarFace(upper), 1, 0.1, 0.5) };
+
+            bool movedWorldZ = Panel3DSnapSolver.Snap(worldZ, 0.1, 0.01, alignColinearOffset: MaxOffset);
+            bool movedLevelUp = Panel3DSnapSolver.Snap(levelUp, 0.1, 0.01, alignColinearOffset: MaxOffset, up: LevelUp());
+
+            Assert.True(movedWorldZ);
+            Assert.False(movedLevelUp);
+        }
+
+        [Fact]
+        public void AbutsColinearWithin_UpAlongTheWallNormal_DoesNotThrowAndIgnoresTheUpSign()
+        {
+            // No run exists across an up axis normal to the wall: it reads like a cap, through the plane frame.
+            SnappedPanel a = Presentations(Rect(0, 0, 5, 0, 0, 3))[0];
+            SnappedPanel b = Presentations(Rect(5, 0, 10, 0, 0, 3), 1)[0];
+
+            Assert.Equal(a.AbutsColinearWithin(b, MaxOffset, Tolerance, new Vector3D(0, 1, 0)), a.AbutsColinearWithin(b, MaxOffset, Tolerance, new Vector3D(0, -1, 0)));
         }
     }
 }

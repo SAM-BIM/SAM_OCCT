@@ -558,7 +558,7 @@ namespace SAM.Geometry.OCCT.Solver
             List<CleanRecord> cleanRecordSink = new List<CleanRecord>();
             SnapStage.Result snapResult = InputAlreadyClean
                 ? BuildConditionOnlyResult(SnappedPanels, maxExtensions_Adjusted, snapSourceMap)
-                : SnapStage.Clean(SnappedPanels, tolerances, AlignColinearOffset, NormalizeCapOffset, Diagnostics, snapSourceMap, BucketBetweenLevels, cleanRecordSink, DoubleWallGap);
+                : SnapStage.Clean(SnappedPanels, tolerances, AlignColinearOffset, NormalizeCapOffset, Diagnostics, snapSourceMap, BucketBetweenLevels, cleanRecordSink, DoubleWallGap, Up);
             CleanFace3Ds = snapResult.CleanFace3Ds;
             LevelFrames = snapResult.LevelFrames;
             LevelGroups = snapResult.LevelGroups;
@@ -3147,7 +3147,7 @@ namespace SAM.Geometry.OCCT.Solver
         /// </para>
         /// </summary>
         /// <returns>True when at least one panel moved this pass - the fixed-point loop's convergence signal.</returns>
-        public static bool Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance = Tolerance.Distance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3, List<CleanRecord> records = null)
+        public static bool Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance = Tolerance.Distance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3, List<CleanRecord> records = null, Vector3D up = null)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -3211,7 +3211,7 @@ namespace SAM.Geometry.OCCT.Solver
                     // than the bucket still aligns.
                     bool abut = alignColinearOffset > toleranceDistance
                         && backer.IsVertical(verticalAngleTolerance) && candidate.IsVertical(verticalAngleTolerance)
-                        && backer.AbutsColinearWithin(candidate, alignColinearOffset, toleranceDistance);
+                        && backer.AbutsColinearWithin(candidate, alignColinearOffset, toleranceDistance, up);
 
                     if (!overlap && !abut)
                     {
