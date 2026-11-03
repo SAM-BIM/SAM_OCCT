@@ -135,6 +135,12 @@ namespace SAM.Geometry.OCCT.Solver
         /// group re-unioned with its degenerate inner loops removed, or kept unmerged when that is rejected. Warning, one per
         /// recovered coplanar group, never silent. Appended at the end so existing members keep their ordinal values
         /// (public-enum binary contract).</summary>
-        CoplanarMergeRecovered
+        CoplanarMergeRecovered,
+
+        /// <summary>The native coplanar post-merge of the resolved faces would have lost cells MakerVolume had formed (two rooms
+        /// vanished, or two rooms fused into one cell), so <see cref="PostMergeGuard"/> reverted the merge groups on the lost cells'
+        /// boundary (or all groups) to their pre-merge faces. Warning, once per solve, never silent. Appended at the end so existing
+        /// members keep their ordinal values (public-enum binary contract).</summary>
+        RejectedMerge
     }
 }

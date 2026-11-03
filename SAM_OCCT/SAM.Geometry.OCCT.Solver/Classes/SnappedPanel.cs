@@ -253,6 +253,94 @@ namespace SAM.Geometry.OCCT.Solver
             return maxU >= minU && maxV >= minV;
         }
 
+        /// <summary>The model-up unit axis a wall frame is read against: null when <paramref name="up"/> is null, not a finite
+        /// non-zero vector, or world Z (the default frame, read exactly as before). Sign-normalised to the +Z hemisphere, so
+        /// <c>up</c> and <c>-up</c> give the same frame.</summary>
+        private static Vector3D ModelUp(Vector3D up)
+        {
+            double length = up == null ? double.NaN : up.Length;
+            if (double.IsNaN(length) || double.IsInfinity(length) || length <= Core.Tolerance.Distance)
+            {
+                return null;
+            }
+
+            Vector3D unit = up.Unit;
+            if (unit.Z < 0)
+            {
+                unit = unit.GetNegated();
+            }
+
+            return System.Math.Abs(unit.X) <= 1e-12 && System.Math.Abs(unit.Y) <= 1e-12 ? null : unit;
+        }
+
+        /// <summary>The level-horizontal unit direction along a wall of the given plane normal: (-Ny, Nx, 0) of the unit
+        /// normal for world Z, <c>up x normal</c> for a model-up axis. Null when the normal has no part across the up axis
+        /// (a cap). It depends on the normal alone, not on the face's vertex order, and flips sign with the normal: read
+        /// extents through it only as differences.</summary>
+        private static Vector3D RunAxis(Vector3D normal, Vector3D modelUp)
+        {
+            Vector3D unit = normal?.Unit;
+            if (unit == null)
+            {
+                return null;
+            }
+
+            Vector3D u = modelUp == null ? new Vector3D(-unit.Y, unit.X, 0) : modelUp.CrossProduct(unit);
+            return u.Length <= 1e-9 ? null : u.Unit;
+        }
+
+        /// <summary>
+        /// The 2D bounding extents of <paramref name="face"/>'s external boundary in this panel's wall frame: the run
+        /// (U) along <see cref="RunAxis"/> of this plane's normal, measured from the plane
+        /// origin, and the height (V) along <paramref name="up"/> - world Z when null (the vertical-wall reading
+        /// <see cref="IsVertical(double)"/> already assumes), or the model-up axis of a tilted level, so a level-relative
+        /// height gap stays a gap. Unlike <see cref="FootprintBounds"/> it does not depend on which way the plane's own axes
+        /// point, which follows the face's vertex order. The run axis flips with the normal, so only differences of U are
+        /// meaningful. A plane with no run across the up axis (a cap) reads through <see cref="FootprintBounds"/> as before.
+        /// </summary>
+        private bool RunHeightBounds(Face3D face, Vector3D up, out double minU, out double maxU, out double minV, out double maxV)
+        {
+            Vector3D modelUp = ModelUp(up);
+            Vector3D run = RunAxis(plane.Normal, modelUp);
+            if (run == null)
+            {
+                return FootprintBounds(plane, face, out minU, out maxU, out minV, out maxV);
+            }
+
+            minU = minV = double.MaxValue;
+            maxU = maxV = double.MinValue;
+
+            List<Point3D> point3Ds = BoundaryPoints(face);
+            if (point3Ds == null || point3Ds.Count == 0)
+            {
+                return false;
+            }
+
+            Point3D origin = plane.Origin;
+            foreach (Point3D point3D in point3Ds)
+            {
+                double u;
+                double v;
+                if (modelUp == null)
+                {
+                    u = (point3D.X - origin.X) * run.X + (point3D.Y - origin.Y) * run.Y;
+                    v = point3D.Z;
+                }
+                else
+                {
+                    u = (point3D.X - origin.X) * run.X + (point3D.Y - origin.Y) * run.Y + (point3D.Z - origin.Z) * run.Z;
+                    v = point3D.X * modelUp.X + point3D.Y * modelUp.Y + point3D.Z * modelUp.Z;
+                }
+
+                if (u < minU) { minU = u; }
+                if (u > maxU) { maxU = u; }
+                if (v < minV) { minV = v; }
+                if (v > maxV) { maxV = v; }
+            }
+
+            return maxU >= minU && maxV >= minV;
+        }
+
         /// <summary>
         /// True when <paramref name="other"/> is a near-colinear continuation of this panel offset by no
         /// more than <paramref name="maxOffset"/> perpendicular: parallel (the caller checks that), their
@@ -261,9 +349,19 @@ namespace SAM.Geometry.OCCT.Solver
         /// small perpendicular jog at a step, which should align onto one plane - from genuinely separate
         /// parallel walls (a larger offset, or segments far apart along the run, which stay put). Where
         /// <see cref="OverlapsInPlane"/> collapses a true overlapping double-wall, this closes the end-to-end
-        /// jog the overlap test deliberately leaves alone. Measured in this panel's own plane frame.
+        /// jog the overlap test deliberately leaves alone. Measured in this panel's wall frame (<see cref="RunHeightBounds"/>):
+        /// the run along the level-horizontal axis of its normal and the height along <paramref name="up"/>, so the answer
+        /// does not depend on the order the face's vertices were written in. <paramref name="up"/> is the model-up axis of the
+        /// level the panels sit on (the solver's <c>Up</c>); null, zero, non-finite or world Z reads the height as world Z.
         /// </summary>
         public bool AbutsColinearWithin(SnappedPanel other, double maxOffset, double tolerance)
+        {
+            return AbutsColinearWithin(other, maxOffset, tolerance, (Vector3D)null);
+        }
+
+        /// <summary>As <see cref="AbutsColinearWithin(SnappedPanel, double, double)"/>, with the wall height read along
+        /// <paramref name="up"/> - the model-up axis of the level the panels sit on - instead of world Z.</summary>
+        public bool AbutsColinearWithin(SnappedPanel other, double maxOffset, double tolerance, Vector3D up)
         {
             if (plane == null || face3D == null || other?.plane == null || other.face3D == null)
             {
@@ -275,12 +373,12 @@ namespace SAM.Geometry.OCCT.Solver
                 return false; // offset too large to be the same wall
             }
 
-            if (!FootprintBounds(plane, face3D, out double aMinU, out double aMaxU, out double aMinV, out double aMaxV))
+            if (!RunHeightBounds(face3D, up, out double aMinU, out double aMaxU, out double aMinV, out double aMaxV))
             {
                 return false;
             }
 
-            if (!FootprintBounds(plane, other.face3D, out double bMinU, out double bMaxU, out double bMinV, out double bMaxV))
+            if (!RunHeightBounds(other.face3D, up, out double bMinU, out double bMaxU, out double bMinV, out double bMaxV))
             {
                 return false;
             }

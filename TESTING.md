@@ -1984,3 +1984,30 @@ dotnet test Testing/SAM.OCCT.GrasshopperTests/SAM.OCCT.GrasshopperTests.csproj -
 dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~SewInvalidCellGuardTests|FullyQualifiedName~OcctGlueBandProofTests"
 dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~SewGuardInvalidCellIntegrationTests|FullyQualifiedName~HouseUnderSplitIntegrationTests|FullyQualifiedName~HouseAirAndAtticIntegrationTests"
 ```
+
+## Post-merge guard (`fix/post-merge-guard-q4`, 2026-11-03)
+
+`PostMergeGuard` (`ResolveStage`, managed pipeline) keeps the native coplanar post-merge only if the merged faces still
+decode to every cell MakerVolume formed. Without it, on `two-level-tilted` with the wall-run correction (#87), bucketBetweenLevels
+0 lost both north rooms (161.96 and 83.92 m3) and 0.21 fused the 120.97 and 162.23 m3 rooms into one 283.20 m3 cell, although
+the pre-merge faces decode to all 29 cells.
+
+- `PostMergeGuardTests` (`SAM.OCCT.UnitTests`, 27 cases, managed only). A synthetic row of three cubes with a merged floor and roof:
+  cell matching (identical, vanished, fused, sliver below `MinCellVolume`, tolerance edges, one-to-one); merge groups from a
+  `SourceMap`; boundary ordinals from owners and flat ordinals (no lineage claimed when they do not cover the pre-merge faces);
+  adjacent cells; lineage selection; order-preserving revert (each group at its own position, repaired hop maps every covered face
+  once, refusal when a restored face also feeds a group that stays); the orchestration through an injected decoder (accepted,
+  nothing merged, cannot verify, repaired and warned, widened to the neighbours, fell back, no history map); the new
+  `DiagnosticCode.RejectedMerge` is the highest value.
+- `PostMergeGuardIntegrationTests` (`SAM.OCCT.IntegrationTests`, native-gated, public `Solve3D` with `forceManagedPipeline: true`).
+  `two-level-tilted`, bucket 0: the 161.96 m3 and 83.92 m3 cells exist; bucket 0.21: the 120.97 m3 and 162.23 m3 cells exist and
+  no 283.20 m3 cell; both buckets carry the `RejectedMerge` warning; the other four fixtures (tilted-two-spaces,
+  whole-level-tilted, whole-level-flat, three-spaces) keep their cell count, zero naked points and total volume, with no
+  `RejectedMerge`. Written first: on 560d422 the four guard assertions failed (the other fixtures passed, apart from a rounding slip in the test itself, fixed before the guard was written); all green with the guard.
+
+- `CreateSpacesIntegrationTests`: the refusal test no longer uses `two-level-tilted.sam`, whose managed result now closes (29 cells, 0 naked, 24 spaces); it pins `AdjacencyCluster-home.sam` (6 naked edges, still refused), and `Spaces_TwoLevelTiltedManagedPath_CreatesSpacesNowThatThePostMergeKeepsEveryCell` pins the tilted result.
+
+```powershell
+dotnet test Testing/SAM.OCCT.UnitTests/SAM.OCCT.UnitTests.csproj --filter "FullyQualifiedName~PostMergeGuardTests"
+dotnet test Testing/SAM.OCCT.IntegrationTests/SAM.OCCT.IntegrationTests.csproj --filter "FullyQualifiedName~PostMergeGuardIntegrationTests"
+```
