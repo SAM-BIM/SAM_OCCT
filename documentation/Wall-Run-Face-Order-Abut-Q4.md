@@ -206,4 +206,98 @@ Owner review of this draft. Order of integration: this PR on `sow/2026-Q4`, then
 before promotion out of draft: a disposition for D203 and for the unexplained two-level-tilted solver change, and (separately) whether
 `OverlapsInPlane` / `InPlaneOverlapRatio*` should read the same wall frame. Nothing here authorises a merge or the kink integration.
 
+## Diagnostic: two-level-tilted solver change (2026-11-03; diagnosis only, no code or test change)
+
+Supersedes "unexplained" for this row above. Base `f007824` (tree `fa0`) vs `2cb0d34` (tree `fa1`); frozen native `438089F8` in both (checked
+before and after every run); `Fixtures/two-level-tilted.sam`, `Solve3D(forceManagedPipeline: true)`, default options, `bucketBetweenLevels` 0 and
+0.21; scratch probes only (`probes/Tilted*.cs`, outputs in `trace/tilted/`).
+
+- **Reproduced.** Solver cells / naked: bucket 0 **29 / 8 -> 23 / 14**; bucket 0.21 **33 / 3 -> 23 / 0**. Native results, not sew-rebuild counts.
+- **Earliest stage: Stage A snap.** The only production difference is the abut predicate (b) of `Panel3DSnapSolver.Snap`. Stage A keeps 186 / 183
+  clean faces in both trees, but 15 clean faces change plane position (0.001 to 0.21 m, all walls with normal +-Y), and `snapped-to-backer`
+  records rise 212 -> 228 over the two runs.
+- **Cause: the world-Z wall frame misreads a tilted level.** The fixture is tilted 12.84 deg about Y (level up (-0.222, 0, 0.975)); its stored wall
+  planes carry the tilted frame (`AxisY` = -level up). The base read that stored frame, i.e. the level frame (right for this geometry); the branch
+  reads run = horizontal, height = world Z. Of 1084 vertical, parallel, within-0.3 m pairs, the base equals a level-frame reading in 1084/1084 and
+  the branch equals a world-frame reading in 1084/1084. They differ in **28 directed pairs (14 pairs, 24 panels), all gained, none lost**. Each is a
+  vertically stacked wall pair (an upper-storey piece over the next bay's lower-storey piece): level-frame height overlap **-0.08 m** (the floor
+  gap), but the tilt makes the world-Z bands overlap by 0.7 to 2.7 m, so `AbutsColinearWithin` accepts it. The rule requires overlapping heights,
+  so these are false accepts. Panels: `trace/tilted/affected-panels.txt` (sources S3..S284, both facades, x -3.6 to 49.5).
+- **Presentations (predicate level, native-free, 9 presentations: stored + 2 windings x 4 loop starts, all loops kept).** Branch: 172 abut-true in
+  all nine (invariant, as designed). Base: **144 on the stored frames, 172 on all eight re-created ones** (re-created planes get world-vertical axes;
+  `AxisX` was along the run for all 176 walls in every variant, so this is the tilt of `AxisY`, not an axis swap). So the base's stored-frame
+  answer was right by accident of the stored frames, and a panel the solver moves is rebuilt with a canonical frame, so the base mixes frames
+  mid-solve. Full solver on the 16 re-presented runs (2 buckets x 8): cells / naked **identical on the base and the branch** (e.g. bucket 0:
+  12, 25, 19, 24, 25, 32, 30, 28 cells); re-created clean faces identical. The change exists only on the stored tilted frames.
+- **Cells lost (bucket 0).** Absent on the branch (and one added, (10.8, -22.9, -1.3) 77.65 m3, a room the base has only at bucket 0.21; 26 real cells -> 23): (33.8, -3.4, 7.1) 161.96 m3; (43.5, -3.5, 6.1) 112.01; (38.6, -2.3, 8.2) 83.92;
+  (25.1, -21.9, 2.0) 78.04 (436 m3), plus three slivers (0.46, 0, 0). Four others resize by more than 0.05 m3 ((33.8, -22.6, 7.1) 145.53 -> 161.96,
+  (38.6, -23.7, 8.2) 80.58 -> 84.40, (20.9, -21.8, 1.0) 115.81 -> 113.67, (34.5, -21.5, 4.1) +0.29); the other 14 are unchanged. Total cell volume 4371 -> 4031 m3 (bucket 0.21: 4437 -> 4031; the base had 6 cells under 1 m3, two with
+  non-positive volume). Solved area 5118 -> 4777 m2.
+- **Mutation check (scratch copy of `fa1` only, restored byte-identical to `2cb0d34`; `trace/tilted/MUTATION-scratch.txt`).** Reading the wall
+  frame from the level up axis: up = world Z reproduces the branch exactly (23 / 14, 23 / 0); up = level up gives **27 / 4 and 27 / 0**. It
+  recovers two lost rooms (112.01, 78.04), still lacks 161.96 and 83.92, and adds three south-facade cells absent from the base (120.97, 116.10,
+  77.65). So the 28 pairs account for a large part of the base -> branch move, not all of it, and **neither tree is a verified-complete
+  decomposition**; the repository has no ground-truth cell set for this fixture (the pinned 32 / 32 is stale).
+
+**Classification: REGRESSION, tilted-level specific.** The new reading introduces 28 false cross-storey abuts when a level is tilted: the
+world-Z height is the "vertical-wall reading `IsVertical` already assumes", and `IsVertical` accepts walls up to 20 deg off vertical. The
+revision-2 matrix covers leaning walls to 3 deg only, so 12.84 deg was not tested. The base is not a correct reference either (frame-dependent,
+144 vs 172), so the 29 -> 23 count is not itself the measure of harm. **Recommendation: REVISE.**
+
+**Single smallest next action:** give `RunHeightBounds` / `AbutsColinearWithin` an optional level-up axis (default world Z, so every existing result
+is unchanged) and pass the solver's existing `Up` through `SnapStage` to `Snap`, with one unit test: a stacked pair on a 12.84 deg level
+(height gap 0.08 m) must not abut.
+
+**Not established:** which step after Stage A drops each of the four rooms (not traced per room); whether the 15 moved clean faces are harmful in
+themselves; behaviour on the other tilted fixtures (`tilted-two-spaces`, `whole-level-tilted`), not measured.
+
+## Correction: model-up axis for the wall height (2026-11-03; local, not pushed)
+
+**Change.** `SnappedPanel.AbutsColinearWithin(other, maxOffset, tolerance, Vector3D up = null)` reads the wall height along `up` and the run
+along `up x normal`. `up` is the solver's existing `Up` (`Solve.ResolveUp` = mean floor normal, else roof normal, else world Z), passed
+`Panel3DSnapSolver.Up` -> `SnapStage.Clean(..., up)` -> `SnapToFixedPoint(..., up)` -> `Panel3DSnapSolver.Snap(..., up)` -> the abut predicate (b). Stage A
+runs before the solver's canonical rotation, so `Up` is in world coordinates there, the same frame as the faces. No new frame type. Null, zero,
+NaN/infinite, world Z (including -Z and an XY part under 1e-12) take the world-Z code path unchanged, so every caller that passes no `up`, and
+every horizontal level, is bit-identical. `up` and `-up` give one frame. An `up` along the wall normal has no run and reads like a cap
+(`FootprintBounds`), as before. `IsVertical`, the 20 deg wall test, the kink rules, Clean3D, wall repair and the tolerances are untouched.
+`SnapStage.Clean` gained `up` as the last parameter of both overloads (the internal one after `coplanarUnion`, to keep 10-argument calls unambiguous).
+
+**Unit tests** (`WallRunFrameTests`, 51 in the class, each over the 192-presentation matrix): stacked pieces on a 12.84 deg level with a 0.08 m
+level gap do not abut (both directions); the same pair abuts under the world-Z reading (guards the fixture); valid abuts, jogs, offset and run limits
+on the tilted level; `-up`; tilts of 5, 20 and -30 deg; horizontal level with `up` = +Z, -Z, 7.5 Z, a 1e-14 tilt, zero, NaN and infinity all equal
+no `up`; `up` along the wall normal does not throw; `Snap` aligns the jogged stacked pair under world Z and leaves it under the level up. Full
+unit project: 1106 passed, 0 failed.
+
+**Native** (tree `%TEMP%\r84\SAM_OCCT_fa2` = branch `2cb0d34` + this change; frozen native `438089F8`, checked in fa0, fa1 and fa2; same fixtures,
+`Solve3D(forceManagedPipeline: true)`, default options; probe `LevelUpCompareProbe`, output `trace/levelup/cmp-fa{0,1,2}.txt`):
+
+| fixture, bucket | base fa0 `f007824` | branch fa1 `2cb0d34` | corrected fa2 |
+|---|---|---|---|
+| two-level-tilted, 0 | 29 cells / 8 naked / 4371.5 m3 | 23 / 14 / 4031.2 | **27 / 4 / 4465.7** |
+| two-level-tilted, 0.21 | 33 / 3 / 4436.8 | 23 / 0 / 4031.2 | **27 / 0 / 4711.6** |
+| tilted-two-spaces, 0 and 0.21 | 2 / 0 / 723.65 | same | same |
+| whole-level-tilted, 0 and 0.21 | 22 / 0 / 3377.8 | same | same |
+| whole-level-flat, three-spaces | 22 / 0 / 3479.9; 3 / 0 / 264.8 | same | same |
+
+- **Predicate evidence (`LevelUpPairProbe`, `trace/levelup/pairs-fa*.txt`).** Over 2344 directed vertical, parallel, within-0.3 m pairs of the 287
+  sources of two-level-tilted: a direct level-frame reading accepts 406. fa0 accepts 406, fa1 499 (93 false accepts, all with level height overlap
+  -0.08 m), fa2 **406 with 0 disagreements** with the reference.
+- **Lost rooms (bucket 0, base -> fa1 -> fa2).** (43.5,-3.5,6.1) 112.01 m3 and (25.1,-21.9,2.0) 78.04 m3 **recover** (112.01; 78.94, the base's
+  78.04 and 78.56 pair resized to 78.94 + 78.94). (33.8,-3.4,7.1) 161.96 m3 and (38.6,-2.3,8.2) 83.92 m3 **do not recover**: absent in all of
+  fa1 and fa2, as the mutation check predicted. Their absence is not traced to a stage here.
+- **New geometry versus the base (bucket 0).** Three cells the base lacks at bucket 0: 116.10 (29.2,-21.4,2.9), 120.97 (20.3,-22.5,4.0),
+  77.65 (10.8,-22.9,-1.3, a room the base has at bucket 0.21). Resized: 145.53 -> 161.96 at (33.8,-22.6,7.1), 80.58 -> 84.39, 82.62 -> 84.00,
+  150.12 -> 152.75, and the 610.1 hall -> 610.32. Four base slivers (volume 0 to 0.46) are gone. These are consistent with the level-frame reading
+  but **no ground-truth cell set exists for this fixture**, so the new cells are not independently verified rooms. Naked 4 at bucket 0 remains
+  (8 on the base).
+- **Softhouse F/R smoke** (`chains/fa2-{F,R}`, `softhouse.sh <dir> <dirs> [REVFACES=1]`): F 72 spaces, 48 of 70 good; R 72 spaces, 45 of 70
+  good. `panels.json`, `panels_clean.json`, `panels_extended.json` equal fa1 once GUIDs are masked; `good.tsv` is byte-identical. Not changed.
+- **Native integration (502 tests incl. 6 skipped probes).** 25 failed in fa0, fa1 and fa2 alike: the same set (stale pins, not repinned). Moved
+  values: `TiltedLevel_UnchangedByPlaneTarget` 29 / 23 / **27** (pin 32); two-level-tilted golden masters 13 / 19 / **17** (raw, pin 15) and 16 / 20 / **23**
+  (021, pin 9); `Face3DHome_Parity` 15 / 20 / 20. Grasshopper tests 38 passed.
+
+**Recommendation: TEST.** The false accepts are gone and the predicate agrees with the level frame on
+all 2344 pairs, horizontal levels and Softhouse are unchanged. Two of the four lost rooms are still absent and 3 cells are new, with no
+ground truth: owner review of the remaining tilted differences (the 161.96 and 83.92 m3 rooms) before promotion out of draft. Not pushed.
+
 Generated by Michal Dengusiak and CodeClaude
