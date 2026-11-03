@@ -573,25 +573,30 @@ namespace SAM.Geometry.OCCT.Solver
                 return null;
             }
 
-            GeometryCreate.Shells(valid, out OcctCellComplexResult native, options);
-            if (native == null)
+            List<Shell> shells = GeometryCreate.Shells(valid, out OcctCellComplexResult native, options);
+            try
+            {
+                return SignaturesOf(shells, native);
+            }
+            finally
+            {
+                native?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// The cell signatures of a verification build, or null when the build could not verify anything. A build that fails
+        /// inside the kernel returns null shells while the library itself is available (<c>NativeAvailable</c> true), so the
+        /// return value is checked as well as the availability: a failed build is a failed verification, not a decode of zero cells.
+        /// </summary>
+        internal static List<CellSignature> SignaturesOf(List<Shell> shells, OcctCellComplexResult native)
+        {
+            if (shells == null || native == null || !native.NativeAvailable)
             {
                 return null;
             }
 
-            try
-            {
-                if (!native.NativeAvailable)
-                {
-                    return null;
-                }
-
-                return CellSignature.From(ResolvedCellComplex.Project(native, null, Guid.Empty));
-            }
-            finally
-            {
-                native.Dispose();
-            }
+            return CellSignature.From(ResolvedCellComplex.Project(native, null, Guid.Empty));
         }
 
         // ---- Diagnostics ----

@@ -87,6 +87,24 @@ Run `dotnet test <project> -c Release --no-restore --disable-build-servers -m:1`
 project. For integration add `--filter 'FullyQualifiedName~PostMergeGuardIntegrationTests|FullyQualifiedName~Spaces_TwoLevelTiltedManagedPath_CreatesSpaces|FullyQualifiedName~Spaces_AdjacencyClusterHomeManagedPath_RefusesWithDiagnostics'`.
 Machine-local logs and TRX files are in `build/pr88-guard-review-evidence/`.
 
+## Second review revision: failed builds and missing history (2026-11-03)
+
+Two paths still lived outside the first revision's null-decode handling:
+- `DecodeSignatures` ignored the return of `GeometryCreate.Shells`. A kernel build failure returns null shells while `NativeAvailable` stays true, so
+  the guard saw "zero cells"; with no protected cell (every initial cell below `MinCellVolume`) it accepted the unverified merge. `SignaturesOf` now returns
+  null (unverified) when the shells are null, the result is null or the library is unavailable, which takes the restore-and-warn path.
+- `ResolveStage` composed the guard's repaired hop and then read `postMergeHistory.MaxTolerance`, a null dereference when the native merge captured no
+  history. The composition is now `ResolveStage.TryComposePostMerge`: repaired hop, else the kernel history, else unusable; the merge tolerance is
+  carried only when the history exists.
+
+Tests added (unit, managed): `SignaturesOf` for a failed build, an unavailable library and no result; `Evaluate` with an unverified decode and nothing to
+protect restores the pre-merge faces with one `RejectedMerge` warning; `TryComposePostMerge` for a repaired hop without kernel history, no hop and no history,
+and kernel history carrying its tolerance.
+Validation (frozen native `438089F8`, checked before and after; APPDATA redirected): unit 1140 / 1140 on the second full run (the first run had one failure,
+`Panel3DSnapSolverTests.Extend_LevelCeilingVsPitchedRoof_RoutesScalarVsPlaneOps`, which reads the static `SnappedPanel.PlaneOpsExtendCount`; it passes alone, twice,
+and in the rerun, so it looks order/parallelism dependent and is unrelated); focused integration 10 / 10 (both buckets through `Solve3D`, diagnostics, controls,
+tilted Spaces, AdjacencyCluster-home refusal). The full native suite and PR checks on the final head are still to be run.
+
 ## Owner decision on Softhouse D203 (2026-11-03)
 
 Accepted as a known limitation for the combined #87/#88 change. The as-stored D203 result remains closed at 43.68 m³.

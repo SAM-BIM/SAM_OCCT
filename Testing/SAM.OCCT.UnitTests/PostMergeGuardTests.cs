@@ -544,5 +544,113 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal((int)DiagnosticCode.RejectedMerge, highest);
             Assert.True((int)DiagnosticCode.RejectedMerge > (int)DiagnosticCode.CoplanarMergeRecovered);
         }
+
+        [Fact]
+        public void SignaturesOf_BuildFailedWhileNativeAvailable_IsUnverified()
+        {
+            // Arrange - the kernel loaded but the build failed: Shells returns null and the result still reports the library as available.
+            using (OcctCellComplexResult native = new OcctCellComplexResult { NativeAvailable = true })
+            {
+                // Act
+                List<CellSignature> signatures = PostMergeGuard.SignaturesOf(null, native);
+
+                // Assert - null (cannot verify), not an empty list (zero cells, nothing to protect).
+                Assert.Null(signatures);
+            }
+        }
+
+        [Fact]
+        public void SignaturesOf_NativeUnavailableOrNoResult_IsUnverified()
+        {
+            // Arrange
+            using (OcctCellComplexResult missing = new OcctCellComplexResult { NativeAvailable = false })
+            {
+                // Act / Assert
+                Assert.Null(PostMergeGuard.SignaturesOf(new List<Shell>(), missing));
+            }
+
+            Assert.Null(PostMergeGuard.SignaturesOf(new List<Shell>(), null));
+        }
+
+        [Fact]
+        public void Evaluate_UnverifiedDecodeWithNothingToProtect_StillRestoresPreMergeFaces()
+        {
+            // Arrange - every initial cell is below the minimum volume, so a failed decode must not be mistaken for "nothing lost".
+            Row row = BuildRow();
+            ResolvedCellComplex tiny = new ResolvedCellComplex(
+                Guid.Empty,
+                new[] { new ResolvedCell(0, 0.01, new Point3D(0.5, 0.5, 0.5)) },
+                row.Cells.Faces,
+                row.Cells.Adjacencies,
+                null,
+                0);
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
+
+            // Act
+            PostMergeGuard.Result result = PostMergeGuard.Evaluate(row.Pre, row.Merged, row.Hop, tiny, faces => null, diagnostics, 0.05);
+
+            // Assert
+            Assert.Equal(PostMergeGuardOutcome.FellBack, result.Outcome);
+            Assert.Equal(row.Pre, result.Faces);
+            Assert.Single(diagnostics.OfCode(DiagnosticCode.RejectedMerge));
+        }
+
+        [Fact]
+        public void TryComposePostMerge_RepairedHopWithoutKernelHistory_ComposesTheRepairedHop()
+        {
+            // Arrange - the earlier provenance is usable, the native merge captured no history, and verification failed.
+            Row row = BuildRow();
+            PostMergeGuard.Result guard = PostMergeGuard.Evaluate(row.Pre, row.Merged, null, row.Cells, faces => null, new SolverDiagnostics(), 0.05);
+            SourceMap historyMap = PostMergeGuard.IdentityHop(row.Pre.Count);
+            double maxTolerance = 0.5;
+
+            // Act
+            bool usable = ResolveStage.TryComposePostMerge(guard, null, ref historyMap, ref maxTolerance, new SolverDiagnostics());
+
+            // Assert
+            Assert.True(usable);
+            Assert.Equal(0.5, maxTolerance);
+            for (int source = 0; source < row.Pre.Count; source++)
+            {
+                Assert.Equal(source, Assert.Single(historyMap.FacesOf(source)).Value);
+            }
+        }
+
+        [Fact]
+        public void TryComposePostMerge_NoRepairedHopAndNoKernelHistory_LeavesTheMapUnusable()
+        {
+            // Arrange - an accepted merge with no history: there is nothing to compose.
+            Row row = BuildRow();
+            PostMergeGuard.Result guard = PostMergeGuard.Evaluate(row.Pre, row.Merged, null, row.Cells, faces => AllCells(row), new SolverDiagnostics(), 0.05);
+            SourceMap historyMap = PostMergeGuard.IdentityHop(row.Pre.Count);
+            double maxTolerance = 0.5;
+
+            // Act
+            bool usable = ResolveStage.TryComposePostMerge(guard, null, ref historyMap, ref maxTolerance, new SolverDiagnostics());
+
+            // Assert
+            Assert.False(usable);
+            Assert.Null(guard.RepairedHop);
+            Assert.Equal(0.5, maxTolerance);
+        }
+
+        [Fact]
+        public void TryComposePostMerge_KernelHistoryWithoutRepair_CarriesTheMergeTolerance()
+        {
+            // Arrange
+            Row row = BuildRow();
+            PostMergeGuard.Result guard = new PostMergeGuard.Result { Faces = row.Merged };
+            OcctHistory history = new OcctHistory(2, new int[0], new IReadOnlyList<int>[] { new[] { 0 }, new[] { 0 } }, null, 0.02);
+            SourceMap historyMap = PostMergeGuard.IdentityHop(2);
+            double maxTolerance = 0.01;
+
+            // Act
+            bool usable = ResolveStage.TryComposePostMerge(guard, history, ref historyMap, ref maxTolerance, new SolverDiagnostics());
+
+            // Assert
+            Assert.True(usable);
+            Assert.Equal(0.02, maxTolerance);
+            Assert.Equal(0, Assert.Single(historyMap.FacesOf(1)).Value);
+        }
     }
 }

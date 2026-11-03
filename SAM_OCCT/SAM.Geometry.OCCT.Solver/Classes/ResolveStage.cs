@@ -185,16 +185,9 @@ namespace SAM.Geometry.OCCT.Solver
                 // Post-merge adopted: compose its history (build ordinals -> merged ordinals).
                 if (historyUsable)
                 {
-                    SourceMap hop = guard.RepairedHop ?? HistorySourceMap.ToSourceMap(postMergeHistory, Provenance.Resolved, diagnostics);
-                    if (hop == null)
-                    {
-                        historyUsable = false;
-                    }
-                    else
-                    {
-                        historyMap = historyMap.Compose(hop);
-                        result.MaxTolerance = System.Math.Max(result.MaxTolerance, postMergeHistory.MaxTolerance);
-                    }
+                    double maxTolerance = result.MaxTolerance;
+                    historyUsable = TryComposePostMerge(guard, postMergeHistory, ref historyMap, ref maxTolerance, diagnostics);
+                    result.MaxTolerance = maxTolerance;
                 }
             }
 
@@ -273,6 +266,34 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             return map;
+        }
+
+        /// <summary>
+        /// Composes the post-merge hop onto <paramref name="historyMap"/>: the guard's repaired map when it has one, else the
+        /// kernel's history. Returns false (leave the map unusable) when neither exists. The kernel history is null when the
+        /// native merge captured none; the guard's repaired map can exist without it (verification failed, so the pre-merge
+        /// faces were restored), in which case there is no merge tolerance to carry over.
+        /// </summary>
+        internal static bool TryComposePostMerge(
+            PostMergeGuard.Result guard,
+            OcctHistory postMergeHistory,
+            ref SourceMap historyMap,
+            ref double maxTolerance,
+            SolverDiagnostics diagnostics)
+        {
+            SourceMap hop = guard?.RepairedHop ?? HistorySourceMap.ToSourceMap(postMergeHistory, Provenance.Resolved, diagnostics);
+            if (hop == null)
+            {
+                return false;
+            }
+
+            historyMap = historyMap.Compose(hop);
+            if (postMergeHistory != null)
+            {
+                maxTolerance = System.Math.Max(maxTolerance, postMergeHistory.MaxTolerance);
+            }
+
+            return true;
         }
 
         /// <summary>
