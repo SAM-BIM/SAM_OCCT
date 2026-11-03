@@ -134,7 +134,29 @@ namespace SAM.OCCT.IntegrationTests
         }
 
         [SkippableFact]
-        public void Spaces_TwoLevelTiltedManagedPath_RefusesWithDiagnostics()
+        public void Spaces_AdjacencyClusterHomeManagedPath_RefusesWithDiagnostics()
+        {
+            Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
+            string path = Path.Combine(FixturesDirectory, "AdjacencyCluster-home.sam");
+            Skip.IfNot(File.Exists(path), "Fixture not found: " + path);
+
+            // Arrange
+            List<Panel> panels = LoadPanels(path);
+            Assert.NotEmpty(panels);
+
+            // Act - ForceManagedPipeline gives a degraded, non-closed result (18 cells / 6 naked edges) that the closure gate
+            // must refuse rather than turn into spaces. This test used two-level-tilted.sam for that purpose; since PostMergeGuard
+            // keeps every MakerVolume cell the tilted fixture closes (29 cells / 0 naked, see
+            // Spaces_TwoLevelTiltedManagedPath_CreatesSpacesNowThatThePostMergeKeepsEveryCell), so the refusal is pinned on a fixture that is still degraded.
+            AdjacencyCluster spacesCluster = SolverCreate.Spaces(panels, out SolverDiagnostics diagnostics, forceManagedPipeline: true);
+
+            // Assert
+            Assert.Null(spacesCluster);
+            Assert.Contains(diagnostics.All, x => x.Code == DiagnosticCode.SpacesRefused && x.Severity == OcctDiagnosticSeverity.Warning);
+        }
+
+        [SkippableFact]
+        public void Spaces_TwoLevelTiltedManagedPath_CreatesSpacesNowThatThePostMergeKeepsEveryCell()
         {
             Skip.IfNot(NativeProbe.Available, "Native SAM.Occt.Native library is not available.");
             string path = Path.Combine(FixturesDirectory, "two-level-tilted.sam");
@@ -144,13 +166,13 @@ namespace SAM.OCCT.IntegrationTests
             List<Panel> panels = LoadPanels(path);
             Assert.NotEmpty(panels);
 
-            // Act - ForceManagedPipeline exercises the pinned 7-pre managed baseline (29 cells / 29 naked):
-            // a degraded, non-closed result the closure gate must refuse rather than turn into 29 spaces.
+            // Act - the managed pipeline resolves 29 cells with no naked edge (the unguarded post-merge left 27 cells / 4 naked and was refused).
             AdjacencyCluster spacesCluster = SolverCreate.Spaces(panels, out SolverDiagnostics diagnostics, forceManagedPipeline: true);
 
             // Assert
-            Assert.Null(spacesCluster);
-            Assert.Contains(diagnostics.All, x => x.Code == DiagnosticCode.SpacesRefused && x.Severity == OcctDiagnosticSeverity.Warning);
+            Assert.NotNull(spacesCluster);
+            Assert.DoesNotContain(diagnostics.All, x => x.Code == DiagnosticCode.SpacesRefused);
+            Assert.Equal(24, spacesCluster.GetSpaces().Count);
         }
 
         [SkippableFact]

@@ -139,6 +139,9 @@ namespace SAM.Geometry.OCCT.Solver
                 ? new List<Face3D>()
                 : shells.Where(x => x != null).SelectMany(x => x.Face3Ds ?? new List<Face3D>()).Where(x => x != null).ToList();
             OcctHistory cellBuildHistory = cellResult.History;
+
+            // The MakerVolume cells, kept (managed, serialisable) for PostMergeGuard before the native result is released.
+            ResolvedCellComplex initialCells = ResolvedCellComplex.Project(cellResult, null, System.Guid.Empty);
             cellResult.Dispose();
 
             if (resolved.Count == 0)
@@ -174,12 +177,15 @@ namespace SAM.Geometry.OCCT.Solver
             mergeResult?.Dispose();
             if (merged != null && merged.Count != 0)
             {
-                resolved = merged;
+                // The merge is global and can change which faces share a boundary: keep it only if the merged faces still
+                // decode to every cell MakerVolume formed, else revert the groups that cost cells (PostMergeGuard).
+                PostMergeGuard.Result guard = PostMergeGuard.Evaluate(resolved, merged, HistorySourceMap.ToSourceMap(postMergeHistory, Provenance.Resolved, null), initialCells, options, diagnostics);
+                resolved = guard.Faces;
 
                 // Post-merge adopted: compose its history (build ordinals -> merged ordinals).
                 if (historyUsable)
                 {
-                    SourceMap hop = HistorySourceMap.ToSourceMap(postMergeHistory, Provenance.Resolved, diagnostics);
+                    SourceMap hop = guard.RepairedHop ?? HistorySourceMap.ToSourceMap(postMergeHistory, Provenance.Resolved, diagnostics);
                     if (hop == null)
                     {
                         historyUsable = false;
