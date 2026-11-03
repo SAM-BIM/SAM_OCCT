@@ -340,7 +340,14 @@ namespace SAM.Geometry.OCCT.Solver
         /// does not depend on the order the face's vertices were written in. <paramref name="up"/> is the model-up axis of the
         /// level the panels sit on (the solver's <c>Up</c>); null, zero, non-finite or world Z reads the height as world Z.
         /// </summary>
-        public bool AbutsColinearWithin(SnappedPanel other, double maxOffset, double tolerance, Vector3D up = null)
+        public bool AbutsColinearWithin(SnappedPanel other, double maxOffset, double tolerance)
+        {
+            return AbutsColinearWithin(other, maxOffset, tolerance, (Vector3D)null);
+        }
+
+        /// <summary>As <see cref="AbutsColinearWithin(SnappedPanel, double, double)"/>, with the wall height read along
+        /// <paramref name="up"/> - the model-up axis of the level the panels sit on - instead of world Z.</summary>
+        public bool AbutsColinearWithin(SnappedPanel other, double maxOffset, double tolerance, Vector3D up)
         {
             if (plane == null || face3D == null || other?.plane == null || other.face3D == null)
             {

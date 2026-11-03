@@ -536,7 +536,7 @@ namespace SAM.OCCT.UnitTests
             List<SnappedPanel> levelUp = new List<SnappedPanel> { new SnappedPanel(0, TestGeometry.CreatePlanarFace(lower), 1, 0.1, 0.5), new SnappedPanel(1, TestGeometry.CreatePlanarFace(upper), 1, 0.1, 0.5) };
 
             bool movedWorldZ = Panel3DSnapSolver.Snap(worldZ, 0.1, 0.01, alignColinearOffset: MaxOffset);
-            bool movedLevelUp = Panel3DSnapSolver.Snap(levelUp, 0.1, 0.01, alignColinearOffset: MaxOffset, up: LevelUp());
+            bool movedLevelUp = Panel3DSnapSolver.Snap(levelUp, 0.1, 0.01, Tolerance, 20 * (System.Math.PI / 180), MaxOffset, null, LevelUp());
 
             Assert.True(movedWorldZ);
             Assert.False(movedLevelUp);

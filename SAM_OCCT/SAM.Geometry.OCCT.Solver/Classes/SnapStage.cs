@@ -85,8 +85,21 @@ namespace SAM.Geometry.OCCT.Solver
             double alignColinearOffset,
             SolverDiagnostics diagnostics = null,
             int maxIterations = MaxSnapIterations,
-            List<CleanRecord> records = null,
-            Vector3D up = null)
+            List<CleanRecord> records = null)
+        {
+            return SnapToFixedPoint(panels, tolerances, alignColinearOffset, diagnostics, maxIterations, records, (Vector3D)null);
+        }
+
+        /// <summary>As <see cref="SnapToFixedPoint(List{SnappedPanel}, ToleranceBudget, double, SolverDiagnostics, int, List{CleanRecord})"/>,
+        /// with the wall-abut rule reading heights along <paramref name="up"/> (the solver's model-up axis; null keeps world Z).</summary>
+        public static int SnapToFixedPoint(
+            List<SnappedPanel> panels,
+            ToleranceBudget tolerances,
+            double alignColinearOffset,
+            SolverDiagnostics diagnostics,
+            int maxIterations,
+            List<CleanRecord> records,
+            Vector3D up)
         {
             if (panels == null || panels.Count < 2)
             {
@@ -118,8 +131,6 @@ namespace SAM.Geometry.OCCT.Solver
         /// coplanar union. Records source -> clean-face into <paramref name="sourceMap"/> (when supplied) with
         /// <see cref="Provenance.Snapped"/>, and returns the per-face carried MaxExtend. Geometry matches the
         /// legacy CleanBucket exactly (same union call); only the attribution is new.
-        /// <paramref name="up"/> is the model-up axis of the level (the solver's <c>Up</c>) the wall-abut rule reads heights
-        /// along; null keeps world Z.
         /// </summary>
         public static Result Clean(
             List<SnappedPanel> panels,
@@ -130,10 +141,9 @@ namespace SAM.Geometry.OCCT.Solver
             SourceMap sourceMap = null,
             double bucketBetweenLevels = 0.0,
             List<CleanRecord> cleanRecords = null,
-            double doubleWallGap = 0.0,
-            Vector3D up = null)
+            double doubleWallGap = 0.0)
         {
-            return Clean(panels, tolerances, alignColinearOffset, normalizeCapOffset, diagnostics, sourceMap, bucketBetweenLevels, cleanRecords, doubleWallGap, null, up);
+            return Clean(panels, tolerances, alignColinearOffset, normalizeCapOffset, diagnostics, sourceMap, bucketBetweenLevels, cleanRecords, doubleWallGap, null);
         }
 
         /// <summary>As the public <c>Clean</c>, with the step-3 coplanar union supplied.</summary>
@@ -149,8 +159,25 @@ namespace SAM.Geometry.OCCT.Solver
             double bucketBetweenLevels,
             List<CleanRecord> cleanRecords,
             double doubleWallGap,
+            System.Func<List<Face3D>, double, List<Face3D>> coplanarUnion)
+        {
+            return Clean(panels, tolerances, alignColinearOffset, normalizeCapOffset, diagnostics, sourceMap, bucketBetweenLevels, cleanRecords, doubleWallGap, coplanarUnion, (Vector3D)null);
+        }
+
+        /// <summary>As the internal <c>Clean</c> with the coplanar union supplied, with the wall-abut rule reading heights along
+        /// <paramref name="up"/> - the model-up axis of the level (the solver's <c>Up</c>); null keeps world Z.</summary>
+        internal static Result Clean(
+            List<SnappedPanel> panels,
+            ToleranceBudget tolerances,
+            double alignColinearOffset,
+            double normalizeCapOffset,
+            SolverDiagnostics diagnostics,
+            SourceMap sourceMap,
+            double bucketBetweenLevels,
+            List<CleanRecord> cleanRecords,
+            double doubleWallGap,
             System.Func<List<Face3D>, double, List<Face3D>> coplanarUnion,
-            Vector3D up = null)
+            Vector3D up)
         {
             Result result = new Result();
             if (panels == null || panels.Count == 0)
