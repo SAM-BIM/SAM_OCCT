@@ -260,7 +260,12 @@ runs before the solver's canonical rotation, so `Up` is in world coordinates the
 NaN/infinite, world Z (including -Z and an XY part under 1e-12) take the world-Z code path unchanged, so every caller that passes no `up`, and
 every horizontal level, is bit-identical. `up` and `-up` give one frame. An `up` along the wall normal has no run and reads like a cap
 (`FootprintBounds`), as before. `IsVertical`, the 20 deg wall test, the kink rules, Clean3D, wall repair and the tolerances are untouched.
-`SnapStage.Clean` gained `up` as the last parameter of both overloads (the internal one after `coplanarUnion`, to keep 10-argument calls unambiguous).
+**Signatures (revised after review of `e2e7a0c`, which had replaced four public signatures and broke compiled callers).** The pre-PR public
+signatures are restored unchanged and forward with `up = null`: `AbutsColinearWithin(other, maxOffset, tolerance)`, `Panel3DSnapSolver.Snap(..., records)`,
+`SnapStage.SnapToFixedPoint(..., records)` and the public `SnapStage.Clean(..., doubleWallGap)`. The `up`-carrying versions are added beside them as
+overloads with a required `up`, so no call can bind ambiguously: `AbutsColinearWithin(..., up)`, `Snap(..., records, up)`, `SnapToFixedPoint(..., records, up)`.
+The `up` version of `Clean` is internal only (`Clean(..., doubleWallGap, coplanarUnion, up)`, which the solver calls); the internal
+`Clean(..., doubleWallGap, coplanarUnion)` is kept as a forwarder.
 
 **Unit tests** (`WallRunFrameTests`, 51 in the class, each over the 192-presentation matrix): stacked pieces on a 12.84 deg level with a 0.08 m
 level gap do not abut (both directions); the same pair abuts under the world-Z reading (guards the fixture); valid abuts, jogs, offset and run limits
@@ -282,6 +287,11 @@ unit project: 1106 passed, 0 failed.
 - **Predicate evidence (`LevelUpPairProbe`, `trace/levelup/pairs-fa*.txt`).** Over 2344 directed vertical, parallel, within-0.3 m pairs of the 287
   sources of two-level-tilted: a direct level-frame reading accepts 406. fa0 accepts 406, fa1 499 (93 false accepts, all with level height overlap
   -0.08 m), fa2 **406 with 0 disagreements** with the reference.
+- **Lost rooms at bucket 0.21 (base -> fa1 -> fa2; `trace/levelup/c21-fa*.txt`).** **Both north rooms recover**: (33.8,-3.4,7.1) 161.96 m3 and
+  (38.6,-2.3,8.2) 83.92 m3 are present on the base, absent on fa1 and present on fa2, as are the 112.01 and 78.x rooms. At bucket 0.21 fa2 has 27 cells,
+  0 naked (base 33 / 3). The south room at (29.2,-21.4,2.9) 116.10 is new in fa2; 120.97 (20.3,-22.5,4.0) has no separate cell there, and a 283.20 m3 cell at
+  (17.3,-22.6,3.3) matches the combined volume of that room and its neighbour (a merge is plausible, **not verified**; fa2 traces carry no face lineage).
+  Earliest divergence from the base is Stage A wall snapping (changed records near source panels S182 and S228 at both buckets).
 - **Lost rooms (bucket 0, base -> fa1 -> fa2).** (43.5,-3.5,6.1) 112.01 m3 and (25.1,-21.9,2.0) 78.04 m3 **recover** (112.01; 78.94, the base's
   78.04 and 78.56 pair resized to 78.94 + 78.94). (33.8,-3.4,7.1) 161.96 m3 and (38.6,-2.3,8.2) 83.92 m3 **do not recover**: absent in all of
   fa1 and fa2, as the mutation check predicted. Their absence is not traced to a stage here.
@@ -296,8 +306,27 @@ unit project: 1106 passed, 0 failed.
   values: `TiltedLevel_UnchangedByPlaneTarget` 29 / 23 / **27** (pin 32); two-level-tilted golden masters 13 / 19 / **17** (raw, pin 15) and 16 / 20 / **23**
   (021, pin 9); `Face3DHome_Parity` 15 / 20 / 20. Grasshopper tests 38 passed.
 
+**Parallel filter.** The 28 directed pairs that differ between the world-Z reading and the branch are exactly the parallel-filtered subset of the 93
+false accepts the wider `LevelUpPairProbe` counts: that probe checks plane offset but not parallelism, and its other 65 pairs are near-perpendicular and
+cannot reach the solver's abut decision (`Snap` filters on parallelism first).
+
+### Revision after review: forwarding overloads (2026-11-03; local, not pushed)
+
+Tree `%TEMP%\r84\SAM_OCCT_fa3` = branch `2cb0d34` + the corrected `up` change with the restored signatures (frozen native `438089F8`).
+
+- **Binary compatibility.** `%TEMP%\r84\compat\src\Program.cs` is compiled against the **base** `f007824` Solver assembly and calls the eight pre-PR
+  public forms: `AbutsColinearWithin` (3 arguments), `Snap` (3 arguments; named `alignColinearOffset`; 7 arguments with `records`), `SnapToFixedPoint`
+  (3 and 6 arguments), `SnapStage.Clean` (4 and 9 arguments). Run unchanged beside the base assembly, beside the fa3 assembly and beside the `2cb0d34`
+  assembly it prints the same eight results (True x4, 2, 2, 1, 1). Beside the `e2e7a0c` assembly (fa2) it throws
+  `MissingMethodException: ... AbutsColinearWithin(SnappedPanel, Double, Double)`, which is the reviewed defect.
+- **Behaviour unchanged.** Unit project 1106 passed, 0 failed (one test call updated to the explicit `Snap(..., records, up)` form). Native
+  `LevelUpCompareProbe` (all five fixtures, buckets 0 and 0.21) is **line-identical** to the fa2 output (162 lines), so every cell count, naked-edge
+  count, volume and centre in the table above is unchanged by the signature work.
+- **Not changed:** the algorithm, tolerances, `IsVertical`, test pins, PR #84.
+
 **Recommendation: TEST.** The false accepts are gone and the predicate agrees with the level frame on
-all 2344 pairs, horizontal levels and Softhouse are unchanged. Two of the four lost rooms are still absent and 3 cells are new, with no
-ground truth: owner review of the remaining tilted differences (the 161.96 and 83.92 m3 rooms) before promotion out of draft. Not pushed.
+all 2344 pairs, horizontal levels and Softhouse are unchanged. At bucket 0.21 all four lost rooms recover; at bucket 0 the two north rooms (161.96 and
+83.92 m3) are still absent. 3 cells at bucket 0 are new, with no ground truth, and the exact solved boundary fidelity of the recovered rooms is not
+established: owner review of the remaining bucket-0 difference before promotion out of draft. Not pushed.
 
 Generated by Michal Dengusiak and CodeClaude
