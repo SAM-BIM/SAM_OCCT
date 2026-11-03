@@ -55,6 +55,17 @@ Commands: `dotnet test Testing/SAM.OCCT.{UnitTests,IntegrationTests,GrasshopperT
 - **Classifier finding (separate follow-up, not fixed here):** `CellClassifier` (Create.Spaces) marks real rooms Exterior on the guarded two-level-tilted result: 84.9, 161.96, 84, 120.97 and 162.23 m3, all inside the footprint and all in the MakerVolume cell set. The Exterior count depends on the face set it is given: 1 on f007824, 9 on the 560d422 tree, 5 with the guard. The cause is the classifier's own sew-path envelope decode (unstable, 15-17 cells in the captures), not the guard; the closure gate used to hide it by refusing the result. Consequence: the space count of two-level-tilted is not trustworthy and is not pinned. Probe: scratch `ZzRolesProbe` (not committed), which classifies the `Solve3D` cells exactly as `Create.Spaces` does.
 - Environment lesson: `dotnet build` of the Grasshopper test project overwrote `buildSAM.Occt.Native.dll` with a different, smaller native (237 568 bytes, hash `de590ab2`). The first full-suite run and the first Softhouse chains ran on it; every result quoted above for suites and chains was rerun after restoring the frozen `438089F8` (hash checked before and after each run). Do not build the Grasshopper test project after restoring the native.
 
+## Revalidation after dropping the 24-space pin (2026-11-03)
+Tested content `10830fc` (`b5fd1d6` plus the one-line test change; the commit after it changes this record only). Frozen native `438089F8` checked before and after every run; APPDATA redirected.
+- Unit `PostMergeGuard*`: 27 / 27. Focused integration (`PostMergeGuardIntegrationTests` + `CreateSpacesIntegrationTests`): 13 run, 12 passed, 1 failed (`Spaces_TwoLevelTiltedRawPath_ProducesSpacesForInteriorCells`, expected 43 / actual 44, a stale pin that is in the saved 25).
+- Both buckets through public `Solve3D`: `Solve3D_TwoLevelTiltedBucket0_KeepsBothNorthRooms`, `Solve3D_TwoLevelTiltedBucket021_KeepsTheTwoSouthRoomsSeparate` and both `RejectedMerge` diagnostic cases passed; the four control fixtures passed.
+- Full integration on `10830fc`: 25 failed / 478 passed / 2 skipped (505), the failing set identical, test for test, to the saved 25 of `b5fd1d6`.
+- The 25 by group (identical set before and after the guard; no repin made; owner decides repin vs retire per group, after #87):
+  - `GoldenMasterIntegrationTests` 8: cell, face and naked pins from older pipelines (e.g. two-level-tilted 9 -> 19 cells, whole-level-flat faces 219 -> 236, towers 25 -> 27).
+  - `NineSpaceWallCaptureIntegrationTests` 6: rigid-motion invariance (capture 0.45 / 0.55 / 0.65 x translate / rotate Z 45).
+  - `Extend3DPlaneTargetIntegrationTests` 4: plane-target pins (e.g. tilted level 32 -> 29 cells, Revit-home 14 -> 22).
+  - `WorkflowParityIntegrationTests` 4 fixtures; `Extend3DRegressionIntegrationTests` 1 (PR49-Test2 cells 43 -> 42); `PR61Face3DHomeParityTests` 1 (19 -> 20); `CreateSpacesIntegrationTests` 1 (tilted raw path 43 -> 44).
+
 ## Unresolved / risks
 - At 0.21 the repair reverts 12 of 16 merge groups (coarser output: 506 panels vs 474), reported by the warning. A finer repair is possible but was not pursued.
 - The raw-first post-merge (`TryRawResolve`) has the same exposure in principle and is unguarded; no failure observed. Decide on evidence from a raw-path dump before wiring.
