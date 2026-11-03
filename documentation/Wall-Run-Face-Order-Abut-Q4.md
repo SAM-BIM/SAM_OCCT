@@ -284,7 +284,7 @@ unit project: 1106 passed, 0 failed.
 | whole-level-tilted, 0 and 0.21 | 22 / 0 / 3377.8 | same | same |
 | whole-level-flat, three-spaces | 22 / 0 / 3479.9; 3 / 0 / 264.8 | same | same |
 
-- **Predicate evidence (`LevelUpPairProbe`, `trace/levelup/pairs-fa*.txt`).** Over 2344 directed vertical, parallel, within-0.3 m pairs of the 287
+- **Predicate evidence (`LevelUpPairProbe`, `trace/levelup/pairs-fa*.txt`).** Over 2344 directed vertical pairs within 0.3 m plane offset (parallelism not filtered) of the 287
   sources of two-level-tilted: a direct level-frame reading accepts 406. fa0 accepts 406, fa1 499 (93 false accepts, all with level height overlap
   -0.08 m), fa2 **406 with 0 disagreements** with the reference.
 - **Lost rooms at bucket 0.21 (base -> fa1 -> fa2; `trace/levelup/c21-fa*.txt`).** **Both north rooms recover**: (33.8,-3.4,7.1) 161.96 m3 and
@@ -318,7 +318,9 @@ Tree `%TEMP%\r84\SAM_OCCT_fa3` = branch `2cb0d34` + the corrected `up` change wi
   public forms: `AbutsColinearWithin` (3 arguments), `Snap` (3 arguments; named `alignColinearOffset`; 7 arguments with `records`), `SnapToFixedPoint`
   (3 and 6 arguments), `SnapStage.Clean` (4 and 9 arguments). Run unchanged beside the base assembly, beside the fa3 assembly and beside the `2cb0d34`
   assembly it prints the same eight results (True x4, 2, 2, 1, 1). Beside the `e2e7a0c` assembly (fa2) it throws
-  `MissingMethodException: ... AbutsColinearWithin(SnappedPanel, Double, Double)`, which is the reviewed defect.
+  `MissingMethodException: ... AbutsColinearWithin(SnappedPanel, Double, Double)`, which is the reviewed defect. Full output and exit codes
+  (0, 0, 0 and non-zero respectively; fa2 reported 127 under Git Bash) are in `evidence/.../compat/result-{base,new,fa1,fa2}.txt`: each of the three
+  passing runs lists all eight calls.
 - **Behaviour unchanged.** Unit project 1106 passed, 0 failed (one test call updated to the explicit `Snap(..., records, up)` form). Native
   `LevelUpCompareProbe` (all five fixtures, buckets 0 and 0.21) is **line-identical** to the fa2 output (162 lines), so every cell count, naked-edge
   count, volume and centre in the table above is unchanged by the signature work.
