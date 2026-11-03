@@ -346,6 +346,26 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void RevertGroups_RestoredFaceFeedsTwoRevertedGroups_RestoresItOnceAtTheFirstPosition()
+        {
+            // Arrange
+            Row row = BuildRow();
+            row.Hop.Record(3, new FaceKey(3), Provenance.Resolved);
+
+            // Act
+            List<Face3D> repaired = PostMergeGuard.RevertGroups(row.Pre, row.Merged, row.Hop, PostMergeGuard.GroupsOf(row.Hop), PostMergeGuard.ForwardOf(row.Hop), new HashSet<int> { 2, 3 }, out SourceMap hop);
+
+            // Assert
+            Assert.Single(repaired, face => ReferenceEquals(face, row.Pre[3]));
+            Assert.Equal(2, Assert.Single(hop.FacesOf(3)).Value);
+            Assert.Equal(new[] { row.Merged[0], row.Merged[1] }.Concat(row.Pre.Skip(3)), repaired);
+            for (int source = 3; source < row.Pre.Count; source++)
+            {
+                Assert.Same(row.Pre[source], repaired[Assert.Single(hop.FacesOf(source)).Value]);
+            }
+        }
+
+        [Fact]
         public void IdentityHop_MapsEachOrdinalToItself()
         {
             // Act
@@ -407,17 +427,29 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
-        public void Evaluate_DecoderCannotVerify_KeepsTheMergeAsTheKernelReturnedIt()
+        public void Evaluate_DecoderCannotVerify_RestoresPreMergeFacesAndWarns()
         {
             // Arrange
             Row row = BuildRow();
+            SolverDiagnostics diagnostics = new SolverDiagnostics();
 
             // Act
-            PostMergeGuard.Result result = PostMergeGuard.Evaluate(row.Pre, row.Merged, row.Hop, row.Cells, faces => null, new SolverDiagnostics(), 0.05);
+            PostMergeGuard.Result result = PostMergeGuard.Evaluate(row.Pre, row.Merged, row.Hop, row.Cells, faces => null, diagnostics, 0.05);
 
             // Assert
-            Assert.Equal(row.Merged, result.Faces);
-            Assert.Null(result.RepairedHop);
+            Assert.Equal(PostMergeGuardOutcome.FellBack, result.Outcome);
+            Assert.Equal(row.Pre, result.Faces);
+            Assert.Equal(result.GroupCount, result.RevertedGroupCount);
+            Assert.Equal(1, result.Decodes);
+            Assert.Empty(result.LostCells);
+            for (int source = 0; source < row.Pre.Count; source++)
+            {
+                Assert.Equal(source, Assert.Single(result.RepairedHop.FacesOf(source)).Value);
+            }
+
+            SolverDiagnostic warning = Assert.Single(diagnostics.OfCode(DiagnosticCode.RejectedMerge));
+            Assert.Equal(OcctDiagnosticSeverity.Warning, warning.Severity);
+            Assert.Contains("could not be verified", warning.Message);
         }
 
         [Fact]

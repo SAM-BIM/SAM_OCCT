@@ -196,7 +196,10 @@ namespace SAM.Geometry.OCCT.Solver
             result.Decodes++;
             if (after == null)
             {
-                return result; // the kernel could not verify: keep the merge exactly as before
+                RestorePreMerge(preMerge, result);
+                diagnostics?.Add(SolverStage.Resolve, DiagnosticCode.RejectedMerge, OcctDiagnosticSeverity.Warning,
+                    "The coplanar merge could not be verified by re-decoding its faces. The pre-merge faces were retained.");
+                return result;
             }
 
             List<CellSignature> lost = FindLostCells(initial, after, minCellVolume);
@@ -233,12 +236,17 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             // Fall back: every group reverted (the pre-merge faces decode to every initial cell by construction).
+            RestorePreMerge(preMerge, result);
+            Report(diagnostics, result);
+            return result;
+        }
+
+        private static void RestorePreMerge(IList<Face3D> preMerge, Result result)
+        {
             result.Faces = preMerge.ToList();
             result.RepairedHop = IdentityHop(preMerge.Count);
             result.RevertedGroupCount = result.GroupCount;
             result.Outcome = PostMergeGuardOutcome.FellBack;
-            Report(diagnostics, result);
-            return result;
         }
 
         private static bool TryRepair(
@@ -470,7 +478,8 @@ namespace SAM.Geometry.OCCT.Solver
 
         /// <summary>
         /// The merged list with each group in <paramref name="revert"/> replaced, at its own position, by its pre-merge faces
-        /// (ascending ordinal); all other merged faces keep their order. <paramref name="repairedHop"/> maps every covered pre-merge
+        /// (ascending ordinal). An input shared by reverted groups is restored only at the first group's position.
+        /// All other merged faces keep their order. <paramref name="repairedHop"/> maps every covered pre-merge
         /// ordinal to its face in the returned list. Null when a restored face also feeds a merged face that stays in the list
         /// (the substitution would cover that area twice).
         /// </summary>
@@ -511,7 +520,12 @@ namespace SAM.Geometry.OCCT.Solver
 
                 foreach (int u in inputsOf[i].OrderBy(x => x))
                 {
-                    newIndexOfRestored[u] = result.Count;
+                    if (newIndexOfRestored.ContainsKey(u))
+                    {
+                        continue;
+                    }
+
+                    newIndexOfRestored.Add(u, result.Count);
                     result.Add(preMerge[u]);
                 }
             }
