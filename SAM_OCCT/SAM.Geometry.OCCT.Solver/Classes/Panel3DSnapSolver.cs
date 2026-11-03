@@ -558,7 +558,7 @@ namespace SAM.Geometry.OCCT.Solver
             List<CleanRecord> cleanRecordSink = new List<CleanRecord>();
             SnapStage.Result snapResult = InputAlreadyClean
                 ? BuildConditionOnlyResult(SnappedPanels, maxExtensions_Adjusted, snapSourceMap)
-                : SnapStage.Clean(SnappedPanels, tolerances, AlignColinearOffset, NormalizeCapOffset, Diagnostics, snapSourceMap, BucketBetweenLevels, cleanRecordSink, DoubleWallGap);
+                : SnapStage.Clean(SnappedPanels, tolerances, AlignColinearOffset, NormalizeCapOffset, Diagnostics, snapSourceMap, BucketBetweenLevels, cleanRecordSink, DoubleWallGap, null, Up);
             CleanFace3Ds = snapResult.CleanFace3Ds;
             LevelFrames = snapResult.LevelFrames;
             LevelGroups = snapResult.LevelGroups;
@@ -3149,6 +3149,13 @@ namespace SAM.Geometry.OCCT.Solver
         /// <returns>True when at least one panel moved this pass - the fixed-point loop's convergence signal.</returns>
         public static bool Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance = Tolerance.Distance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3, List<CleanRecord> records = null)
         {
+            return Snap(panels, toleranceAngle, toleranceArcAngle, toleranceDistance, verticalAngleTolerance, alignColinearOffset, records, (Vector3D)null);
+        }
+
+        /// <summary>As the one-pass <c>Snap</c>, with the wall-abut rule (b) reading heights along <paramref name="up"/> - the
+        /// model-up axis of the level (the solver's <c>Up</c>); null keeps world Z.</summary>
+        public static bool Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance, double verticalAngleTolerance, double alignColinearOffset, List<CleanRecord> records, Vector3D up)
+        {
             if (panels == null || panels.Count < 2)
             {
                 return false;
@@ -3211,7 +3218,7 @@ namespace SAM.Geometry.OCCT.Solver
                     // than the bucket still aligns.
                     bool abut = alignColinearOffset > toleranceDistance
                         && backer.IsVertical(verticalAngleTolerance) && candidate.IsVertical(verticalAngleTolerance)
-                        && backer.AbutsColinearWithin(candidate, alignColinearOffset, toleranceDistance);
+                        && backer.AbutsColinearWithin(candidate, alignColinearOffset, toleranceDistance, up);
 
                     if (!overlap && !abut)
                     {

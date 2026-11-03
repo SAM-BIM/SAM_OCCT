@@ -87,6 +87,20 @@ namespace SAM.Geometry.OCCT.Solver
             int maxIterations = MaxSnapIterations,
             List<CleanRecord> records = null)
         {
+            return SnapToFixedPoint(panels, tolerances, alignColinearOffset, diagnostics, maxIterations, records, (Vector3D)null);
+        }
+
+        /// <summary>As <see cref="SnapToFixedPoint(List{SnappedPanel}, ToleranceBudget, double, SolverDiagnostics, int, List{CleanRecord})"/>,
+        /// with the wall-abut rule reading heights along <paramref name="up"/> (the solver's model-up axis; null keeps world Z).</summary>
+        public static int SnapToFixedPoint(
+            List<SnappedPanel> panels,
+            ToleranceBudget tolerances,
+            double alignColinearOffset,
+            SolverDiagnostics diagnostics,
+            int maxIterations,
+            List<CleanRecord> records,
+            Vector3D up)
+        {
             if (panels == null || panels.Count < 2)
             {
                 return 0;
@@ -98,7 +112,7 @@ namespace SAM.Geometry.OCCT.Solver
             bool anyChanged;
             do
             {
-                anyChanged = Panel3DSnapSolver.Snap(panels, tol.Angle, tol.ArcAngle, tol.Distance, tol.VerticalAngle, alignColinearOffset, records);
+                anyChanged = Panel3DSnapSolver.Snap(panels, tol.Angle, tol.ArcAngle, tol.Distance, tol.VerticalAngle, alignColinearOffset, records, up);
                 iteration++;
             }
             while (anyChanged && iteration < maxIterations);
@@ -147,6 +161,24 @@ namespace SAM.Geometry.OCCT.Solver
             double doubleWallGap,
             System.Func<List<Face3D>, double, List<Face3D>> coplanarUnion)
         {
+            return Clean(panels, tolerances, alignColinearOffset, normalizeCapOffset, diagnostics, sourceMap, bucketBetweenLevels, cleanRecords, doubleWallGap, coplanarUnion, (Vector3D)null);
+        }
+
+        /// <summary>As the internal <c>Clean</c> with the coplanar union supplied, with the wall-abut rule reading heights along
+        /// <paramref name="up"/> - the model-up axis of the level (the solver's <c>Up</c>); null keeps world Z.</summary>
+        internal static Result Clean(
+            List<SnappedPanel> panels,
+            ToleranceBudget tolerances,
+            double alignColinearOffset,
+            double normalizeCapOffset,
+            SolverDiagnostics diagnostics,
+            SourceMap sourceMap,
+            double bucketBetweenLevels,
+            List<CleanRecord> cleanRecords,
+            double doubleWallGap,
+            System.Func<List<Face3D>, double, List<Face3D>> coplanarUnion,
+            Vector3D up)
+        {
             Result result = new Result();
             if (panels == null || panels.Count == 0)
             {
@@ -170,7 +202,7 @@ namespace SAM.Geometry.OCCT.Solver
             // 2. Bucket snap to a FIXED POINT (Phase 2b) - within-bucket near-parallel, in-plane-overlapping
             //    panels onto one backer plane, and align consecutive vertical wall segments offset by a small
             //    step jog, repeated until nothing changes (see SnapToFixedPoint).
-            result.SnapIterationCount = SnapToFixedPoint(panels, tol, alignColinearOffset, diagnostics, MaxSnapIterations, cleanRecords);
+            result.SnapIterationCount = SnapToFixedPoint(panels, tol, alignColinearOffset, diagnostics, MaxSnapIterations, cleanRecords, up);
 
             // 2a. OPT-IN explicit double-wall consolidation (default doubleWallGap = 0 -> skipped, byte-identical):
             //     collapse each residual chain of near-parallel, overlapping vertical walls within the user's

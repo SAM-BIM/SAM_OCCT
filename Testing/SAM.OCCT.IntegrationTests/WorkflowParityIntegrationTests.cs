@@ -20,6 +20,8 @@ using Xunit.Abstractions;
 // above is what brings the MergeCoplanarPanels extension methods (declared in that namespace's
 // Modify class) into scope; Clean3D/Extend3D/Solve3D resolve the same way from .Solver.
 using AnalyticalOcctCreate = SAM.Analytical.OCCT.Create;
+// SAM.Core.OCCT and SAM.Geometry.OCCT both declare a static Query class.
+using GeometryQuery = SAM.Geometry.OCCT.Query;
 
 namespace SAM.OCCT.IntegrationTests
 {
@@ -288,12 +290,82 @@ namespace SAM.OCCT.IntegrationTests
             foreach (string d in workflowB.CellComplexResult?.Diagnostics?.Select(x => x.ToString()) ?? Enumerable.Empty<string>()) { output.WriteLine("[B] " + d); }
 
             // --- Assertions ---
+            // The native solver's own closure first: it does not depend on how the solved faces are presented.
+            AssertSolverInvariants(fixture, report, nakedPoint3Ds, solvedNonAir);
+
             // solver-matched A and B are the two workflows this harness holds to account; A-old is
             // logged for the P1 options-bugfix comparison only, never asserted as "should be correct".
-            AssertWorkflowAgainstExpectation(fixture, "A-solver-matched", workflowAMatched, report.ResolvedCellCount);
-            AssertWorkflowAgainstExpectation(fixture, "B-clean-extend", workflowB, report.ResolvedCellCount);
+            AssertWorkflowAgainstExpectation(fixture, "A-solver-matched", workflowAMatched, report.ResolvedCellCount, output);
+            AssertWorkflowAgainstExpectation(fixture, "B-clean-extend", workflowB, report.ResolvedCellCount, output);
         }
 
+        /// <summary>
+        /// Closure the native solver itself must reach on a fixture, asserted on <c>Solve3D</c>'s own result (resolved
+        /// cells and naked points) and not on a rebuild of its output. Where a fixture's workflow row below is marked
+        /// <see cref="Expectation.SpacesCountIsDiagnostic"/>, this is what holds that fixture to account.
+        /// </summary>
+        private class SolverInvariant
+        {
+            public int ResolvedCells;
+            public int NakedPoints;
+            public string Support;
+        }
+
+        private static readonly Dictionary<string, SolverInvariant> SolverInvariants = new Dictionary<string, SolverInvariant>
+        {
+            // Face3D-home. 20 cells: PR61Face3DHomeParityTests (solver cells=20 executed at base c643b29) and
+            // Extend3DPlaneTargetIntegrationTests (20 cells on the forced managed path, owner decision 2026-07-08).
+            // 0 naked points: the default Solve3D path measured 0 (the managed path's 4 is a different path, pinned there);
+            // documentation/Sew-Guard-Invalid-Cells-Q4.md records Face3D-home solved with 0 naked. Cell volume is not
+            // asserted: 601.30 m3 is recorded there and in every presentation that reaches 20 cells, but it comes from the
+            // same solver, so it is not independent evidence of the enclosed volume.
+            ["Face3D-home.sam"] = new SolverInvariant
+            {
+                ResolvedCells = 20,
+                NakedPoints = 0,
+                Support = "PR61Face3DHomeParityTests (c643b29), Extend3DPlaneTargetIntegrationTests, Sew-Guard-Invalid-Cells-Q4 record"
+            },
+        };
+
+        private static void AssertSolverInvariants(string fixture, Solve3DReport solveReport, List<Point3D> nakedPoint3Ds, List<Panel> solvedNonAir)
+        {
+            if (!SolverInvariants.TryGetValue(fixture, out SolverInvariant invariant))
+            {
+                return;
+            }
+
+            // The solver publishes an empty naked-point list when its own validation produced no report, so an empty
+            // list (or a zero count read from it) is not by itself a closure measurement. Require that the native
+            // resolve ran and the list exists, then re-measure the solved faces with a validation call whose
+            // return value and report are checked.
+            Assert.NotNull(solveReport);
+            Assert.True(solveReport.NativeResolved, fixture + ": the native resolve did not run, so the solver closure was not measured");
+            Assert.NotNull(solveReport.Signature);
+            Assert.NotNull(nakedPoint3Ds);
+
+            int resolvedCells = solveReport.ResolvedCellCount;
+            int nakedPoints = nakedPoint3Ds.Count;
+            Assert.True(resolvedCells == invariant.ResolvedCells && nakedPoints == invariant.NakedPoints,
+                string.Format("{0}: native solver closure is {1} cells / {2} naked points, expected {3} / {4} (support: {5})",
+                    fixture, resolvedCells, nakedPoints, invariant.ResolvedCells, invariant.NakedPoints, invariant.Support));
+
+            // The same faces in the order the solver validated them, with the options it uses: this shows the measurement was
+            // made and agrees with the solver's report. It is not an order-independent invariant - the sewing-based naked-edge
+            // count of the same solved faces depends on list order and loop start (documentation/Wall-Run-Face-Order-Abut-Q4.md).
+            List<Face3D> solvedFace3Ds = solvedNonAir.Select(x => x.GetFace3D()).ToList();
+            Assert.NotEmpty(solvedFace3Ds);
+
+            bool validated = GeometryQuery.Validate(solvedFace3Ds, out OcctValidationReport closureReport, out OcctCellComplexResult closureResult, SolverMatchedOptions(), false);
+            using (closureResult)
+            {
+                Assert.True(validated, fixture + ": validating the solved faces failed: " + string.Join("; ", closureResult?.Diagnostics?.Select(x => x.ToString()) ?? Enumerable.Empty<string>()));
+                Assert.True(closureResult.NativeAvailable, fixture + ": the native validation did not run");
+                Assert.NotNull(closureReport);
+                Assert.True(closureReport.CountOf(OcctValidationIssueCategory.NakedEdge) == invariant.NakedPoints,
+                    string.Format("{0}: independent validation of the solved faces reports {1} naked edge(s), expected {2}",
+                        fixture, closureReport.CountOf(OcctValidationIssueCategory.NakedEdge), invariant.NakedPoints));
+            }
+        }
         private static string FormatWorkflow(WorkflowResult workflowResult)
         {
             if (workflowResult.Cluster == null)
@@ -400,11 +472,15 @@ namespace SAM.OCCT.IntegrationTests
             // (solver 25 -> 20 cells). Both A-solver-matched and B-clean-extend under-close 19 vs 20, parity
             // clean. Matching c643b29 (pre-PR61 baseline) run gives identical 19-vs-20 result, proving the
             // gap is pre-existing (E2 plane-targeting change) and NOT a PR #61 regression.
+            // The 19-vs-20 mismatch this row used to require is not asserted any more: the sewing rebuild's space count
+            // is presentation dependent (the same solved geometry gives 11 to 20 spaces by face order and loop start;
+            // documentation/Wall-Run-Face-Order-Abut-Q4.md, "Face3D-home parity"), and at the sow/2026-Q4 base it was 15, not 19.
+            // The native solver's closure (20 cells, 0 naked) is asserted in SolverInvariants; the count is diagnostic.
             [("Face3D-home.sam", "A-solver-matched")] = new Expectation
             {
-                SpacesMatchResolvedCellCount = false,
+                SpacesCountIsDiagnostic = true,
                 ParityClean = true,
-                TrackingComment = "Face3D-home A-solver-matched under-closes (19 vs 20 solver cells); E2 plane-targeting changed the managed fallback 25 -> 20 cells; parity clean"
+                TrackingComment = "Face3D-home A-solver-matched: sew-rebuild space count is diagnostic only; solver closure asserted in SolverInvariants; parity clean"
             },
             [("Face3D-home.sam", "B-clean-extend")] = new Expectation
             {
@@ -443,19 +519,37 @@ namespace SAM.OCCT.IntegrationTests
         private class Expectation
         {
             public bool SpacesMatchResolvedCellCount = true;
+            /// <summary>The space count of a sewing rebuild of the solver output depends on the order and loop start of the
+            /// faces it is given (same geometry, 11 to 20 spaces on Face3D-home), so it is not a pass/fail criterion where
+            /// this is set: it is written to the test output and <see cref="SpacesMatchResolvedCellCount"/> is not read.</summary>
+            public bool SpacesCountIsDiagnostic;
             public bool ParityClean = true;
             public bool RelationInvariantAcrossMerge = true;
             public string TrackingComment;
         }
 
-        private static void AssertWorkflowAgainstExpectation(string fixture, string workflowName, WorkflowResult workflowResult, int resolvedCellCount)
+        private static void AssertWorkflowAgainstExpectation(string fixture, string workflowName, WorkflowResult workflowResult, int resolvedCellCount, ITestOutputHelper output)
         {
             Expectations.TryGetValue((fixture, workflowName), out Expectation expectation);
             expectation = expectation ?? new Expectation();
 
             bool spacesMatch = workflowResult.Cluster != null && workflowResult.Cluster.GetSpaces()?.Count == resolvedCellCount;
-            Assert.True(spacesMatch == expectation.SpacesMatchResolvedCellCount,
-                string.Format("{0}/{1}: spaces=={2} match expected {3} (tracking: {4})", fixture, workflowName, resolvedCellCount, expectation.SpacesMatchResolvedCellCount, expectation.TrackingComment ?? "none"));
+            if (expectation.SpacesCountIsDiagnostic)
+            {
+                // The count is not asserted, but the rebuild must have succeeded: a failed rebuild must not pass as a diagnostic.
+                Assert.True(workflowResult.Cluster != null && workflowResult.Merged != null && workflowResult.CellComplexResult != null,
+                    string.Format("{0}/{1}: the rebuild produced no cluster, merged cluster or cell-complex result (tracking: {2})", fixture, workflowName, expectation.TrackingComment ?? "none"));
+                Assert.True((workflowResult.Cluster.GetSpaces()?.Count ?? 0) > 0,
+                    string.Format("{0}/{1}: the rebuild produced no spaces (tracking: {2})", fixture, workflowName, expectation.TrackingComment ?? "none"));
+                Assert.True(ParityClean(workflowResult.CellComplexResult) != null,
+                    string.Format("{0}/{1}: the rebuild reported no analytical parity diagnostic (tracking: {2})", fixture, workflowName, expectation.TrackingComment ?? "none"));                output.WriteLine(string.Format("[diagnostic] {0}/{1}: sew-rebuild spaces={2}, solver cells={3} (not asserted; presentation dependent)",
+                    fixture, workflowName, workflowResult.Cluster?.GetSpaces()?.Count ?? -1, resolvedCellCount));
+            }
+            else
+            {
+                Assert.True(spacesMatch == expectation.SpacesMatchResolvedCellCount,
+                    string.Format("{0}/{1}: spaces=={2} match expected {3} (tracking: {4})", fixture, workflowName, resolvedCellCount, expectation.SpacesMatchResolvedCellCount, expectation.TrackingComment ?? "none"));
+            }
 
             bool? parityClean = ParityClean(workflowResult.CellComplexResult);
             if (parityClean != null)
