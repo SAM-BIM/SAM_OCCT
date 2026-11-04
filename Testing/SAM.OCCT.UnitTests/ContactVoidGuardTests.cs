@@ -307,6 +307,27 @@ namespace SAM.OCCT.UnitTests
             Assert.Equal(expected, Releases(thin, thick));
         }
 
+        [Theory]
+        [InlineData(0.0, true)]
+        [InlineData(1e-4, false)]
+        public void Releases_TiltedSkinsThicknessIsMeasuredAlongTheNormal(double shortfall, bool expected)
+        {
+            // Arrange: the thick skin runs 0.3 m either side of the contact offset (slope 0.2), so its certified slab measured along the thin
+            // skin's normal is g / (2 |c|) with |c| = 1 / sqrt(1 + slope^2) = 0.98058, not g / 2. Its certified thickness is chosen so the slabs
+            // touch exactly at the far end of the run (offset 0.324 + 0.3 m): the exact formula admits, a thickness taken as g / 2 would not.
+            const double tilt = 0.3;
+            double slope = 2 * tilt / Run;
+            double c = 1 / System.Math.Sqrt(1 + slope * slope);
+            double gThick = 2 * c * (YThick - YThin + tilt - GThin / 2) - shortfall;
+            Face3D thin = Box(YThin, false, 0, Run);
+            Face3D thick = TiltedBox(YThick, tilt, true, 0, Run);
+            SnappedPanel a = Skin(0, thin, Evidence(thin, GThin));
+            SnappedPanel b = Skin(1, thick, Evidence(thick, gThick));
+
+            // Act & Assert
+            Assert.Equal(expected, Releases(a, b));
+        }
+
         [Fact]
         public void Releases_SlabsOverlapping_True()
         {
