@@ -311,6 +311,16 @@ namespace SAM.Geometry.OCCT.Solver
         public List<double> ConsolidationRanges { get; set; }
 
         /// <summary>
+        /// What was proved about each input panel's source element (index-aligned with the input <c>face3Ds</c>; an entry may be null,
+        /// and a shorter or null list means no evidence for the rest). Supplied by the analytical adapter, which accepts a panel's
+        /// <c>SourceEvidence</c> only when it still describes the panel. With evidence on both panels of an anti-parallel pair, Stage A
+        /// lifts its wall-thickness void guard for a pair whose clipped common region is proved to be in contact
+        /// (<see cref="ContactVoidGuard"/>). Default null: today's behaviour. Only the first Stage A reads it; the panels of every later
+        /// stage are registered without evidence.
+        /// </summary>
+        public List<ContactEvidence> ContactEvidences { get; set; }
+
+        /// <summary>
         /// Max perpendicular offset (metres) within which the floor/roof caps of one level are normalized
         /// onto a single plane. After the bucket snap, near-parallel caps whose planes lie within this band
         /// of one another are all projected onto the dominant (largest-area) cap's plane - the "level plane".
@@ -534,7 +544,7 @@ namespace SAM.Geometry.OCCT.Solver
             List<double> maxExtensions_Adjusted = AdjustListLength(maxExtensions, face3Ds.Count, DEFAULT_MaxExtension);
             List<double> consolidationRanges_Adjusted = AdjustListLength(ConsolidationRanges, face3Ds.Count, 0.0);
 
-            SnappedPanels = Register(face3Ds, bucketSizes_Adjusted, weights_Adjusted, maxExtensions_Adjusted, consolidationRanges_Adjusted);
+            SnappedPanels = Register(face3Ds, bucketSizes_Adjusted, weights_Adjusted, maxExtensions_Adjusted, consolidationRanges_Adjusted, ContactEvidences);
 
             ToleranceBudget tolerances = new ToleranceBudget
             {
@@ -3045,6 +3055,14 @@ namespace SAM.Geometry.OCCT.Solver
                     // (a shaft) and must survive Stage A - the shaft-void fix.
                     if (a.PerpendicularSeparation(b) > OPPOSED_PARTITION_MAX_SEPARATION)
                     {
+                        // Contact proven from the source evidence of both panels (design rev 5): the pair is two skins of one
+                        // solid wall, not the sides of a void. It is not collapsed onto the smaller skin here (and no void is
+                        // reported); the weighted snap below applies its own eligibility and moves both to the midpoint.
+                        if (ContactVoidGuard.Releases(a, b, out string _))
+                        {
+                            continue;
+                        }
+
                         diagnostics?.Add(SolverStage.Snap, DiagnosticCode.RejectedCollapse, OcctDiagnosticSeverity.Info,
                             string.Format("Opposed pair is {0:0.###} m apart (> {1} m wall thickness) - a real void (e.g. a shaft), not collapsed.",
                                 a.PerpendicularSeparation(b), OPPOSED_PARTITION_MAX_SEPARATION),
@@ -3231,8 +3249,11 @@ namespace SAM.Geometry.OCCT.Solver
                     // so any opposing pair reaching here beyond the thickness ceiling bounds real space and must
                     // survive Stage A. IsParallelWith treats anti-parallel as parallel, so without this the
                     // weighted snap would delete the void just like the pre-Phase-2 opposed-collapse did.
+                    // Released only when the pair is eligible through the overlap branch (not merely an abutting jog) AND the
+                    // source evidence of both panels proves contact (design rev 5, ContactVoidGuard).
                     if (backer.Plane.Normal.Unit.DotProduct(candidate.Plane.Normal.Unit) < 0
-                        && backer.PerpendicularSeparation(candidate) > OPPOSED_PARTITION_MAX_SEPARATION)
+                        && backer.PerpendicularSeparation(candidate) > OPPOSED_PARTITION_MAX_SEPARATION
+                        && !(overlap && ContactVoidGuard.Releases(backer, candidate, out string _)))
                     {
                         continue;
                     }
@@ -4588,7 +4609,7 @@ namespace SAM.Geometry.OCCT.Solver
             return rebuiltFaceCount != 0 && rebuiltCellCount >= appendedCellCount && rebuiltNakedEdgeCount <= appendedNakedEdgeCount;
         }
 
-        private static List<SnappedPanel> Register(List<Face3D> face3Ds, List<double> bucketSizes, List<double> weights, List<double> maxExtensions, List<double> consolidationRanges)
+        private static List<SnappedPanel> Register(List<Face3D> face3Ds, List<double> bucketSizes, List<double> weights, List<double> maxExtensions, List<double> consolidationRanges, List<ContactEvidence> contactEvidences = null)
         {
             List<SnappedPanel> panels = new List<SnappedPanel>();
             for (int i = 0; i < face3Ds.Count; i++)
@@ -4600,7 +4621,10 @@ namespace SAM.Geometry.OCCT.Solver
                 }
 
                 double range = consolidationRanges != null && i < consolidationRanges.Count ? consolidationRanges[i] : 0.0;
-                panels.Add(new SnappedPanel(i, face3D, weights[i], bucketSizes[i], maxExtensions[i], range));
+                ContactEvidence contactEvidence = contactEvidences != null && i < contactEvidences.Count ? contactEvidences[i] : null;
+                panels.Add(contactEvidence == null
+                    ? new SnappedPanel(i, face3D, weights[i], bucketSizes[i], maxExtensions[i], range)
+                    : new SnappedPanel(i, face3D, weights[i], bucketSizes[i], maxExtensions[i], range, contactEvidence));
             }
 
             return panels;
