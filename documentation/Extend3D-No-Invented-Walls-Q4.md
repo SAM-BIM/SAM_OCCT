@@ -16,8 +16,10 @@ sow/2026-Q4"). On 2026-11-02 a bounded shallow-junction overshoot correction was
 `d27e440`, not pushed (see "Shallow-junction overshoot"). Dining 4 A107 is closed (see "Dining 4 A107 closure") and the
 Softhouse acceptance gates are proposed, not adopted (see "Proposed Softhouse acceptance gates"). On 2026-11-03 `sow/2026-Q4`
 `e654095` (#87 + #88) was merged in at `1a14dfd` (local, not pushed; **tested content `1a14dfd`**) and re-measured against plain
-Q4; kink cases deferred (see "Merge of sow/2026-Q4 (#87 + #88) and re-measure"). **Merge: NO-GO** (open items
-in "Handover" and "Outstanding defects and blockers"; current next step in "Next step (2026-11-03)"). Step 1 of the Softhouse "Dining 1"
+Q4; kink cases deferred (see "Merge of sow/2026-Q4 (#87 + #88) and re-measure"). On 2026-11-16 `sow/2026-Q4` `83143ca`
+(#89, contact-aware void guard) was merged in at `88915e9` and re-measured against plain Q4, kink still out (**tested content
+`88915e9`**; see "Merge of sow/2026-Q4 (#89) and re-measure (2026-11-16)"). **Merge: NO-GO** (open items
+in "Handover" and "Outstanding defects and blockers"; current next step in "Next step (2026-11-16)"). Step 1 of the Softhouse "Dining 1"
 stage investigation (owner, 2026-10-26: SAM_OCCT Extend3D first, the SAM extraction fix as a separate PR). Revision 2
 answers the independent review of 2026-10-26 (`SAM-BIM/.review-extend3d-revision2-20261026/REVIEW.md`, machine-local:
 REVISE - cap splitting moved the clip level; MaxExtension used as evidence of a junction and of a split level; room
@@ -821,7 +823,7 @@ Manually traced from saved stages, one lookup each. These are not caused by the 
 | Bed 7 D303 | Cell 55 open, 3 naked edges, 0.103 m | not located. R lacks `#370` from extraction (hypothesis only) | not traced |
 | Bed 2 D203 | frozen; `good` passes; split 91 / 9 with Cell 51 / 50 | not located | not traced; new from the split census |
 | Circulation 4 A103 | split 95 / 5 with Cell 1 / 10 | not located | not traced; new from the split census |
-| Kitchen 1 z3.5, Circulation 9 D206 | no space; samples outside every cell. On F they share closed Cell 2, 79.389 m3 | not located | not traced; outside the frozen 48 |
+| Kitchen 1 z3.5, Circulation 9 D206 | no space; samples outside every cell. On F they share closed Cell 2, 79.389 m3 | SAM extraction: `#370` skipped on R; on #84 the west-façade strip it fills stays open (traced 2026-11-16, see "Merge of sow/2026-Q4 (#89) and re-measure") | traced; **upstream of SAM_OCCT**, exposed by #84 |
 
 Extraction differs by `#362 #370 #5 #87` (F only); the snapped set by `#370 #5 #85 #87` (F only). Why `#85` closes up on R was not
 traced.
@@ -1521,10 +1523,120 @@ Evidence (machine-local): `SAM_daily/2026-10-25-Softthouse/handover/evidence/202
 needs `%TEMP%\r84\{SAM,SAM_Solver}`, `%TEMP%\cmg` native set and `tools-2026-10-27-combined`), then `sh scripts/gates.sh
 chains/<run> ../2026-10-27-combined/frozen/good48.tsv`.
 
-## Next step (2026-11-03)
+## Next step (2026-11-03, superseded by "Next step (2026-11-16)")
 
 1. **Owner:** decide the kink frame (port `MeetsAtKink` / `EndLiesOn` to the wall frame, or keep the old frame), then the kink
    runs `#84 + kink` F/R on `1a14dfd` with the same pins.
 2. **Owner:** approve pushing `1a14dfd` and this record (PR stays draft) and starting the D203 trace from `sow/2026-Q4`.
 3. Still open from "Outstanding defects and blockers": gate approval (G1-G5, rule b zero tolerance), the slab-opening blocker
    (G5), SAM `#85`, goldens disposition, review findings, final-head CI, codex check.
+
+## Merge of sow/2026-Q4 (#89) and re-measure (2026-11-16)
+
+**Status.** `origin/sow/2026-Q4` `83143ca` (SAM_OCCT#89, merge `277918b6`, contact-aware void guard) merged into this branch at
+**`88915e9`** (parents `ea9f445`, `83143ca`): clean automatic merge, no conflict, no product change beyond the merge. **Tested
+content: `88915e9`.** Kink rule still out (owner D1 / D2 open). Draft PR SAM-BIM/SAM_OCCT#84; **merge NO-GO**.
+
+**Pins.** SAM `aa1cb777` (merged SAM#230; #89 needs its source-evidence types, so `7c4591cd` can no longer build this branch),
+SAM_Solver `fd63b467`, frozen native `438089F8` / TKBO `1FA732FE` (restored and hash-checked before every suite and chain),
+APPDATA and USERPROFILE redirected, `%APPDATA%\SAM` unchanged. Softhouse inputs, gbXML, frozen 48, `softhouse.sh` and `pipe.exe`
+hashes and chain settings as on 2026-11-03. Plain Q4 re-run fresh at `83143ca` as the control (its product code equals #89's
+tested `5faac61`). The 2026-11-03 isolated roots were gone; a new one was built (`SAM-BIM\_pr84_remeasure_build`, machine-local).
+
+| measure | plain Q4 `83143ca` | #84 merged `88915e9` |
+| --- | --- | --- |
+| unit | 1207 / 1207 | 1332 / 1332 |
+| GrasshopperTests | 38 / 38 | 43 / 43 |
+| native integration (failed / passed / skipped) | 25 / 478 / 2 | 24 / 487 / 2 |
+| Softhouse F: spaces, panels, good of 70, frozen 48 kept | 72, 397, 48, 48 | 58, 351, 48, 47 |
+| Softhouse R: spaces, panels, good of 70, frozen 48 kept | 71, 395, 46, 46 | 56, 345, 46, 45 |
+
+**Control.** Plain-Q4 Softhouse `good.tsv`, `v2_spaces.tsv` and `v2_rooms.tsv` (F and R) are byte-identical to the #89 merged-SAM
+run (`2026-11-16-contact-guard-merged-sam/m2-*`). Plain-Q4 native is per-test identical (outcome and first message line) to the
+#89 baseline `logs-fix/int-fix.trx` (`suites/cmp-q4int3-vs-89baseline.txt`).
+
+**Native, per test.** #84 merged is per-test identical to the 2026-11-03 #84 run `1a14dfd` (same 24 failures, same messages;
+`suites/cmp-pr84m1103-vs-pr84int3.txt`), so #89 + SAM#230 change no native outcome on #84. #84 vs plain Q4, as on 2026-11-03:
+nothing goes Passed -> Failed; WorkflowParity Revit-home goes Failed -> Passed; the towers GoldenMaster managed pin (21) gets 23
+on Q4 and 22 on #84; eight tests exist only on #84 and pass. The known-flaky `Extend_LevelCeilingVsPitchedRoof_RoutesScalarVsPlaneOps`
+passed on both stacks (no rerun needed).
+
+**Effect of #89 + SAM#230 on #84** (against the 2026-11-03 #84 run): F unchanged (`good.tsv` identical). R: **Bed 2 1OG D203
+open(3) -> GOOD** (one closed 43.677 m3 cell, 13 faces, as on plain Q4); the house-D ground floor (Dining 1, Kitchen 1, Circulation
+1) closes (open(3) -> shared(3)); spaces 57 -> 56 (the open D203 cell and its 3.168 m3 strip become one cell). **D203 is closed on
+both stacks**, so it is no longer an R blocker for #84.
+
+**Per room, plain Q4 -> #84** (same on F and R unless stated; `room-diffs.txt`):
+- Bath 7 2OG B302 not (ambiguous) -> GOOD: it absorbs the 19.4 m3 roomless void beside it.
+- Dining 4 A107 GOOD -> not: it joins the open ground floor of houses A to C (Q4 closes it only through the invented wall).
+- Houses A to C ground floor (Dining 2-4, Kitchen 2-4, Circulation 2-4): one open cell, shared(9) (no kink rule).
+- House D ground floor: one closed cell, shared(3) (Dining 1, Kitchen 1, Circulation 1).
+- R only: Kitchen 1 D105-6 z3.5 and Circulation 9 1OG D206 lie in no space (traced below).
+- Not GOOD on both stacks, only the open counts differ: Bed 5 B204, Bed 13 A304, Dining 5 A206, Kitchen 3 / 4 z3.5.
+
+**Proposed gates** (evidence, not acceptance):
+
+| gate | Q4 F | Q4 R | #84 F | #84 R |
+| --- | --- | --- | --- | --- |
+| G1, of 47 | 47 | 45: C109, C203 | 47 | 45: C109, C203 |
+| G2, of 48 | 46: A107, C203 split | 45: A107 split, C109 + C203 shared | 47: A107 open, shared(9) | 45: A107 open, shared(9); C109, C203 shared |
+| G3a, of 18 | 4 | 4 | 5 | 3 |
+| G3b **proxy**, of 20 | 11 (8 fail, 1 not evaluable) | 11 (8, 1) | 17 (3 fail) | 15 (2 fail, 3 not evaluable) |
+| G4 | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| G5 | **FAIL** | **FAIL** | **FAIL** | **FAIL** |
+
+G5: every slab hole is lost Clean3D -> Extend3D on all four runs (F z 0.025 / 3.475 / 6.475: 3 / 8 / 5 -> 0; R z 0.025 / 3.475 /
+6.475 / 9.45: 4 / 6 / 5 / 1 -> 0), plus the invented wall on Q4.
+
+**Spaces #84 has fewer than Q4** (`scripts/classify-spaces.sh`: cells linked by the rooms they host, roomless cells by box within
+0.05 m; Q4 - #84 = sum(cells merged - 1) + cells gone - #84-only cells). Both models reconcile exactly, nothing unclassified, no
+#84-only cell:
+- **F: 72 - 58 = 14 = 7 + 7 - 0.**
+  - Joined, house D ground floor, 3 -> 1, Air-linked rooms of one house; closed, 216.9 m3.
+  - Joined, houses A to C ground floor, 6 -> 1, across houses; open, 99.9 m naked (the kink-rule case).
+  - Gone, 7 roomless cells: four party-wall slivers on the ground floor (0.008 to 0.024 m3, at x -0.92, 4.90, 10.72), two
+    19.4 / 19.5 m3 voids in house B (y 4.89..6.01, first and second floor), one 2.84 m3 strip in house C (first floor).
+- **R: 71 - 56 = 15 = 7 + 8 - 0.** The same joins and the same 7 roomless cells, plus one cell that held rooms: the closed
+  79.389 m3 cell of Kitchen 1 z3.5 and Circulation 9 D206 (house D, first floor).
+
+**Kitchen 1 z3.5 / Circulation 9 D206 on #84 R, traced (read-only; `trace-d1f/`).**
+- OCCT itself builds 56 cells; the 79.389 m3 cell is absent while all six neighbours close with their Q4 volumes, and 10 more
+  faces are envelope faces than on F. The region is open to the exterior in the native build; SAM drops nothing afterwards.
+- Missing face: the west façade (panel 75, x -6.64) has a notch at the room's south-west corner, **y -2.887..-2.434,
+  z 3.45..6.425 (0.45 x 2.98 m)**.
+- First stage: **SAM extraction.** On F, `CreatePanelsBySolids` keeps solid `#370` (a 0.45 x 0.228 m junction block at that
+  corner; kept as a junction block that bridges walls of its thickness) and SnapToJunctions grows its panel over the strip. On R
+  (faces reversed) the same solid is measured as 0.228 m thick over a 0.45 m extent (ratio 0.506) and skipped, so the Clean3D
+  façade has the notch on R only (identical on Q4 R and #84 R).
+- Why only #84 loses the room: Q4's Extend3D fills the notch (mechanism M2, the same fill that invents walls); #84 keeps the
+  outline by design, so the opening stays.
+- Controls (INPANELS rebuild with the #84 build): #84 R panels as saved -> 56 (reproduced; a JSON round trip also 56); Q4's
+  wall 74 into #84 R -> no recovery; #84's wall 74 into Q4 R -> room kept; adding only the strip as a wall to #84 R
+  (`EXTRAWALLS=-6.64,-2.887,-6.64,-2.434,3.45,6.475`) -> 57 spaces, both rooms in one closed 79.389 m3 cell.
+- Disposition: an upstream, presentation-dependent SAM extraction defect (the same family as `#362`, also R-only), exposed by
+  #84's correct no-fill rule. Not fixed here.
+
+**Harness note.** The first native run used an isolated profile without SAM's resources. SAM reads the internal-condition
+library from `MyDocuments\SAM\resources`, which follows the redirected USERPROFILE, so the 9 `HouseAirAndAtticIntegrationTests`
+failed with a NullReferenceException on both stacks. The profile was seeded with a copy of `C:\Users\michal\Documents\SAM\resources`
+and the native suites re-run (`run-int3.out`).
+
+**Not done.** Push, hosted CI at the new head, kink rule (D1 / D2), owner decisions D3 to D7, Grasshopper canvas run, any fix of
+`#370`, G5 or A107.
+
+Evidence (machine-local, copy before switching machines):
+`SAM_daily/2026-10-25-Softthouse/handover/evidence/2026-11-16-pr84-q4-remeasure/` (`README.md`, `run.out`, `run-int3.out`,
+`scripts/` incl. `remeasure.sh`, `native-rerun3.sh`, `classify-spaces.sh`, `gates.sh`; `suites/`, `chains/{q4,pr84}-{F,R}/`,
+`room-diffs.txt`, `classify-{F,R}.txt`, `slabholes.txt`, `trace-d1f/`, `provenance/`). Reproduce (Git Bash): `sh
+scripts/remeasure.sh` (needs `_pr84_remeasure_build` with `SAM/build`, `SAM_Solver/build`, `native-frozen/` and the seeded
+`profile/Documents/SAM/resources`), `sh scripts/native-rerun3.sh`, then `sh scripts/gates.sh chains/<run>
+../2026-10-27-combined/frozen/good48.tsv` and `sh scripts/classify-spaces.sh chains/q4-<F|R> chains/pr84-<F|R>`.
+
+## Next step (2026-11-16)
+
+1. **Owner:** push `88915e9` and this record (PR stays draft); hosted checks at the new head.
+2. **Owner, D1 / D2:** the kink rule (suggested: port to the wall frame, own PR from `sow/2026-Q4`, merged before #84). It
+   decides the houses A to C ground floor (5 of the 14 / 15 fewer spaces) and A107.
+3. **Owner, D3 to D7** on these numbers: gates, G5 slab openings, goldens, A107, naked-edge measure. New input: the R-only
+   house-D first-floor loss is upstream (`#370` extraction), a SAM task, not a #84 change.
+4. Then B5 (code review of the full diff) and B6 (approval for the exact head, codex check, merge).
