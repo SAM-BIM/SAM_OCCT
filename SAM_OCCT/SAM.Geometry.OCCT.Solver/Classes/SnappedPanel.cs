@@ -68,6 +68,8 @@ namespace SAM.Geometry.OCCT.Solver
         /// use the range directly — they only participate when stamped.</summary>
         public double ConsolidationRange { get; private set; }
 
+        private ContactEvidence contactEvidence;
+
         public SnappedPanel(int sourceIndex, Face3D face3D, double weight, double bucketSize, double maxExtension, double consolidationRange = 0.0)
         {
             this.face3D = face3D ?? throw new System.ArgumentNullException(nameof(face3D));
@@ -79,6 +81,51 @@ namespace SAM.Geometry.OCCT.Solver
             Snapped = false;
             SourceIndices = new List<int> { sourceIndex };
             SourceFace3Ds = new List<Face3D> { face3D };
+        }
+
+        /// <summary>
+        /// As the constructor above, additionally carrying the <see cref="ContactEvidence"/> the analytical adapter accepted for
+        /// this source panel (null: no evidence, the panel behaves exactly as without it).
+        /// </summary>
+        public SnappedPanel(int sourceIndex, Face3D face3D, double weight, double bucketSize, double maxExtension, double consolidationRange, ContactEvidence contactEvidence)
+            : this(sourceIndex, face3D, weight, bucketSize, maxExtension, consolidationRange)
+        {
+            this.contactEvidence = contactEvidence;
+        }
+
+        /// <summary>
+        /// The record this panel was registered with, while it still describes the panel; else null. It stops describing the
+        /// panel when: it is incomplete; (d) the panel stands for more than one source (<see cref="Absorb"/>); (c) the panel's
+        /// plane has moved since registration - any vertex of the current boundary farther than
+        /// <see cref="Core.Tolerance.Distance"/> from the record's plane (checked live, so a Stage A snap of 2e-6 invalidates it);
+        /// or its in-plane boundary was rewritten by a grow/extend/trim writer (<see cref="GrowOutward"/>, the
+        /// <c>Adopt</c> family), after which the extraction footprint no longer bounds the panel.
+        /// </summary>
+        internal ContactEvidence LiveContactEvidence
+        {
+            get
+            {
+                if (contactEvidence == null || !contactEvidence.IsComplete || SourceIndices.Count != 1 || face3D == null)
+                {
+                    return null;
+                }
+
+                List<Point3D> point3Ds = BoundaryPoints(face3D);
+                if (point3Ds == null || point3Ds.Count == 0)
+                {
+                    return null;
+                }
+
+                foreach (Point3D point3D in point3Ds)
+                {
+                    if (System.Math.Abs(contactEvidence.Plane.Distance(point3D)) > Core.Tolerance.Distance)
+                    {
+                        return null;
+                    }
+                }
+
+                return contactEvidence;
+            }
         }
 
         /// <summary>The current (possibly snapped) planar boundary.</summary>
@@ -601,6 +648,7 @@ namespace SAM.Geometry.OCCT.Solver
 
             SourceIndices.AddRange(other.SourceIndices);
             SourceFace3Ds.AddRange(other.SourceFace3Ds);
+            contactEvidence = null; // the panel now stands for several sources: no single element's record describes it
         }
 
         /// <summary>The axis-aligned bounds of the current boundary, or null when degenerate.</summary>
@@ -685,6 +733,7 @@ namespace SAM.Geometry.OCCT.Solver
 
             face3D = grown3D;
             plane = grown3D.GetPlane();
+            contactEvidence = null; // the in-plane boundary was rewritten: the extraction footprint no longer bounds the panel
             return true;
         }
 
@@ -2192,6 +2241,7 @@ namespace SAM.Geometry.OCCT.Solver
         {
             face3D = newFace3D;
             plane = newFace3D.GetPlane();
+            contactEvidence = null; // every Adopt caller rewrites the in-plane boundary (grow, extend, trim, move of a run)
         }
 
         private void RecordHoleDrop(int holesBefore, Face3D result, string operation)

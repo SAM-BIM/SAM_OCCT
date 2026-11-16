@@ -149,7 +149,8 @@ namespace SAM.Analytical.OCCT.Solver
                 ForceManagedPipeline = forceManagedPipeline,
                 BucketBetweenLevels = bucketBetweenLevels,
                 DoubleWallGap = doubleWallGap,
-                ConsolidationRanges = ResolveConsolidationRanges(sources)
+                ConsolidationRanges = ResolveConsolidationRanges(sources),
+                ContactEvidences = ResolveContactEvidences(sources)
             };
             solver.Execute(options);
 
@@ -355,7 +356,7 @@ namespace SAM.Analytical.OCCT.Solver
             List<double> effectiveMaxExtends = ResolveMaxExtends(maxExtends, sources, out List<ParameterProvenance> maxExtendProvenance);
             List<ParameterProvenance> bucketProvenance = BucketProvenances(sources, minBucketSize, thicknessFactor);
 
-            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true, AlignColinearOffset = alignColinearOffset, NormalizeCapOffset = normalizeCapOffset, BucketBetweenLevels = bucketBetweenLevels, DoubleWallGap = doubleWallGap, ConsolidationRanges = ResolveConsolidationRanges(sources) };
+            Panel3DSnapSolver solver = new Panel3DSnapSolver(face3Ds, bucketSizes, effectiveWeights, effectiveMaxExtends) { StopAfterClean = true, AlignColinearOffset = alignColinearOffset, NormalizeCapOffset = normalizeCapOffset, BucketBetweenLevels = bucketBetweenLevels, DoubleWallGap = doubleWallGap, ConsolidationRanges = ResolveConsolidationRanges(sources), ContactEvidences = ResolveContactEvidences(sources) };
             solver.Execute(null);
 
             List<string> cleanReportLines = SolverReportFormat.FormatCleanReport(
@@ -486,7 +487,8 @@ namespace SAM.Analytical.OCCT.Solver
                 InputAlreadyClean = inputAlreadyClean,
                 DirectionalCapGrow = directionalCapGrow,
                 DoubleWallGap = doubleWallGap,
-                ConsolidationRanges = ResolveConsolidationRanges(sources)
+                ConsolidationRanges = ResolveConsolidationRanges(sources),
+                ContactEvidences = ResolveContactEvidences(sources)
             };
             solver.Execute(null);
 
@@ -622,7 +624,8 @@ namespace SAM.Analytical.OCCT.Solver
                 InputAlreadyClean = inputAlreadyClean,
                 DirectionalCapGrow = directionalCapGrow,
                 DoubleWallGap = doubleWallGap,
-                ConsolidationRanges = ResolveConsolidationRanges(sources)
+                ConsolidationRanges = ResolveConsolidationRanges(sources),
+                ContactEvidences = ResolveContactEvidences(sources)
             };
             solver.Execute(null);
 
@@ -1005,6 +1008,33 @@ namespace SAM.Analytical.OCCT.Solver
                 }
                 result.Add(range);
             }
+            return result;
+        }
+
+        /// <summary>
+        /// What was proved about each source panel's element, for the contact-aware void guard of Stage A (design rev 5): the
+        /// panel's <see cref="Panel.SourceEvidence"/> when <see cref="Query.ValidSourceEvidence(Panel, double)"/> still accepts it
+        /// (frame and footprint as bound; an edited, moved, flipped or unbound panel has none), else null. This is the one place
+        /// the record is read: the solver gets a plain geometry carrier plus the definite region intersection
+        /// (<see cref="Query.DefiniteIntersection(IEnumerable{Geometry.Planar.Face2D}, IEnumerable{Geometry.Planar.Face2D}, double)"/>),
+        /// the one region operation the guard may use. Index-aligned to <paramref name="sources"/>.
+        /// </summary>
+        internal static List<ContactEvidence> ResolveContactEvidences(List<Panel> sources)
+        {
+            List<ContactEvidence> result = new List<ContactEvidence>();
+            foreach (Panel panel in sources ?? new List<Panel>())
+            {
+                SourceEvidence sourceEvidence = panel?.ValidSourceEvidence();
+                result.Add(sourceEvidence == null
+                    ? null
+                    : new ContactEvidence(
+                        sourceEvidence.Plane,
+                        sourceEvidence.GuaranteedThickness,
+                        sourceEvidence.Support,
+                        sourceEvidence.Origin,
+                        (x, y, tolerance) => Query.DefiniteIntersection(x, y, tolerance)));
+            }
+
             return result;
         }
 

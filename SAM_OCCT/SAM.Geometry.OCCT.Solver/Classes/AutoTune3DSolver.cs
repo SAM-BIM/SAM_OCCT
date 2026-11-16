@@ -87,6 +87,9 @@ namespace SAM.Geometry.OCCT.Solver
         /// merge ranges; stamp a panel's <c>SolverParameter.BucketSize</c> to set its per-panel range).</summary>
         public List<double> ConsolidationRanges { get; set; }
 
+        /// <summary>Threaded to each <see cref="Panel3DSnapSolver.ContactEvidences"/> (per-panel source evidence for the contact-aware void guard).</summary>
+        public List<ContactEvidence> ContactEvidences { get; set; }
+
         // ---- Outputs (mirror Panel3DSnapSolver's public surface for the adopted best-effort result) ----
 
         /// <summary>The adopted resolved output faces (baseline, or the last accepted escalation round).</summary>
@@ -616,6 +619,7 @@ namespace SAM.Geometry.OCCT.Solver
                 DirectionalCapGrow = DirectionalCapGrow,
                 DoubleWallGap = DoubleWallGap,
                 ConsolidationRanges = ConsolidationRanges,
+                ContactEvidences = ContactEvidences,
                 MinCellVolume = tune.MinCellVolume,
                 SewSafetyFactor = tune.SewSafetyFactor,
                 ConsolidateRebuild = tune.ConsolidateRebuild

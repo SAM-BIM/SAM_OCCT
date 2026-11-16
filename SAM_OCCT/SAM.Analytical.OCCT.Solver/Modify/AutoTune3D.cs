@@ -142,7 +142,8 @@ namespace SAM.Analytical.OCCT.Solver
                 FillMargin = fillMargin,
                 DirectionalCapGrow = directionalCapGrow,
                 DoubleWallGap = doubleWallGap,
-                ConsolidationRanges = ResolveConsolidationRanges(sources)
+                ConsolidationRanges = ResolveConsolidationRanges(sources),
+                ContactEvidences = ResolveContactEvidences(sources)
             };
             solver.Execute(options, tune);
 
