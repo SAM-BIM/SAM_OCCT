@@ -195,6 +195,54 @@ namespace SAM.OCCT.UnitTests
             Assert.False(Releases(a, b));
         }
 
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void Releases_OpeningInTheSupportOfOnePanelOnly_FalseInBothOrders(bool openingOnFirst)
+        {
+            // Arrange: a through opening (0.5 m2) in the certified support of ONE panel only. The other panel's support is solid, so the
+            // region has no certified thickness on both sides over the opening. Which panel carries the opening, and which is passed first
+            // (the frame of the first record), must not change the answer.
+            Face3D thin = Box(YThin, false, 0, Run);
+            Face3D thick = Box(YThick, true, 0, Run);
+            Face3D thinSupport = BoxWithOpening(YThin, false, 0, Run, 1.0, 1.5, 0.5, 1.5);
+            Face3D thickSupport = BoxWithOpening(YThick, true, 0, Run, 1.0, 1.5, 0.5, 1.5);
+            SnappedPanel a = Skin(0, thin, Evidence(thin, GThin, support: openingOnFirst ? new[] { thinSupport } : null));
+            SnappedPanel b = Skin(1, thick, Evidence(thick, GThick, support: openingOnFirst ? null : new[] { thickSupport }));
+
+            // Act
+            bool forward = ContactVoidGuard.Releases(a, b, out string reason);
+            bool backward = Releases(b, a);
+
+            // Assert
+            Assert.False(forward, reason);
+            Assert.False(backward);
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void Releases_OpeningInTheOriginOfOnePanelOnly_FalseInBothOrders(bool openingOnFirst)
+        {
+            // Arrange: the origin (the extracted solid's face, unclaimed holes left open) of ONE panel has a large through opening
+            // (5 of 9 m2), so the clipped common region is only 4 m2: 44 % of the larger footprint, below the 0.5 coverage floor. An origin
+            // opening that is dropped when the record is expressed in the other panel's frame would restore full coverage and release.
+            Face3D thin = Box(YThin, false, 0, Run);
+            Face3D thick = Box(YThick, true, 0, Run);
+            Face3D thinOrigin = BoxWithOpening(YThin, false, 0, Run, 0.5, 2.5, 0.25, 2.75);
+            Face3D thickOrigin = BoxWithOpening(YThick, true, 0, Run, 0.5, 2.5, 0.25, 2.75);
+            SnappedPanel a = Skin(0, thin, Evidence(thin, GThin, origin: openingOnFirst ? new[] { thinOrigin } : null));
+            SnappedPanel b = Skin(1, thick, Evidence(thick, GThick, origin: openingOnFirst ? null : new[] { thickOrigin }));
+
+            // Act
+            bool forward = ContactVoidGuard.Releases(a, b, out string reason);
+            bool backward = Releases(b, a);
+
+            // Assert
+            Assert.False(forward, reason);
+            Assert.False(backward);
+        }
+
         [Fact]
         public void Releases_ContactTrimmedAway_False()
         {

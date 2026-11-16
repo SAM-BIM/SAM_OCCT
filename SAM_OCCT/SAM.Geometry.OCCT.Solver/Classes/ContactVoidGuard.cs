@@ -153,14 +153,16 @@ namespace SAM.Geometry.OCCT.Solver
             return true;
         }
 
-        /// <summary>Regions of <paramref name="from"/> expressed in <paramref name="to"/>: through space and orthogonally onto the plane.</summary>
+        /// <summary>Regions of <paramref name="from"/> expressed in <paramref name="to"/>: through space and orthogonally onto the plane.
+        /// Inner loops are kept: a record's support and origin are the producer's regions with their openings, and A's record is used as it is,
+        /// so B's must be too (dropping them made the decision depend on which panel came first).</summary>
         private static List<Face2D> FromFrame(Plane from, IEnumerable<Face2D> face2Ds, Plane to)
         {
             List<Face2D> result = new List<Face2D>();
             foreach (Face2D face2D in face2Ds)
             {
                 Face3D face3D = from.Convert(face2D);
-                List<Face2D> projected = Project(to, face3D);
+                List<Face2D> projected = Project(to, face3D, externalOnly: false);
                 if (projected == null)
                 {
                     return null;
