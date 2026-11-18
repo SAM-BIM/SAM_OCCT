@@ -6,9 +6,10 @@ Record document for the local branch `fix/clean3d-bend-veto-q4`, created 2026-11
 
 ## Current status
 Implemented, tested locally, and independently reviewed locally (ACCEPT WITH CHANGES; the changes are made). Stopped before push/PR, as instructed.
-- Tested content: **`bd198ee`** (implementation `fb52032`, review follow-ups `5a4d63d`, and the leaning-wall false-veto fix `bd198ee`; see
-  [False veto: a run end crossed by a leaning wall](#false-veto-a-run-end-crossed-by-a-leaning-wall-2026-11-18)).
-- The full harness ran on `fb52032`, `5a4d63d` and `bd198ee`. The `bd198ee` fix was not independently reviewed.
+- Tested content: **`69cc255`** (implementation `fb52032`, review follow-ups `5a4d63d`, the leaning-wall false-veto fix `bd198ee` and the
+  collinear-vertex invariance fix `69cc255`; see [False veto: a run end crossed by a leaning wall](#false-veto-a-run-end-crossed-by-a-leaning-wall-2026-11-18)
+  and [Redundant collinear vertices](#redundant-collinear-vertices-2026-11-18)).
+- The full harness ran on `fb52032`, `5a4d63d`, `bd198ee` and `69cc255`. The `bd198ee` and `69cc255` fixes were not independently reviewed.
 - Nothing changes for users until the Grasshopper deploy is rebuilt (not redeployed).
 
 ## What it does
@@ -18,17 +19,19 @@ continuation onto it, which leaves a 3-116 mm step to the next straight piece, s
 
 The veto: a pair that rule (b) **alone** admits (`abut && !overlap`) is left unmoved when **both** of these hold:
 - The move turns the candidate by more than `toleranceArcAngle`, tested as `!candidate.IsParallelWith(backer, toleranceArcAngle)`. A translation is never refused.
-- A run-end boundary segment of the candidate (`SnappedPanel.RunEndSegments`, the solver's model-up wall frame) has a finite contact with a third panel that is
-  near-parallel to it within `toleranceAngle`. Projecting the contact onto the move's target plane would take it off that panel's plane by more than
+- A run-end edge of the candidate (`SnappedPanel.RunEndSegments`, the solver's model-up wall frame) has a finite contact with a third panel that is
+  near-parallel to it within `toleranceAngle`. Since `69cc255` each continuous straight end edge is one segment, however many collinear vertices it carries. Projecting the contact onto the move's target plane would take it off that panel's plane by more than
   `toleranceDistance`.
 
 The target is the plane the existing move gives the candidate: `backer.Plane`, or for an equal-weight pair `SnappedPanel.MidplaneWith`. That is the plane
 `MoveToMidplaneWith` would move the backer to, including its "within tolerance, stay" case.
 
-Contact (`BendVeto.Contact`) is an exact clip of the whole end segment by the third face, kept to the pieces that lie on its plane from end to end:
+Contact (`BendVeto.Contact`) is an exact clip of the whole end segment by the third face, kept to the connected stretches of face material that lie on
+its plane from end to end:
 - The segment is broken at each outline crossing and at each outline vertex lying on it.
 - Each piece is classified with `Face2D.On || Face2D.Inside` (tolerant), so holes, notches and disconnected stretches are respected.
-- A piece counts only if both of its ends are within `toleranceDistance` of the plane (the distance is linear along it). A segment that passes through the
+- Consecutive pieces on the face form one stretch (since `69cc255`; before, each piece was judged alone, so a redundant vertex could split a crossing).
+- A stretch counts only if both of its ends are within `toleranceDistance` of the plane (the distance is linear along it). A segment that passes through the
   plane meets it at one point at any angle (since `bd198ee`; before, the stretch inside the tolerance band counted).
 - Pieces are merged and anything no longer than the tolerance is dropped (`PlanIntervals.Normalise`): a corner touch is no contact.
 
@@ -45,15 +48,17 @@ only), no carry, no connected-run planner, no environment switch and no fixture 
 - The diagnostic `reason` is computed but not recorded. Like the #89 S1 precedent, a refused move leaves no `CleanRecord` or diagnostic: **open owner
   decision** under DIAGNOSTICS_STANDARD.
 
-## Files changed (`a28c8bc..bd198ee`; `bd198ee` itself touches `BendVeto.cs` and the three unit test files marked below)
-- `SAM_OCCT/SAM.Geometry.OCCT.Solver/Classes/BendVeto.cs` (new, internal): `Refuses`, `Contact`.
-- `SAM_OCCT/SAM.Geometry.OCCT.Solver/Classes/SnappedPanel.cs`: internal `MidplaneWith`, `RunEndSegments`.
+## Files changed (`a28c8bc..69cc255`; `bd198ee` touches `BendVeto.cs` and the three unit test files marked below; `69cc255` touches `BendVeto.cs`, `SnappedPanel.cs`, `WallFixtures.cs`, `BendVetoSnapTests.cs` and `BendVetoContactTests.cs`)
+- `SAM_OCCT/SAM.Geometry.OCCT.Solver/Classes/BendVeto.cs` (new, internal): `Refuses`, `Contact` (`69cc255`: connected stretches).
+- `SAM_OCCT/SAM.Geometry.OCCT.Solver/Classes/SnappedPanel.cs`: internal `MidplaneWith`, `RunEndSegments` (`69cc255`: continuous end edges).
 - `SAM_OCCT/SAM.Geometry.OCCT.Solver/Classes/Panel3DSnapSolver.cs`: the gate in `Snap` and a doc paragraph.
 - Unit tests (new):
   - `Testing/SAM.OCCT.UnitTests/WallFixtures.cs`: helpers adapted from the 54efe89 comparison copy, plus shaped outlines and the model-up tilt
-    (`bd198ee`: `Piece.Leaning`, an explicit 3D outline).
-  - `BendVetoSnapTests.cs`: public API only, so it also runs on #84 (`bd198ee`: the `lean` fixture and the direct `Panel3DSnapSolver.Snap` case).
-  - `BendVetoContactTests.cs` (`bd198ee`: leaning-wall contact and refusal, plan-turn and within-tolerance controls)
+    (`bd198ee`: `Piece.Leaning`, an explicit 3D outline; `69cc255`: `Piece.WithVerticesOnEdge`).
+  - `BendVetoSnapTests.cs`: public API only, so it also runs on #84 (`bd198ee`: the `lean` fixture and the direct `Panel3DSnapSolver.Snap` case;
+    `69cc255`: the `lean002*` fixtures and the three-presentation direct `Snap` theory).
+  - `BendVetoContactTests.cs` (`bd198ee`: leaning-wall contact and refusal, plan-turn and within-tolerance controls; `69cc255`: split-outline contact,
+    refusal, `RunEndSegments` at every loop start and the split-end continuation control)
   - `Clean3DBendVetoTests.cs`
 - Native test (new): `Testing/SAM.OCCT.IntegrationTests/BendVetoTwoRoomIntegrationTests.cs`.
 - This record.
@@ -64,9 +69,10 @@ Harness: as `2026-11-19-midplane-candidate`.
 - `safebuild.sh` with redirected seeded profiles; SAM `aa1cb777` and SAM_Solver `fd63b467` build pins; frozen native `438089F8` / TKBO `1FA732FE`.
 - All pins checked OK (`provenance/pins-check.txt`). One native process at a time.
 
-Reproduce: `sh <E>/scripts/run-final.sh <SHA>` (or `run-final-r2.sh`, `run-final-r3.sh`).
+Reproduce: `sh <E>/scripts/run-final.sh <SHA>` (or `run-final-r2.sh`, `run-final-r3.sh`, `run-final-r4.sh`).
 
-`<E>` = `SAM_daily/2026-10-25-Softthouse/handover/evidence/2026-11-19-bend-veto-impl` (machine-local; `r2/` = `5a4d63d`, `r3/` = `bd198ee`).
+`<E>` = `SAM_daily/2026-10-25-Softthouse/handover/evidence/2026-11-19-bend-veto-impl` (machine-local; `r2/` = `5a4d63d`, `r3/` = `bd198ee`,
+`r4/` = `69cc255`).
 
 ### Positive tests, before (#84 `a28c8bc` + the public-API tests only) / after
 | Test | #84 | veto |
@@ -152,6 +158,56 @@ was missing from `r3/scripts` on the first pass. Results:
 - Nine-space / North probes are byte-identical to #84 and to `5a4d63d`.
 - `%APPDATA%\SAM`, the other worktrees, the scratch trees and the branch list are unchanged.
 
+## Redundant collinear vertices (2026-11-18)
+**Reported case.** The `lean` fixture with the third wall leaning 0.02 degrees instead of 1, through `Panel3DSnapSolver.Snap`, in three presentations:
+- the original outlines;
+- redundant vertices at z = 1.499 / 1.501 m on the third wall's meeting edge (x interpolated on that edge);
+- the same vertices on the candidate's meeting edge instead.
+
+All three must snap the run onto the angled piece: nothing holds it, and #84 snaps all three.
+
+**Cause (`bd198ee`).** At 0.02 degrees the run end lies within 1 µm of the third plane over 5.7 mm about z = 1.5. Both inserted vertices are inside that
+band.
+- `Contact` judged each piece between outline breaks alone, so the vertices on the third face made a 2 mm piece with both ends on the plane.
+- `RunEndSegments` returned each outline segment of an end, so the vertices on the candidate made a 2 mm end segment lying on the plane.
+
+Either way the veto reported "meets panel 2 over 0.002 m and would leave its plane by 0.0695 m" and refused the move. The original outlines snapped.
+
+**Fix (`69cc255`, geometry only, local to the veto).**
+- `RunEndSegments`: consecutive outline segments at the same extreme run coordinate that do not turn back form one continuous straight end edge. It is
+  returned as one segment, wherever the loop starts. Non-consecutive pieces (a notched end) stay separate.
+- `Contact`: consecutive pieces inside or on the face are one connected stretch of material, judged against the plane from end to end. Holes, notches and
+  gaps still end a stretch.
+- No new constant or minimum length. The distance tolerance, the 80 mm strip, in-plane contacts and the `bd198ee` crossing rule are unchanged.
+- Limit: a third face whose material genuinely ends inside the band (for example a 2 mm strip within 1 µm of the edge) is still a contact, like any
+  coincident stretch within the tolerance.
+
+**Before (`bd198ee`) / after (`69cc255`), focused (`~BendVeto`, dev copy `_kink_build/SAM_OCCT_bvcol`):** 28 failed / 107 passed, then 135 / 135.
+- Red before the fix:
+  - `Snap_RunEndCrossedByANearlyUprightWallInEveryVertexPresentation_StillMovesTheRunOntoTheAngledPiece`: `lean002` passed; `lean002-third` and
+    `lean002-run` failed (the run stayed off the angled piece);
+  - the presentation theory for `lean002-third` / `lean002-run` x 4 axes x level / 10 degree tilt (16; `lean002` passed in all 8);
+  - `Contact_NearlyUprightLeaningFaceWithRedundantVerticesNearTheCrossing_IsEmpty`;
+  - `Refuses_NearlyUprightLeaningWallWithRedundantVertices_IsNotRefused` (third, candidate: "over 0.002 m");
+  - `RunEndSegments_RedundantVerticesOnAnEnd_GiveOneContinuousSegmentPerEnd` x 6 loop starts (4 segments instead of 2);
+  - `Refuses_ContinuationAtARunEndWithRedundantVertices_IsStillRefusedOverTheWholeEnd` (refused, but over 1.499 m instead of the whole 3 m end).
+- Controls passing before and after:
+  - `Contact_InPlaneFaceWithRedundantVerticesOnTheMeetingEdge_IsTheWholeSegment`;
+  - all earlier fixtures (80 mm strip, opening, notches, notched-end `RunEndSegments`, block, first floor, 1 degree lean, plan turn, within-tolerance edge).
+- On #84 (`_kink_build/SAM_OCCT_bv84col` = `bv84lean` + the new `WallFixtures` / `BendVetoSnapTests`): the 27 `lean002*` cases pass.
+
+**Full harness at `69cc255`** (`sh <E>/scripts/run-final-r4.sh 69cc255`, `<E>/r4`). This is the r3 script with r4 paths, the probe source path fixed and an
+r3 comparison appended. Results:
+- Pins all OK. Unit 1467/1467; GH 43/43; native 24 failed / 488 passed / 2 not executed.
+- Against #84 (`cmp-pr84-vs-bv-*.txt`): no #84 test changed outcome or message. The only differences are added tests (135 unit, 1 native), all passing.
+- Against `bd198ee` (`cmp-r3-vs-r4-*.txt`): unit +38 tests, all passing; GH and native identical.
+- Softhouse F and R `good.tsv` / `v2_spaces.tsv` / `v2_rooms.tsv` are byte-identical to `bd198ee`:
+  - gates F `G1 47/47 G2 48/48 G3a 18/18`, R `G1 45/47 G2 46/48 G3a 16/18`;
+  - A / B / C closed at 207.295 / 207.519 / 208.048; D 216.913 F / 217.02 R; A102 GOOD;
+  - frozen identity vs #84 differs only in the recorded A107 cell.
+- Nine-space / North probes are byte-identical to #84 and to `bd198ee`: capture 0.05 gives 9 cells with North1|North2 adjacent; no capture gives 11 cells.
+- `%APPDATA%\SAM`, the other worktrees, the scratch trees and the branch list are unchanged.
+
 ## Independent review (local, 2026-11-18)
 A fresh read-only reviewer was given `a28c8bc..fb52032` and the specification, not this record. Verdict: **ACCEPT WITH CHANGES, no blockers.**
 
@@ -191,7 +247,7 @@ Findings:
   `tools-2026-10-27-combined`. Copy them before switching machines.
 
 ## Recommended next step
-Owner review of this record and the branch, including the `bd198ee` contact fix (optionally a fresh read-only review of `5a4d63d..bd198ee`). If approved, push `fix/clean3d-bend-veto-q4` to `SAM-BIM/SAM_OCCT` and open a draft PR. The base is the owner's
+Owner review of this record and the branch, including the `bd198ee` and `69cc255` contact fixes (optionally a fresh read-only review of `5a4d63d..69cc255`). If approved, push `fix/clean3d-bend-veto-q4` to `SAM-BIM/SAM_OCCT` and open a draft PR. The base is the owner's
 choice:
 - `fix/extend3d-no-invented-walls-q4`, stacked on #84; or
 - `sow/2026-Q4` after #84 merges, rebased onto the merge.
