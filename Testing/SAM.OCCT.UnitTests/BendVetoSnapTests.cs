@@ -45,6 +45,8 @@ namespace SAM.OCCT.UnitTests
                     return (new[] { Angled(), Piece.Wall("run", BX, 3.85, BX, 5.7, 0, 2.1, 0.5), Piece.Shaped("notched", BX, 5.7, BX, 8, 0.3, (0, 2.1), (0.5, 2.1), (0.5, 0), (2.3, 0), (2.3, 3), (0, 3)) }, new[] { 0 }, new[] { 1 });
                 case "notch-finite": // the same with a 1 m notch: 1.1 m of the run end is held
                     return (new[] { Angled(), Piece.Wall("run", BX, 3.85, BX, 5.7, 0, 2.1, 0.5), Piece.Shaped("notched", BX, 5.7, BX, 8, 0.3, (0, 1.0), (0.5, 1.0), (0.5, 0), (2.3, 0), (2.3, 3), (0, 3)) }, new[] { 0, 1, 2 }, new int[0]);
+                case "lean": // the next piece leans 1 degree about the horizontal line through the run end's mid-height: they cross at z = 1.5 only
+                    return (new[] { Angled(), Piece.Wall("run", BX, 3.85, BX, 5.7, 0, 3, 0.5), Piece.Leaning("leaning", BX, 5.7, 8, 0, 3, 1, 0.3) }, new[] { 0 }, new[] { 1 });
                 default:
                     throw new System.ArgumentException(name);
             }
@@ -99,6 +101,8 @@ namespace SAM.OCCT.UnitTests
         [InlineData("notch", "baseline", 10)] [InlineData("notch", "winding", 10)] [InlineData("notch", "rotation", 10)] [InlineData("notch", "reorder", 10)]
         [InlineData("notch-finite", "baseline", 0)] [InlineData("notch-finite", "winding", 0)] [InlineData("notch-finite", "rotation", 0)] [InlineData("notch-finite", "reorder", 0)]
         [InlineData("notch-finite", "baseline", 10)] [InlineData("notch-finite", "winding", 10)] [InlineData("notch-finite", "rotation", 10)] [InlineData("notch-finite", "reorder", 10)]
+        [InlineData("lean", "baseline", 0)] [InlineData("lean", "winding", 0)] [InlineData("lean", "rotation", 0)] [InlineData("lean", "reorder", 0)]
+        [InlineData("lean", "baseline", 10)] [InlineData("lean", "winding", 10)] [InlineData("lean", "rotation", 10)] [InlineData("lean", "reorder", 10)]
         public void Snap_BendFixtureInEveryPresentation_KeepsHeldPiecesAndMovesFreeOnes(string fixture, string axis, double tilt)
         {
             // Arrange
@@ -111,6 +115,26 @@ namespace SAM.OCCT.UnitTests
 
             // Assert
             Assert.True(failures.Count == 0, fixture + "/" + axis + "/tilt " + tilt + ": " + failures.Count + " presentations failed. First: " + failures.FirstOrDefault());
+        }
+
+        [Fact]
+        public void Snap_RunEndCrossedByALeaningWallAtOneHeight_StillMovesTheRunOntoTheAngledPiece()
+        {
+            // Arrange: the reported case, through the snap pass itself (5 degrees, 0.3 degree arc, 1 um, 0.3 m alignment, 0.4 m bucket
+            // and reach). The leaning wall touches the run end at z = 1.5 only, so nothing holds the run: it is free to snap, as on #84.
+            Piece[] pieces = Fixture("lean").Pieces;
+            List<SnappedPanel> panels = pieces.Select((p, i) => new SnappedPanel(i, TestGeometry.CreatePlanarFace(p.Loop()), p.Weight, 0.4, p.MaxExt)).ToList();
+            Plane angled = panels[0].Plane;
+
+            // Act: passes to the fixed point
+            int passes = 0;
+            while (passes < 20 && Panel3DSnapSolver.Snap(panels, 5 * (System.Math.PI / 180), 0.3 * (System.Math.PI / 180), 1e-6, 20 * (System.Math.PI / 180), 0.3, null))
+            {
+                passes++;
+            }
+
+            // Assert
+            Assert.All(Points(panels[1].Face3D), q => Assert.True(angled.Distance(q) <= Tol, "run point " + V(q) + " is " + F(angled.Distance(q)) + " m off the angled piece"));
         }
 
         [Fact]

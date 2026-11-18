@@ -82,6 +82,67 @@ namespace SAM.OCCT.UnitTests
             Assert.Contains("meets panel 2 over 3 m", reason);
         }
 
+        [Fact]
+        public void Refuses_LeaningWallCrossingTheRunEndAtOneHeight_IsNotRefused()
+        {
+            // Arrange: the next wall leans 1 degree (within the 5 degree angle tolerance) about the horizontal line through the run end's
+            // mid-height, so it meets the run end at z = 1.5 only. Within 1 um of its plane lies 2 um / sin(1 deg) = 0.11 mm of the end
+            // edge: a crossing, not a stretch the edge lies on.
+            SnappedPanel backer = Angled();
+            SnappedPanel candidate = Panel(1, Piece.Wall("run", BX, 3.85, BX, 5.7, 0, 3, 0.5));
+            SnappedPanel leaning = Panel(2, Piece.Leaning("leaning", BX, 5.7, 8, 0, 3, 1, 0.3));
+
+            // Act
+            bool refused = Refuses(candidate, backer, leaning, out string reason);
+
+            // Assert
+            Assert.False(refused, reason);
+        }
+
+        [Fact]
+        public void Contact_SegmentCrossingALeaningFaceAtOnePoint_IsEmpty()
+        {
+            // Arrange: the end edge x = BX, y = 5.7, z 0..3 and a face leaning 1 degree that it crosses at z = 1.5
+            Face3D leaning = TestGeometry.CreatePlanarFace(Piece.Leaning("leaning", BX, 5.7, 8, 0, 3, 1, 0.3).Loop());
+
+            // Act
+            List<(double From, double To)> contact = BendVeto.Contact(new Segment3D(new Point3D(BX, 5.7, 0), new Point3D(BX, 5.7, 3)), leaning, Tol);
+
+            // Assert
+            Assert.Empty(contact);
+        }
+
+        [Fact]
+        public void Contact_SegmentWithinTheDistanceToleranceFromEndToEnd_IsTheWholeSegment()
+        {
+            // Arrange: a 3 m edge running from 0.5 um behind the face's plane to 0.5 um in front of it: it lies on the plane throughout
+            Face3D face = TestGeometry.CreatePlanarFace(Piece.Wall("face", 0, 0, 0, 2, 0, 3, 1).Loop());
+
+            // Act
+            List<(double From, double To)> contact = BendVeto.Contact(new Segment3D(new Point3D(-5e-7, 0, 0), new Point3D(5e-7, 0, 3)), face, Tol);
+
+            // Assert
+            Assert.Single(contact);
+            Assert.Equal(3, contact[0].To - contact[0].From, 6);
+        }
+
+        [Fact]
+        public void Refuses_ContinuationTurnedInPlanAboutTheRunEnd_IsStillRefused()
+        {
+            // Arrange: the next wall turned 1 degree in plan about the run end's vertical edge (a real plan bend): the edge lies on it
+            double a = System.Math.PI / 180;
+            SnappedPanel backer = Angled();
+            SnappedPanel candidate = Panel(1, Piece.Wall("run", BX, 3.85, BX, 5.7, 0, 3, 0.5));
+            SnappedPanel turned = Panel(2, Piece.Wall("turned", BX, 5.7, BX + (2.3 * System.Math.Sin(a)), 5.7 + (2.3 * System.Math.Cos(a)), 0, 3, 0.3));
+
+            // Act
+            bool refused = Refuses(candidate, backer, turned, out string reason);
+
+            // Assert
+            Assert.True(refused);
+            Assert.Contains("meets panel 2 over 3 m", reason);
+        }
+
         private static Face3D WallWithOpening()
         {
             // the plane x = 0, 4 m long and 3 m high, with a 1 x 1 m opening at y 1..2, z 1..2

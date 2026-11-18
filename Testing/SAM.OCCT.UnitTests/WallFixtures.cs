@@ -43,8 +43,30 @@ namespace SAM.OCCT.UnitTests
                 return new Piece { Name = name, X0 = x0, Y0 = y0, X1 = x1, Y1 = y1, Z0 = outline.Min(p => p.Z), Z1 = outline.Max(p => p.Z), Weight = weight, MaxExt = 0.4, Outline = outline };
             }
 
+            /// <summary>Optional explicit 3D outline (overrides the plan line and <see cref="Outline"/>); null otherwise.</summary>
+            public Point3D[] Points3D;
+
+            /// <summary>
+            /// A wall on the plan line x = <paramref name="x"/> from y0 to y1, z0..z1 m high, leaning <paramref name="degrees"/> about the
+            /// horizontal line x = <paramref name="x"/>, z = (z0 + z1) / 2: the bottom edge at x - h tan(a), the top edge at x + h tan(a).
+            /// </summary>
+            public static Piece Leaning(string name, double x, double y0, double y1, double z0, double z1, double degrees, double weight)
+            {
+                double offset = (z1 - z0) / 2.0 * System.Math.Tan(degrees * (System.Math.PI / 180));
+                return new Piece
+                {
+                    Name = name, X0 = x, Y0 = y0, X1 = x, Y1 = y1, Z0 = z0, Z1 = z1, Weight = weight, MaxExt = 0.4,
+                    Points3D = new[] { new Point3D(x - offset, y0, z0), new Point3D(x - offset, y1, z0), new Point3D(x + offset, y1, z1), new Point3D(x + offset, y0, z1) },
+                };
+            }
+
             public Point3D[] Loop()
             {
+                if (Points3D != null)
+                {
+                    return Points3D.Select(p => new Point3D(p.X, p.Y, p.Z)).ToArray();
+                }
+
                 if (Outline == null)
                 {
                     return new[] { new Point3D(X0, Y0, Z0), new Point3D(X1, Y1, Z0), new Point3D(X1, Y1, Z1), new Point3D(X0, Y0, Z1) };
