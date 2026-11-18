@@ -47,9 +47,49 @@ namespace SAM.OCCT.UnitTests
                     return (new[] { Angled(), Piece.Wall("run", BX, 3.85, BX, 5.7, 0, 2.1, 0.5), Piece.Shaped("notched", BX, 5.7, BX, 8, 0.3, (0, 1.0), (0.5, 1.0), (0.5, 0), (2.3, 0), (2.3, 3), (0, 3)) }, new[] { 0, 1, 2 }, new int[0]);
                 case "lean": // the next piece leans 1 degree about the horizontal line through the run end's mid-height: they cross at z = 1.5 only
                     return (new[] { Angled(), Piece.Wall("run", BX, 3.85, BX, 5.7, 0, 3, 0.5), Piece.Leaning("leaning", BX, 5.7, 8, 0, 3, 1, 0.3) }, new[] { 0 }, new[] { 1 });
+                case "lean002": // the same lean at 0.02 degrees: within 1 um of the run end over 5.7 mm about z = 1.5, still one crossing
+                    return (LeanPieces(null), new[] { 0 }, new[] { 1 });
+                case "lean002-third": // with redundant vertices at z 1.499 / 1.501 on the leaning wall's meeting edge
+                    return (LeanPieces("third"), new[] { 0 }, new[] { 1 });
+                case "lean002-run": // with redundant vertices at z 1.499 / 1.501 on the run's meeting edge
+                    return (LeanPieces("candidate"), new[] { 0 }, new[] { 1 });
                 default:
                     throw new System.ArgumentException(name);
             }
+        }
+
+        /// <summary>
+        /// The "lean" fixture at a 0.02 degree lean. <paramref name="split"/>: null as authored, "third" with redundant vertices at
+        /// z 1.499 / 1.501 m on the leaning wall's meeting edge (loop edge 3-0), "candidate" with them on the run's (loop edge 1-2).
+        /// </summary>
+        private static Piece[] LeanPieces(string split)
+        {
+            Piece run = Piece.Wall("run", BX, 3.85, BX, 5.7, 0, 3, 0.5);
+            Piece leaning = Piece.Leaning("leaning", BX, 5.7, 8, 0, 3, 0.02, 0.3);
+            switch (split)
+            {
+                case "third":
+                    leaning = leaning.WithVerticesOnEdge(3, 1.499, 1.501);
+                    break;
+                case "candidate":
+                    run = run.WithVerticesOnEdge(1, 1.499, 1.501);
+                    break;
+            }
+
+            return new[] { Angled(), run, leaning };
+        }
+
+        /// <summary>The snap pass itself, as authored, to the fixed point (5 degrees, 0.3 degree arc, 1 um, 0.3 m alignment, 0.4 m bucket and reach).</summary>
+        private static List<SnappedPanel> SnapDirect(Piece[] pieces)
+        {
+            List<SnappedPanel> panels = pieces.Select((p, i) => new SnappedPanel(i, TestGeometry.CreatePlanarFace(p.Loop()), p.Weight, 0.4, p.MaxExt)).ToList();
+            int passes = 0;
+            while (passes < 20 && Panel3DSnapSolver.Snap(panels, 5 * (System.Math.PI / 180), 0.3 * (System.Math.PI / 180), 1e-6, 20 * (System.Math.PI / 180), 0.3, null))
+            {
+                passes++;
+            }
+
+            return panels;
         }
 
         private static List<SnappedPanel> Snap(Piece[] pieces, int[] order, bool[] reversed, int[] start, double tilt)
@@ -103,6 +143,12 @@ namespace SAM.OCCT.UnitTests
         [InlineData("notch-finite", "baseline", 10)] [InlineData("notch-finite", "winding", 10)] [InlineData("notch-finite", "rotation", 10)] [InlineData("notch-finite", "reorder", 10)]
         [InlineData("lean", "baseline", 0)] [InlineData("lean", "winding", 0)] [InlineData("lean", "rotation", 0)] [InlineData("lean", "reorder", 0)]
         [InlineData("lean", "baseline", 10)] [InlineData("lean", "winding", 10)] [InlineData("lean", "rotation", 10)] [InlineData("lean", "reorder", 10)]
+        [InlineData("lean002", "baseline", 0)] [InlineData("lean002", "winding", 0)] [InlineData("lean002", "rotation", 0)] [InlineData("lean002", "reorder", 0)]
+        [InlineData("lean002", "baseline", 10)] [InlineData("lean002", "winding", 10)] [InlineData("lean002", "rotation", 10)] [InlineData("lean002", "reorder", 10)]
+        [InlineData("lean002-third", "baseline", 0)] [InlineData("lean002-third", "winding", 0)] [InlineData("lean002-third", "rotation", 0)] [InlineData("lean002-third", "reorder", 0)]
+        [InlineData("lean002-third", "baseline", 10)] [InlineData("lean002-third", "winding", 10)] [InlineData("lean002-third", "rotation", 10)] [InlineData("lean002-third", "reorder", 10)]
+        [InlineData("lean002-run", "baseline", 0)] [InlineData("lean002-run", "winding", 0)] [InlineData("lean002-run", "rotation", 0)] [InlineData("lean002-run", "reorder", 0)]
+        [InlineData("lean002-run", "baseline", 10)] [InlineData("lean002-run", "winding", 10)] [InlineData("lean002-run", "rotation", 10)] [InlineData("lean002-run", "reorder", 10)]
         public void Snap_BendFixtureInEveryPresentation_KeepsHeldPiecesAndMovesFreeOnes(string fixture, string axis, double tilt)
         {
             // Arrange
@@ -135,6 +181,24 @@ namespace SAM.OCCT.UnitTests
 
             // Assert
             Assert.All(Points(panels[1].Face3D), q => Assert.True(angled.Distance(q) <= Tol, "run point " + V(q) + " is " + F(angled.Distance(q)) + " m off the angled piece"));
+        }
+
+        [Theory]
+        [InlineData("lean002")] // the original outlines
+        [InlineData("lean002-third")] // redundant vertices at z 1.499 / 1.501 on the leaning wall's meeting edge
+        [InlineData("lean002-run")] // redundant vertices at z 1.499 / 1.501 on the run's meeting edge
+        public void Snap_RunEndCrossedByANearlyUprightWallInEveryVertexPresentation_StillMovesTheRunOntoTheAngledPiece(string fixture)
+        {
+            // Arrange: the reported case with a 0.02 degree lean. The run end lies within 1 um of the leaning wall's plane over 5.7 mm
+            // about z = 1.5 only: one continuous edge crossing one connected face, wherever the outlines happen to carry vertices.
+            Piece[] pieces = Fixture(fixture).Pieces;
+
+            // Act
+            List<SnappedPanel> panels = SnapDirect(pieces);
+
+            // Assert
+            Plane angled = TestGeometry.CreatePlanarFace(pieces[0].Loop()).GetPlane();
+            Assert.All(Points(panels.Single(p => p.SourceIndices[0] == 1).Face3D), q => Assert.True(angled.Distance(q) <= Tol, "run point " + V(q) + " is " + F(angled.Distance(q)) + " m off the angled piece"));
         }
 
         [Fact]

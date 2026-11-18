@@ -585,9 +585,12 @@ namespace SAM.Geometry.OCCT.Solver
         /// The boundary segments at the two run ends of this wall: the segments of the external loop whose two end points both lie,
         /// within <paramref name="tolerance"/>, at the smallest or at the largest run coordinate of the face, read in the same wall frame
         /// as <see cref="AbutsColinearWithin(SnappedPanel, double, double, Vector3D)"/> (the run along the level-horizontal axis of the
-        /// normal, <paramref name="up"/> the model-up axis; null reads world Z). Each segment is returned as it is in the outline, so a
-        /// notched end gives its separate pieces; segments no longer than <paramref name="tolerance"/> are left out. Empty for a cap. A
-        /// recessed end (a stepped outline whose upper part stops short of the lower) is not at the extreme and is not returned.
+        /// normal, <paramref name="up"/> the model-up axis; null reads world Z). Consecutive such segments at the same end that run on
+        /// in the same direction are one continuous straight edge (the points of the plane at one run coordinate lie on one line) and
+        /// are returned as a single segment from the first one's start to the last one's end, wherever the loop starts: a redundant
+        /// collinear vertex does not split an end. Segments that are not consecutive stay separate, so a notched end gives its separate
+        /// pieces; an edge no longer than <paramref name="tolerance"/> is left out. Empty for a cap. A recessed end (a stepped outline
+        /// whose upper part stops short of the lower) is not at the extreme and is not returned.
         /// </summary>
         internal List<Segment3D> RunEndSegments(Vector3D up, double tolerance)
         {
@@ -609,22 +612,71 @@ namespace SAM.Geometry.OCCT.Solver
 
             double minU = segments.Min(x => U(x[0]));
             double maxU = segments.Max(x => U(x[0]));
-            foreach (Segment3D segment3D in segments)
-            {
-                if (segment3D.GetLength() <= tolerance)
-                {
-                    continue;
-                }
+            int count = segments.Count;
 
-                double u0 = U(segment3D[0]);
-                double u1 = U(segment3D[1]);
-                if ((System.Math.Abs(u0 - minU) <= tolerance && System.Math.Abs(u1 - minU) <= tolerance)
-                    || (System.Math.Abs(u0 - maxU) <= tolerance && System.Math.Abs(u1 - maxU) <= tolerance))
+            // The end each segment lies on: -1 at the smallest run coordinate, 1 at the largest, 0 neither.
+            int[] end = new int[count];
+            for (int i = 0; i < count; i++)
+            {
+                double u0 = U(segments[i][0]);
+                double u1 = U(segments[i][1]);
+                if (System.Math.Abs(u0 - minU) <= tolerance && System.Math.Abs(u1 - minU) <= tolerance)
                 {
-                    result.Add(segment3D);
+                    end[i] = -1;
+                }
+                else if (System.Math.Abs(u0 - maxU) <= tolerance && System.Math.Abs(u1 - maxU) <= tolerance)
+                {
+                    end[i] = 1;
                 }
             }
 
+            // Segment i continues segment i - 1 (in loop order) when both lie on the same end and it does not turn back.
+            bool Continues(int i)
+            {
+                int previous = (i + count - 1) % count;
+                if (end[i] == 0 || end[i] != end[previous])
+                {
+                    return false;
+                }
+
+                Segment3D a = segments[previous], b = segments[i];
+                if (a.GetLength() <= tolerance || b.GetLength() <= tolerance)
+                {
+                    return true;
+                }
+
+                return ((a[1].X - a[0].X) * (b[1].X - b[0].X)) + ((a[1].Y - a[0].Y) * (b[1].Y - b[0].Y)) + ((a[1].Z - a[0].Z) * (b[1].Z - b[0].Z)) > 0;
+            }
+
+            // Walk the loop from a segment that does not continue its predecessor, so the loop start never splits an edge.
+            int first = Enumerable.Range(0, count).FirstOrDefault(i => !Continues(i));
+            Point3D edgeStart = null, edgeEnd = null;
+            void Close()
+            {
+                if (edgeStart != null && edgeStart.Distance(edgeEnd) > tolerance)
+                {
+                    result.Add(new Segment3D(edgeStart, edgeEnd));
+                }
+
+                edgeStart = edgeEnd = null;
+            }
+
+            for (int k = 0; k < count; k++)
+            {
+                int i = (first + k) % count;
+                if (edgeStart != null && !Continues(i))
+                {
+                    Close();
+                }
+
+                if (end[i] != 0)
+                {
+                    edgeStart = edgeStart ?? segments[i][0];
+                    edgeEnd = segments[i][1];
+                }
+            }
+
+            Close();
             return result;
         }
 

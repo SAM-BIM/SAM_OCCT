@@ -17,13 +17,15 @@ namespace SAM.Geometry.OCCT.Solver
     /// perpendicular return only slides along itself and is not counted.
     /// <para>
     /// Contact is the exact clip of the end segment by the third panel's face (its holes and every disconnected piece respected), kept
-    /// to the pieces that lie on that panel's plane from end to end: the segment is broken where the face's outline crosses or touches it
-    /// and each piece is classified with the face's tolerant <c>Inside</c> / <c>On</c> (rounding coordinates to a grid, as a polygon
-    /// overlay does, would lose an edge-on-edge contact that is not axis-aligned in the plane's frame). A segment that passes through the
-    /// plane meets it at one point, however small the angle: the stretch of it within the distance tolerance of the plane (2 tol / sin of
-    /// the angle) is not a contact. Pieces are merged and anything no longer than the distance tolerance is dropped, so a corner touch is
-    /// not a contact. No constant of its own: the solver's angle, arc-angle and distance tolerances and its model-up frame are used
-    /// throughout.
+    /// to the connected stretches of face material that lie on that panel's plane from end to end: the segment is broken where the
+    /// face's outline crosses or touches it, each piece is classified with the face's tolerant <c>Inside</c> / <c>On</c> (rounding
+    /// coordinates to a grid, as a polygon overlay does, would lose an edge-on-edge contact that is not axis-aligned in the plane's
+    /// frame), and consecutive pieces on the face are judged as one stretch. A segment that passes through the plane meets it at one
+    /// point, however small the angle: the stretch of it within the distance tolerance of the plane (2 tol / sin of the angle) is not a
+    /// contact, wherever the outlines carry vertices. Each run end is one continuous straight edge however many collinear vertices it
+    /// carries (<see cref="SnappedPanel.RunEndSegments"/>), so the answer does not depend on redundant vertices of either outline.
+    /// Stretches are merged and anything no longer than the distance tolerance is dropped, so a corner touch is not a contact. No
+    /// constant of its own: the solver's angle, arc-angle and distance tolerances and its model-up frame are used throughout.
     /// </para>
     /// </summary>
     internal static class BendVeto
@@ -103,8 +105,9 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>
         /// The stretches of <paramref name="segment3D"/>, as distances from its start, that lie on <paramref name="face3D"/>: inside or on
         /// the face (its holes excluded, each disconnected piece separately) and within <paramref name="toleranceDistance"/> of the face's
-        /// plane along their whole length. A segment that crosses the plane (both ends of a piece not within the tolerance) meets it at a
-        /// point and gives no stretch, whatever the length of its part inside the tolerance band. Normalised
+        /// plane along their whole length. Each connected stretch of face material along the segment is judged whole, so an outline
+        /// vertex lying on the segment does not split it. A segment that crosses the plane (both ends of a stretch not within the
+        /// tolerance) meets it at a point and gives no stretch, whatever the length of its part inside the tolerance band. Normalised
         /// (<see cref="PlanIntervals.Normalise"/>): stretches within the tolerance of each other are merged, and stretches no longer than
         /// it - a touch at a corner - are dropped.
         /// </summary>
@@ -158,8 +161,9 @@ namespace SAM.Geometry.OCCT.Solver
 
             // Break the segment where it meets the outline of the face: where a boundary edge crosses it, and where a boundary vertex
             // lies on it (so an edge running along the segment, the usual end-to-end contact, ends where that edge ends). Between two
-            // consecutive breaks the segment is on one side of the outline, decided at the midpoint with the tolerant Inside / On; a piece
-            // inside or on the face counts only if it lies on the plane from end to end.
+            // consecutive breaks the segment is on one side of the outline, decided at the midpoint with the tolerant Inside / On.
+            // Consecutive pieces inside or on the face are one connected stretch of its material, however many outline vertices lie on
+            // the segment; a stretch counts only if it lies on the plane from end to end.
             List<double> breaks = new List<double> { 0, 1 };
             void AddBreak(double t)
             {
@@ -202,21 +206,45 @@ namespace SAM.Geometry.OCCT.Solver
             }
 
             breaks.Sort();
-            List<(double From, double To)> pieces = new List<(double, double)>();
+            List<(double From, double To)> stretches = new List<(double, double)>();
+            double stretchFrom = double.NaN, stretchTo = double.NaN;
+            void Close()
+            {
+                if (!double.IsNaN(stretchFrom)
+                    && System.Math.Abs(DistanceAt(stretchFrom)) <= toleranceDistance && System.Math.Abs(DistanceAt(stretchTo)) <= toleranceDistance)
+                {
+                    stretches.Add((stretchFrom, stretchTo));
+                }
+
+                stretchFrom = stretchTo = double.NaN;
+            }
+
             for (int i = 0; i < breaks.Count - 1; i++)
             {
+                if (breaks[i + 1] <= breaks[i])
+                {
+                    continue;
+                }
+
                 double t = (breaks[i] + breaks[i + 1]) / 2.0;
                 Geometry.Planar.Point2D mid = new Geometry.Planar.Point2D(start.X + (t * dx), start.Y + (t * dy));
-                double pieceFrom = breaks[i] * length, pieceTo = breaks[i + 1] * length;
-                if (breaks[i + 1] > breaks[i]
-                    && System.Math.Abs(DistanceAt(pieceFrom)) <= toleranceDistance && System.Math.Abs(DistanceAt(pieceTo)) <= toleranceDistance
-                    && (face2D.On(mid, toleranceDistance) || face2D.Inside(mid, toleranceDistance)))
+                if (face2D.On(mid, toleranceDistance) || face2D.Inside(mid, toleranceDistance))
                 {
-                    pieces.Add((pieceFrom, pieceTo));
+                    if (double.IsNaN(stretchFrom))
+                    {
+                        stretchFrom = breaks[i] * length;
+                    }
+
+                    stretchTo = breaks[i + 1] * length;
+                }
+                else
+                {
+                    Close();
                 }
             }
 
-            return PlanIntervals.Normalise(pieces, toleranceDistance);
+            Close();
+            return PlanIntervals.Normalise(stretches, toleranceDistance);
         }
 
         private static Point3D PointAt(Segment3D segment3D, double distance)

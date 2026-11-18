@@ -113,6 +113,85 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void Contact_NearlyUprightLeaningFaceWithRedundantVerticesNearTheCrossing_IsEmpty()
+        {
+            // Arrange: a face leaning 0.02 degrees whose meeting edge carries collinear vertices at z 1.499 / 1.501, both within 1 um of
+            // the end edge. The face is one connected stretch along the edge, which crosses its plane at z = 1.5.
+            Face3D leaning = TestGeometry.CreatePlanarFace(Piece.Leaning("leaning", BX, 5.7, 8, 0, 3, 0.02, 0.3).WithVerticesOnEdge(3, 1.499, 1.501).Loop());
+
+            // Act
+            List<(double From, double To)> contact = BendVeto.Contact(new Segment3D(new Point3D(BX, 5.7, 0), new Point3D(BX, 5.7, 3)), leaning, Tol);
+
+            // Assert
+            Assert.Empty(contact);
+        }
+
+        [Fact]
+        public void Contact_InPlaneFaceWithRedundantVerticesOnTheMeetingEdge_IsTheWholeSegment()
+        {
+            // Arrange: an upright continuation whose meeting edge carries collinear vertices at z 1.499 / 1.501
+            Face3D next = TestGeometry.CreatePlanarFace(Piece.Wall("next", BX, 5.7, BX, 8, 0, 3, 0.3).WithVerticesOnEdge(3, 1.499, 1.501).Loop());
+
+            // Act
+            List<(double From, double To)> contact = BendVeto.Contact(new Segment3D(new Point3D(BX, 5.7, 0), new Point3D(BX, 5.7, 3)), next, Tol);
+
+            // Assert
+            Assert.Single(contact);
+            Assert.Equal(3, contact[0].To - contact[0].From, 6);
+        }
+
+        [Theory]
+        [InlineData("third")]
+        [InlineData("candidate")]
+        public void Refuses_NearlyUprightLeaningWallWithRedundantVertices_IsNotRefused(string split)
+        {
+            // Arrange: the 0.02 degree lean, with collinear vertices at z 1.499 / 1.501 on the leaning wall's or the run's meeting edge
+            Piece run = Piece.Wall("run", BX, 3.85, BX, 5.7, 0, 3, 0.5);
+            Piece leaning = Piece.Leaning("leaning", BX, 5.7, 8, 0, 3, 0.02, 0.3);
+            SnappedPanel backer = Angled();
+            SnappedPanel candidate = Panel(1, split == "candidate" ? run.WithVerticesOnEdge(1, 1.499, 1.501) : run);
+            SnappedPanel third = Panel(2, split == "third" ? leaning.WithVerticesOnEdge(3, 1.499, 1.501) : leaning);
+
+            // Act
+            bool refused = Refuses(candidate, backer, third, out string reason);
+
+            // Assert
+            Assert.False(refused, reason);
+        }
+
+        [Fact]
+        public void Refuses_ContinuationAtARunEndWithRedundantVertices_IsStillRefusedOverTheWholeEnd()
+        {
+            // Arrange: the run's meeting edge carries collinear vertices at z 1.499 / 1.501; the continuation holds all of it
+            SnappedPanel backer = Angled();
+            SnappedPanel candidate = Panel(1, Piece.Wall("run", BX, 3.85, BX, 5.7, 0, 3, 0.5).WithVerticesOnEdge(1, 1.499, 1.501));
+            SnappedPanel next = Panel(2, Piece.Wall("next", BX, 5.7, BX, 8, 0, 3, 0.3));
+
+            // Act
+            bool refused = Refuses(candidate, backer, next, out string reason);
+
+            // Assert
+            Assert.True(refused);
+            Assert.Contains("meets panel 2 over 3 m", reason);
+        }
+
+        [Theory]
+        [InlineData(0)] [InlineData(1)] [InlineData(2)] [InlineData(3)] [InlineData(4)] [InlineData(5)]
+        public void RunEndSegments_RedundantVerticesOnAnEnd_GiveOneContinuousSegmentPerEnd(int start)
+        {
+            // Arrange: the run with collinear vertices at z 1.499 / 1.501 on its y = 5.7 end, presented from each loop start
+            Point3D[] loop = Present(Piece.Wall("run", BX, 3.85, BX, 5.7, 0, 3, 0.5).WithVerticesOnEdge(1, 1.499, 1.501).Loop(), false, start);
+            SnappedPanel run = new SnappedPanel(1, TestGeometry.CreatePlanarFace(loop), 0.5, 0.4, 0.4);
+
+            // Act
+            List<Segment3D> ends = run.RunEndSegments(null, Tol);
+
+            // Assert: the y = 3.85 end and the whole y = 5.7 end, each 3 m
+            Assert.Equal(2, ends.Count);
+            Assert.All(ends, s => Assert.Equal(3, s.GetLength(), 6));
+        }
+
+        [Fact]
         public void Contact_SegmentWithinTheDistanceToleranceFromEndToEnd_IsTheWholeSegment()
         {
             // Arrange: a 3 m edge running from 0.5 um behind the face's plane to 0.5 um in front of it: it lies on the plane throughout

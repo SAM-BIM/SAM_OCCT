@@ -60,6 +60,23 @@ namespace SAM.OCCT.UnitTests
                 };
             }
 
+            /// <summary>
+            /// A copy whose outline carries redundant vertices at the given heights on the edge from loop vertex
+            /// <paramref name="edgeStart"/> to the next one, each interpolated along that edge (a collinear split: the same shape).
+            /// </summary>
+            public Piece WithVerticesOnEdge(int edgeStart, params double[] heights)
+            {
+                List<Point3D> loop = Loop().ToList();
+                Point3D a = loop[edgeStart], b = loop[(edgeStart + 1) % loop.Count];
+                List<Point3D> inserted = heights
+                    .Select(z => (z - a.Z) / (b.Z - a.Z))
+                    .OrderBy(t => t)
+                    .Select(t => new Point3D(a.X + ((b.X - a.X) * t), a.Y + ((b.Y - a.Y) * t), a.Z + ((b.Z - a.Z) * t)))
+                    .ToList();
+                loop.InsertRange(edgeStart + 1, inserted);
+                return new Piece { Name = Name, X0 = X0, Y0 = Y0, X1 = X1, Y1 = Y1, Z0 = Z0, Z1 = Z1, Weight = Weight, MaxExt = MaxExt, Points3D = loop.ToArray() };
+            }
+
             public Point3D[] Loop()
             {
                 if (Points3D != null)
