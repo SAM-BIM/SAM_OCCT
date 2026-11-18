@@ -1,5 +1,57 @@
 # Project Progress - SAM_OCCT (2026-Q4)
 
+## Q4 closeout: SAM_OCCT#84 + #91 (Extend3D no invented walls with shallow-junction rule; Clean3D rule (b) bend veto), landed together through #91 - 2026-11-18
+
+- **PR/status:** SAM-BIM/SAM_OCCT#91 was merged into `sow/2026-Q4` as `82874e9cfb786560526cdd86aa449edf3e993746`. Its parents are the base `83143ca` and the approved head `b4fe35c5f1e19474aa4689310d6eccf41723764c`.
+  - Merged with `--merge --match-head-commit`, no auto-merge or bypass, on owner authorisation in chat, at 19:48:50Z.
+  - #91 was stacked on #84 (head `a28c8bc`). It was retargeted from `fix/extend3d-no-invented-walls-q4` to `sow/2026-Q4`, so the merge carried exactly both PRs: 26 files, +6738/-44 against `83143ca`. The merge tree equals `b4fe35c`.
+  - A base change does not trigger the pull_request checks, so on owner choice #91 was closed and immediately reopened at the same head.
+  - GitHub marked #84 merged at 19:48:52Z because its head is an ancestor. Both `a28c8bc` and `b4fe35c` are verified ancestors of `82874e9`.
+  - Tested content: `88915e9` (#84) and `69cc255` (#91). The later commits change records only.
+  - No GitHub reviews or comments on either PR, codex included, checked immediately before the merge.
+  - Records: `documentation/Extend3D-No-Invented-Walls-Q4.md` and `documentation/Clean3D-Bend-Veto-Q4.md`.
+- **Completed:**
+  - #84: Extend3D, Solve3D and AutoTune3D (which share `ConditionStage`) no longer grow walls through another storey or fill notches.
+    - Side coverage from the caps' actual geometry (`PlanIntervals`); levels are coplanar surfaces; coverage is aligned to crossing walls.
+    - M1: a wall rests on the caps it already passes. M2: the extension past an intermediate level is clipped as a local cut, keeping continuations and junctions.
+    - A failed clip is an Error (`LevelClipFailed`).
+    - Shallow-junction rule: a grown end meeting only walls below 5 degrees stops on the junction with no overshoot.
+  - #91: Clean3D rule (b) leaves a pair unmoved when the move would rotate the candidate past the arc tolerance and break a finite run-end contact with a third, near-parallel panel (`BendVeto`, `SnappedPanel.RunEndSegments` / `MidplaneWith`). Contact is an exact clip of the end edge: crossings at any angle and redundant collinear vertices give no contact.
+  - Grasshopper: no GUID or parameter change. Both PRs use the unreleased minor bumps already on Q4 (Extend3D 0.11.0, Solve3D 0.8.0, AutoTune3D Discover 0.5.0, Legacy 0.2.0, Clean3D 0.7.0).
+- **Validation:**
+  - Hosted on the approved head `b4fe35c` as pull_request checks against Q4 (`refs/pull/91/merge`; SAM and SAM_Solver cloned at `sow/2026-Q4` = `aa1cb777` / `fd63b467`):
+    - Build (Windows) [`44383074563`](https://github.com/SAM-BIM/SAM_OCCT/actions/runs/44383074563) passed: unit 1467/1467, integration 31 passed / 483 skipped (native tests skip on the runner).
+    - SPDX [`44383074637`](https://github.com/SAM-BIM/SAM_OCCT/actions/runs/44383074637) passed.
+    - Earlier: #84 `a28c8bc` Build `43937563614`, and #91 dispatch Build `44376095551`.
+  - Local at `69cc255`, frozen native `438089F8` / TKBO `1FA732FE`, pins checked, APPDATA redirected, `%APPDATA%\SAM` unchanged:
+    - Unit 1467/1467 and GH 43/43 (towers pins 24/27).
+    - Native: 24 failed / 488 passed / 2 not executed. All 513 #84 tests have the same outcome and message as on #84; the only new test passes.
+  - #84 at `88915e9` vs plain Q4: no test goes Passed -> Failed; WorkflowParity Revit-home goes Failed -> Passed.
+  - Softhouse, both face orders: ground floors A / B / C closed and separate at 207.295 / 207.519 / 208.048 m3 (identical on F and R); D is 216.913 F / 217.02 R.
+    - Gates (evidence only): F G1 47/47, G2 48/48, G3a 18/18; R G1 45/47, G2 46/48, G3a 16/18.
+    - Dining 4 A107 is in the closed house-A cell with its Air partners.
+    - The shallow rule fires once per order.
+  - Independent read-only review 2026-11-18 (this session): ACCEPT at `b4fe35c` into `83143ca`. It covers `bd198ee` and `69cc255`. Machine-local copy: `C:\Users\michal\.claude\plans\pasted-content-id-2b9e-act-as-staged-pnueli.md`.
+  - Evidence: `SAM_daily/2026-10-25-Softthouse/handover/evidence/2026-11-16-pr84-q4-remeasure/` and `2026-11-19-bend-veto-impl/r4/` (machine-local).
+- **Decisions / accepted (owner, 2026-11-18):** residuals R1-R9 of the review are accepted.
+  - R1: the slab openings lost Clean3D -> Extend3D (16 -> 0) are inherited from Q4 (SAM `Offset`) and remain a separate task. Draft #90 is not mergeable as is.
+  - R2: the 24 inherited native / golden failures, no re-pin (towers managed pin 21: Q4 23, here 22).
+  - R3: the presentation-dependent naked-edge measure is a separate solver/native task.
+  - R4: gates G1/G2/G3a are evidence only; G4 is UNVERIFIED; G5 is an inherited failure.
+  - R5: losses on reversed face order (R) only. Carpark 2 C109 / Bed 4 C203: SAM `#85` drop. House D first floor (Kitchen 1 z3.5 / Circulation 9 D206): SAM `#370` extraction, exposed by #84's no-fill rule.
+  - R6: the 5-degree shallow-junction limit is provisional.
+  - R7: a refused veto move leaves no diagnostic (as the #89 S1 precedent).
+  - R8: veto limits are the 1 µm contact band, recessed run ends not checked, and a deliberate 0.5 degree splay still straightened.
+  - R9: record gaps, covered here.
+  - Kink-rule decisions: D1 (frame) is superseded, because the veto uses #87's wall frame and the uncommitted kink rule is retired. D2 (delivery) was resolved as a separate PR landed with #84. D6 (A107) is accepted per the 2026-11-02 trace.
+- **Unresolved / limits:**
+  - Softhouse space counts are not reconciled cell by cell for the veto (F 58 -> 59, R 56 -> 57, although the A-C split adds 2 cells); the frozen-identity diff is A107 only.
+  - The #370 strip control was run on #84 R only.
+  - Native evidence is local only.
+  - Grasshopper must be redeployed coherently (`BuildAlls_v5.bat`) for users to get the change.
+- **Cleanup:** remote `fix/extend3d-no-invented-walls-q4` (`a28c8bc`) and `fix/clean3d-bend-veto-q4` (`b4fe35c`) were deleted with leases, after checking that each was merged, unprotected and used by no open PR. The local branches are kept because worktrees `SAM_OCCT-wt-extend3d` and `SAM_OCCT-wt-bend-veto` use them.
+- **Next step:** redeploy Grasshopper with `BuildAlls_v5.bat`. Then the separate tasks: Extend3D slab openings (with the Clean3D gap and Air-boundary support), SAM `#85` / `#370` extraction (R-only), the solver naked-edge measure, and the bend-veto refusal diagnostic if the owner wants it.
+
 ## Q4 closeout: SAM_OCCT#89 (Clean3D contact-aware void guard, consumer of SAM#230) - 2026-11-16
 
 - **PR/status:** SAM-BIM/SAM_OCCT#89 merged into `sow/2026-Q4` as `277918b61965831e687be0400b878292a2812755` (parents base `e654095` and approved head `caba9654f6bec68b89733d0ebd6c6bb048033191`) with `--merge --match-head-commit`, no auto-merge or bypass, on owner authorisation in chat, at 16:53:50Z. 7 commits, 12 files, +1670/-9 against `e654095`. No GitHub reviews or comments (codex included, checked immediately before the merge). Tested code/tests `5faac61`; `83184b4` is the record only; `caba965` is an empty commit (GitHub skips runs when the head commit message contains the skip-ci marker anywhere, and `83184b4` mentioned it as a negation, so its runs did not start). Record `documentation/Clean3D-ContactVoidGuard-Q4.md`. Producer SAM-BIM/SAM#230 had merged earlier as `3a029e37` (2026-11-04); SAM `sow/2026-Q4` was `aa1cb777`.
