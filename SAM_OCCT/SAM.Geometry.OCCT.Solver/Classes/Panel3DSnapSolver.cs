@@ -3899,6 +3899,11 @@ namespace SAM.Geometry.OCCT.Solver
         /// <see cref="SnappedPanel.MoveToMidplaneWith"/>): BOTH panels move to the midplane and BOTH buckets
         /// grow by the distance moved, rather than the earlier-sorted panel staying an unconditional backer.
         /// </para>
+        /// <para>
+        /// A pair admitted by (b) alone is left where it is when the move would turn the candidate by more than the arc tolerance
+        /// and break a finite run-end connection with a third, near-parallel panel (<see cref="BendVeto"/>): a genuine bend is
+        /// kept rather than straightened into a step.
+        /// </para>
         /// </summary>
         /// <returns>True when at least one panel moved this pass - the fixed-point loop's convergence signal.</returns>
         public static bool Snap(List<SnappedPanel> panels, double toleranceAngle, double toleranceArcAngle, double toleranceDistance = Tolerance.Distance, double verticalAngleTolerance = 20 * (System.Math.PI / 180), double alignColinearOffset = 0.3, List<CleanRecord> records = null)
@@ -3999,6 +4004,16 @@ namespace SAM.Geometry.OCCT.Solver
                     // unconditional backer. Reads backer.Plane live, so a backer already moved by an earlier
                     // candidate in this SAME pass is reached from its updated position.
                     bool equalWeight = System.Math.Abs(backer.Weight - candidate.Weight) <= backer.Weight * 0.01;
+
+                    // Bend veto: a pair admitted by rule (b) alone is not moved when the move would rotate the candidate and break a
+                    // finite connection at one of its run ends with a third, near-parallel panel (a continuation or junction block of a
+                    // real bend). The target is the plane the move below gives the candidate: the equal-weight midplane, or the backer.
+                    if (abut && !overlap
+                        && BendVeto.Refuses(candidate, backer, equalWeight ? backer.MidplaneWith(candidate, toleranceDistance) : backer.Plane, ordered, toleranceAngle, toleranceArcAngle, toleranceDistance, up, out string _))
+                    {
+                        continue;
+                    }
+
                     if (equalWeight)
                     {
                         double halfOffset = backer.PerpendicularSeparation(candidate) / 2.0;

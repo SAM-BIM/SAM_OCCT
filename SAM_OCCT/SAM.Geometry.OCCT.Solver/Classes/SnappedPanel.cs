@@ -559,6 +559,73 @@ namespace SAM.Geometry.OCCT.Solver
             return true;
         }
 
+        /// <summary>
+        /// The plane <see cref="MoveToMidplaneWith"/> would move this panel to, without moving it: this plane translated along its own
+        /// normal by half the signed separation to <paramref name="other"/>, or this plane itself when that half offset is within
+        /// <paramref name="tolerance"/> (the case in which <see cref="MoveToMidplaneWith"/> leaves the panel where it is).
+        /// </summary>
+        internal Plane MidplaneWith(SnappedPanel other, double tolerance)
+        {
+            if (plane == null || other?.plane == null)
+            {
+                return plane;
+            }
+
+            double signed = SignedSeparationTo(other);
+            if (signed == double.MaxValue || System.Math.Abs(signed / 2.0) <= tolerance)
+            {
+                return plane;
+            }
+
+            return (Plane)plane.GetMoved(plane.Normal.Unit * (signed / 2.0));
+        }
+
+        /// <summary>
+        /// The boundary segments at the two run ends of this wall: the segments of the external loop whose two end points both lie,
+        /// within <paramref name="tolerance"/>, at the smallest or at the largest run coordinate of the face, read in the same wall frame
+        /// as <see cref="AbutsColinearWithin(SnappedPanel, double, double, Vector3D)"/> (the run along the level-horizontal axis of the
+        /// normal, <paramref name="up"/> the model-up axis; null reads world Z). Each segment is returned as it is in the outline, so a
+        /// notched end gives its separate pieces; segments no longer than <paramref name="tolerance"/> are left out. Empty for a cap.
+        /// </summary>
+        internal List<Segment3D> RunEndSegments(Vector3D up, double tolerance)
+        {
+            List<Segment3D> result = new List<Segment3D>();
+            Vector3D modelUp = ModelUp(up);
+            Vector3D run = plane == null ? null : RunAxis(plane.Normal, modelUp);
+            List<Segment3D> segments = (face3D?.GetExternalEdge3D() as ISegmentable3D)?.GetSegments();
+            if (run == null || segments == null || segments.Count == 0)
+            {
+                return result;
+            }
+
+            Point3D origin = plane.Origin;
+            double U(Point3D point3D)
+            {
+                double u = ((point3D.X - origin.X) * run.X) + ((point3D.Y - origin.Y) * run.Y);
+                return modelUp == null ? u : u + ((point3D.Z - origin.Z) * run.Z);
+            }
+
+            double minU = segments.Min(x => U(x[0]));
+            double maxU = segments.Max(x => U(x[0]));
+            foreach (Segment3D segment3D in segments)
+            {
+                if (segment3D.GetLength() <= tolerance)
+                {
+                    continue;
+                }
+
+                double u0 = U(segment3D[0]);
+                double u1 = U(segment3D[1]);
+                if ((System.Math.Abs(u0 - minU) <= tolerance && System.Math.Abs(u1 - minU) <= tolerance)
+                    || (System.Math.Abs(u0 - maxU) <= tolerance && System.Math.Abs(u1 - maxU) <= tolerance))
+                {
+                    result.Add(segment3D);
+                }
+            }
+
+            return result;
+        }
+
         /// <summary>Widens the capture slab by <paramref name="amount"/> (never negative) - the bucket-growth
         /// half of the equal-weight midpoint rule (<see cref="MoveToMidplaneWith"/>).</summary>
         public void GrowBucket(double amount)
