@@ -14,7 +14,9 @@ namespace SAM.OCCT.UnitTests
     /// The rule (b) bend veto through managed <c>Modify.Clean3D</c>, with the authored geometry as the oracle and each fixture exercised for
     /// winding reversal, loop-start rotation and panel order independently (every weight and reach kept on its physical wall). A genuine
     /// bend - the 90 mm junction block and the first-floor piece over the joint - keeps its authored geometry; the controls are unchanged:
-    /// a noisy straight partition still straightens onto its existing plane, and an unconnected jog still aligns.
+    /// a noisy straight partition (turns below the arc tolerance) still straightens onto its existing plane, and an unconnected jog still
+    /// aligns. Noise above the arc tolerance held at both ends by straight pieces ("slanted") is kept as authored - continuous, not
+    /// straightened into a 10 mm step as before: the veto's documented trade-off.
     /// </summary>
     public class Clean3DBendVetoTests
     {
@@ -34,6 +36,8 @@ namespace SAM.OCCT.UnitTests
                     };
                 case "skew": // a 6 m straight partition whose joint at x = 1 m is 5 mm off the axis; the last segment has the highest weight
                     return new[] { Piece.Wall("first", 0, 0, 1, 0.005, 0, 3, 0.5), Piece.Wall("middle", 1, 0.005, 3, 0, 0, 3, 0.8), Piece.Wall("last", 3, 0, 6, 0, 0, 3, 1.0) };
+                case "slanted": // noise above the arc tolerance: a 1 m piece rising 10 mm (0.57 degrees) between two straight pieces 10 mm apart
+                    return new[] { Piece.Wall("first", 0, 0, 2, 0, 0, 3, 1.0), Piece.Wall("middle", 2, 0, 3, 0.01, 0, 3, 0.5), Piece.Wall("last", 3, 0.01, 6, 0.01, 0, 3, 0.8) };
                 case "jog": // two unconnected parallel pieces 0.1 m apart
                     return new[] { Piece.Wall("heavy", 0, 0, 0, 4, 0, 3, 1.0), Piece.Wall("jog", 0.1, 4, 0.1, 6, 0, 3, 0.5) };
                 default:
@@ -110,6 +114,7 @@ namespace SAM.OCCT.UnitTests
         [InlineData("firstfloor", "baseline")] [InlineData("firstfloor", "winding")] [InlineData("firstfloor", "rotation")] [InlineData("firstfloor", "reorder")]
         [InlineData("skew", "baseline")] [InlineData("skew", "winding")] [InlineData("skew", "rotation")] [InlineData("skew", "reorder")]
         [InlineData("jog", "baseline")] [InlineData("jog", "winding")] [InlineData("jog", "rotation")] [InlineData("jog", "reorder")]
+        [InlineData("slanted", "baseline")] [InlineData("slanted", "winding")] [InlineData("slanted", "rotation")] [InlineData("slanted", "reorder")]
         public void Clean3D_WallFixtureInEveryPresentation_MeetsTheAuthoredOracle(string fixture, string axis)
         {
             // Arrange

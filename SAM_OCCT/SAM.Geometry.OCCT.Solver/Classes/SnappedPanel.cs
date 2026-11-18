@@ -562,7 +562,8 @@ namespace SAM.Geometry.OCCT.Solver
         /// <summary>
         /// The plane <see cref="MoveToMidplaneWith"/> would move this panel to, without moving it: this plane translated along its own
         /// normal by half the signed separation to <paramref name="other"/>, or this plane itself when that half offset is within
-        /// <paramref name="tolerance"/> (the case in which <see cref="MoveToMidplaneWith"/> leaves the panel where it is).
+        /// <paramref name="tolerance"/> (the case in which <see cref="MoveToMidplaneWith"/> leaves the panel where it is). The two differ
+        /// only if the move itself fails (the projected face is not valid): the panel then stays and this still returns the midplane.
         /// </summary>
         internal Plane MidplaneWith(SnappedPanel other, double tolerance)
         {
@@ -585,7 +586,8 @@ namespace SAM.Geometry.OCCT.Solver
         /// within <paramref name="tolerance"/>, at the smallest or at the largest run coordinate of the face, read in the same wall frame
         /// as <see cref="AbutsColinearWithin(SnappedPanel, double, double, Vector3D)"/> (the run along the level-horizontal axis of the
         /// normal, <paramref name="up"/> the model-up axis; null reads world Z). Each segment is returned as it is in the outline, so a
-        /// notched end gives its separate pieces; segments no longer than <paramref name="tolerance"/> are left out. Empty for a cap.
+        /// notched end gives its separate pieces; segments no longer than <paramref name="tolerance"/> are left out. Empty for a cap. A
+        /// recessed end (a stepped outline whose upper part stops short of the lower) is not at the extreme and is not returned.
         /// </summary>
         internal List<Segment3D> RunEndSegments(Vector3D up, double tolerance)
         {

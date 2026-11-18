@@ -129,6 +129,26 @@ namespace SAM.OCCT.UnitTests
         }
 
         [Fact]
+        public void Snap_EqualWeightPairWhoseHeldPieceIsTheBacker_StillMovesBoth()
+        {
+            // Arrange: the straight run (larger area, so the backer of the equal-weight pair) carries the continuation; the angled
+            // candidate's run ends meet nothing but the run itself. The run is only translated (never refused) and the angled piece turns.
+            Piece[] pieces =
+            {
+                Piece.Wall("angled", 0, 0, BX - 1e-4, 3.848, 0, 3, 1.0), Piece.Wall("run", BX, 3.85, BX, 9, 0, 3, 1.0),
+                Piece.Wall("continuation", BX, 9, BX, 12, 0, 3, 0.5),
+            };
+
+            // Act
+            List<SnappedPanel> panels = Snap(pieces, new[] { 0, 1, 2 }, new bool[3], new int[3], 0);
+
+            // Assert: the run left x = BX (translated to the midplane) and the angled piece lies on the run's new plane
+            Plane run = panels.Single(p => p.SourceIndices[0] == 1).Plane;
+            Assert.True(run.Distance(new Point3D(BX, 5, 1)) > 1e-3, "the run was not translated");
+            Assert.All(Points(panels.Single(p => p.SourceIndices[0] == 0).Face3D), q => Assert.True(run.Distance(q) <= Tol, V(q) + " is off the run's plane"));
+        }
+
+        [Fact]
         public void Snap_ParallelJogWithAContinuation_StillAligns()
         {
             // Arrange: a 0.1 m jog (no turn) whose far end meets a continuation: a translation is never refused
