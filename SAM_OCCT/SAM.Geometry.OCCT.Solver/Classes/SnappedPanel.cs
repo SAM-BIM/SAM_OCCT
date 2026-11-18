@@ -718,22 +718,29 @@ namespace SAM.Geometry.OCCT.Solver
                 return false;
             }
 
-            List<Geometry.Planar.Face2D> offset = Geometry.Planar.Query.Offset(face2D, margin, true, true, tolerance);
-            Geometry.Planar.Face2D grown = offset?.OrderByDescending(x => x.GetArea()).FirstOrDefault();
-            if (grown == null || grown.GetArea() <= face2D.GetArea())
+            // Offset ONLY the external boundary (includeInternalEdges: false). The shared Face2D offset would
+            // otherwise rebuild each internal edge from the external outline, turning every opening into a copy of
+            // the grown outline and silently deleting it. The openings are re-attached below at their original
+            // position and shape, and any residual loss on the adopted face is reported through RecordHoleDrop.
+            List<Geometry.Planar.Face2D> offset = Geometry.Planar.Query.Offset(face2D, margin, true, false, tolerance);
+            Geometry.Planar.Face2D grownOutline = offset?
+                .Where(x => x?.ExternalEdge2D != null)
+                .OrderByDescending(x => x.ExternalEdge2D.GetArea())
+                .FirstOrDefault();
+            if (grownOutline == null || grownOutline.ExternalEdge2D.GetArea() <= face2D.ExternalEdge2D.GetArea())
             {
                 return false; // offset went inward or failed
             }
 
-            Face3D grown3D = plane.Convert(grown);
-            if (grown3D == null || !grown3D.IsValid())
+            int holesBefore = face3D.GetInternalEdge3Ds()?.Count ?? 0;
+            Face3D grown3D = Face3D.Create(plane, grownOutline.ExternalEdge2D, face2D.InternalEdge2Ds);
+            if (grown3D == null || !grown3D.IsValid() || grown3D.GetArea() <= face3D.GetArea() + tolerance)
             {
                 return false;
             }
 
-            face3D = grown3D;
-            plane = grown3D.GetPlane();
-            contactEvidence = null; // the in-plane boundary was rewritten: the extraction footprint no longer bounds the panel
+            RecordHoleDrop(holesBefore, grown3D, "cap grow");
+            Adopt(grown3D); // also clears contactEvidence: the in-plane boundary was rewritten
             return true;
         }
 
